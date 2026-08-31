@@ -75,19 +75,41 @@ clone_sibling() {
 clone_sibling omarchy-pkgs
 clone_sibling omarchy-iso
 
-# Mirror the Omarchy uwsm session environment for interactive shells and test
-# runs: OMARCHY_PATH, the checkout's bin/ on PATH, the sibling-repo pointers,
-# and no NO_COLOR (the base image exports it, which suppresses the about
-# launcher's logo sheen that its test checks).
+# Mirror the Omarchy uwsm session environment. Omarchy runtime code assumes
+# OMARCHY_PATH is exported and the checkout's bin/ is on PATH; the base image
+# also exports NO_COLOR=1 (which suppresses the about launcher's logo sheen its
+# test checks).
+#
+# The Cloud Agent boots by sourcing ~/.bashrc once to build the base
+# environment every command inherits, so OMARCHY_PATH, the sibling-repo
+# pointers, and the checkout's bin/ on PATH live there. NO_COLOR is special: the
+# exec-daemon re-injects it into every command AFTER ~/.bashrc runs, so it is
+# cleared from a $BASH_ENV script instead, which non-interactive bash (the Shell
+# tool and every `bash test/shell.d/*-test.sh` the runner spawns) sources at
+# startup. The BASH_ENV script deliberately does nothing else, so it never
+# perturbs a test's own PATH or OMARCHY_PATH.
+env_script="$HOME/.omarchy-cloud-env.sh"
+cat >"$env_script" <<'EOF'
+# Sourced by every non-interactive bash via BASH_ENV. Clear the NO_COLOR the
+# exec-daemon injects after ~/.bashrc so Omarchy keeps its colored output and
+# the about-launcher sheen test passes. Only launch-about touches NO_COLOR, and
+# it does so within its own already-started shell, so this does not interfere.
+unset NO_COLOR
+EOF
+
 marker="# >>> omarchy cloud-agent dev env >>>"
 if ! grep -qF "$marker" "$HOME/.bashrc" 2>/dev/null; then
   cat >>"$HOME/.bashrc" <<EOF
 
 $marker
 export OMARCHY_PATH="$OMARCHY_PATH"
-export PATH="\$OMARCHY_PATH/bin:\$PATH"
+case ":\$PATH:" in
+  *":\$OMARCHY_PATH/bin:"*) ;;
+  *) export PATH="\$OMARCHY_PATH/bin:\$PATH" ;;
+esac
 export OMARCHY_PKGS_PATH="\$HOME/omarchy-pkgs"
 export OMARCHY_ISO_PATH="\$HOME/omarchy-iso"
+export BASH_ENV="\$HOME/.omarchy-cloud-env.sh"
 unset NO_COLOR
 # <<< omarchy cloud-agent dev env <<<
 EOF
