@@ -33,8 +33,23 @@ packages=(
   python-is-python3
   jq
 )
-sudo apt-get update -qq
-sudo apt-get install -y -qq "${packages[@]}"
+
+# Retry apt against transient mirror errors (e.g. a 502 from
+# security.ubuntu.com). A partial `update` failure is not fatal: apt falls back
+# to cached indices, and a genuinely missing package still fails the `install`.
+retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    sleep $((attempt * 4))
+  done
+  return 1
+}
+retry sudo apt-get update -qq ||
+  echo "warning: apt-get update did not fully succeed; continuing with cached indices" >&2
+retry sudo apt-get install -y -qq "${packages[@]}"
 
 # ImageMagick 7 ships a unified `magick`; Ubuntu ships ImageMagick 6 (`convert`
 # and friends). Bridge them so `magick <input> ... info:-` pipelines run
