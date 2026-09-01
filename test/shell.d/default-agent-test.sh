@@ -20,6 +20,7 @@ stub_log="$test_tmp/stubs"
 terminal_log="$test_tmp/terminal"
 menu_log="$test_tmp/menu"
 cursor_install_log="$test_tmp/cursor-install"
+hermes_install_log="$test_tmp/hermes-install"
 mkdir -p "$mock_bin" "$test_home"
 
 cat >"$mock_bin/omarchy-notification-send" <<'SH'
@@ -64,6 +65,18 @@ fi
 [[ ${OMARCHY_TEST_CURSOR_INSTALL_FAIL:-false} != "true" ]]
 SH
 
+cat >"$mock_bin/omarchy-install-hermes-cli" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"$OMARCHY_TEST_HERMES_INSTALL_LOG"
+
+if [[ $1 == "--check" ]]; then
+  [[ ${OMARCHY_TEST_HERMES_INSTALLED:-false} == "true" ]]
+  exit
+fi
+
+[[ ${OMARCHY_TEST_HERMES_INSTALL_FAIL:-false} != "true" ]]
+SH
+
 cat >"$mock_bin/mise" <<'SH'
 #!/bin/bash
 printf '%s\0' "$@" >"$OMARCHY_TEST_MISE_LOG"
@@ -105,6 +118,7 @@ export OMARCHY_TEST_STUB_LOG="$stub_log"
 export OMARCHY_TEST_AGENT_TERMINAL_LOG="$terminal_log"
 export OMARCHY_TEST_AGENT_MENU_LOG="$menu_log"
 export OMARCHY_TEST_CURSOR_INSTALL_LOG="$cursor_install_log"
+export OMARCHY_TEST_HERMES_INSTALL_LOG="$hermes_install_log"
 export OMARCHY_PATH="$ROOT"
 
 grok_package="npm:@xai-official/grok"
@@ -343,6 +357,7 @@ declare -A expected_agents=(
   [antigravity-cli]="agy"
   [gemini]="agy"
   [gemini-cli]="agy"
+  [hermes]="hermes"
   [copilot]="copilot"
   [github-copilot]="copilot"
 )
@@ -365,11 +380,18 @@ for selection in "${!expected_agents[@]}"; do
   : >"$agent_open_log"
   : >"$mise_log"
   : >"$cursor_install_log"
+  : >"$hermes_install_log"
   if [[ $expected == "cursor-agent" ]]; then
     OMARCHY_TEST_CURSOR_INSTALLED=true omarchy-default-agent "$selection"
     [[ ! -s $mise_log ]] || fail "default agent does not install Cursor through mise"
     [[ $(<"$cursor_install_log") == "--check" ]] ||
       fail "default agent reuses a cursor-agent already on PATH"
+  elif [[ $expected == "hermes" ]]; then
+    OMARCHY_TEST_HERMES_INSTALLED=true omarchy-default-agent "$selection"
+    [[ ! -s $mise_log ]] || fail "default agent does not install Hermes through bare mise"
+    mapfile -t hermes_install_calls <"$hermes_install_log"
+    [[ ${hermes_install_calls[0]} == "--check" && ${hermes_install_calls[1]} == "--now" ]] ||
+      fail "default agent reuses Hermes through its own installer"
   else
     OMARCHY_TEST_AGENT_INSTALLED=true omarchy-default-agent "$selection"
     mapfile -d '' -t mise_args <"$mise_log"
@@ -517,8 +539,10 @@ assert_launched() {
     fail "$agent launch $description" "expected: ${expected[*]}\nactual: ${actual[*]}"
 
   for ((index = 0; index < ${#expected[@]}; index++)); do
-    [[ ${actual[$index]} == ${expected[$index]} ]] ||
-      fail "$agent launch $description" "expected: ${expected[*]}\nactual: ${actual[*]}"
+    case ${actual[$index]} in
+    "${expected[$index]}") ;;
+    *) fail "$agent launch $description" "expected: ${expected[*]}\nactual: ${actual[*]}" ;;
+    esac
   done
 }
 
@@ -548,10 +572,18 @@ assert_launch claude claude --permission-mode auto -- "Review this project"
 assert_launch codex codex --approve-for-me -- "Review this project"
 assert_launch crush crush run "Review this project"
 assert_launch grok grok --permission-mode bypassPermissions -- "Review this project"
+assert_launch hermes env -u HERMES_SESSION_SOURCE hermes chat --yolo --tui "--query=Review this project"
 assert_launch agy agy --dangerously-skip-permissions --prompt-interactive "Review this project"
 assert_launch copilot copilot --allow-all --interactive "Review this project"
 assert_launch cursor-agent cursor-agent --yolo --trust "Review this project"
 pass "agent launcher adapts initial prompts for every supported agent"
+
+literal_hermes_prompt=$' --help !Crash /quit {$(touch must-not-run)}\ntrailing\\ '
+printf '%s\n' "hermes" >"$agent_file"
+omarchy-agent-prompt "$literal_hermes_prompt"
+assert_launched hermes "binds its literal initial prompt" env -u HERMES_SESSION_SOURCE \
+  hermes chat --yolo --tui "--query=$literal_hermes_prompt"
+pass "Hermes receives prompted launches as one literal query argument"
 
 assert_bypass pi pi
 assert_bypass omp omp --auto-approve
@@ -561,6 +593,7 @@ assert_bypass claude claude --permission-mode auto
 assert_bypass codex codex --approve-for-me
 assert_bypass crush crush --yolo
 assert_bypass grok grok --permission-mode bypassPermissions
+assert_bypass hermes hermes --yolo
 assert_bypass agy agy --dangerously-skip-permissions
 assert_bypass copilot copilot --allow-all
 assert_bypass cursor-agent cursor-agent --yolo --trust
