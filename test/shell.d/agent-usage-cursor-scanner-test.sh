@@ -106,6 +106,33 @@ summary["omitsGrokWithoutAllowance"] = [
 ]
 summary["resetIsIso"] = reset_at.startswith("2026-09-22")
 
+summary["subPercent"] = scanner.spending_page_fraction(0.177742)
+summary["alignedWeekIsNotEarly"] = scanner.weekly_reset_was_early(
+  "2026-09-01T06:44:00.862Z",
+  "2026-09-08T06:44:00.862Z",
+)
+summary["complimentaryResetIsEarly"] = scanner.weekly_reset_was_early(
+  "2026-09-01T15:47:23.732Z",
+  "2026-09-08T06:44:00.862Z",
+)
+early_limits, _ = scanner.plan_limits({}, {}, {
+  "usagePercent": 0.177742,
+  "hasNonZeroIncludedLimit": True,
+  "currentPeriodStart": "2026-09-01T15:47:23.732Z",
+  "nextResetTimestampUtc": "2026-09-08T06:44:00.862Z",
+})
+summary["earlyGrokPercent"] = early_limits[0]["percent"]
+summary["earlyGrokResetEarly"] = early_limits[0].get("resetEarly") is True
+summary["earlyGrokStarted"] = early_limits[0].get("periodStartedAt", "").startswith("2026-09-01T15:47:23")
+aligned_limits, _ = scanner.plan_limits({}, {}, {
+  "usagePercent": 14.67,
+  "hasNonZeroIncludedLimit": True,
+  "currentPeriodStart": "2026-09-01T06:44:00.862Z",
+  "nextResetTimestampUtc": "2026-09-08T06:44:00.862Z",
+})
+summary["alignedGrokHasStart"] = aligned_limits[0].get("periodStartedAt", "").startswith("2026-09-01T06:44:00")
+summary["alignedGrokNotEarly"] = "resetEarly" not in aligned_limits[0]
+
 pages = {
   1: {"totalUsageEventsCount": 2, "usageEventsDisplay": [events[0]]},
   2: {"totalUsageEventsCount": 2, "usageEventsDisplay": [events[1]]},
@@ -221,6 +248,26 @@ pass "Cursor collector stores dashboard percents as fractions"
 [[ $(jq -r '.grokPercent' <<<"$result") == "0.1467" ]] ||
   fail "Cursor collector stores Grok Bot weekly percent as a fraction" "$result"
 pass "Cursor collector stores Grok Bot weekly percent as a fraction"
+
+[[ $(jq -r '.subPercent < 0.002 and .subPercent > 0.001' <<<"$result") == "true" ]] ||
+  fail "Cursor collector keeps a sub-1% Grok reading on the 0-100 scale" "$result"
+pass "Cursor collector keeps a sub-1% Grok reading on the 0-100 scale"
+
+[[ $(jq -r '.alignedWeekIsNotEarly' <<<"$result") == "false" ]] ||
+  fail "Cursor collector treats a Grok week that started on schedule as current" "$result"
+pass "Cursor collector treats a Grok week that started on schedule as current"
+
+[[ $(jq -r '.complimentaryResetIsEarly' <<<"$result") == "true" ]] ||
+  fail "Cursor collector flags a complimentary mid-week Grok reset" "$result"
+pass "Cursor collector flags a complimentary mid-week Grok reset"
+
+[[ $(jq -r '.earlyGrokPercent < 0.002 and .earlyGrokResetEarly and .earlyGrokStarted' <<<"$result") == "true" ]] ||
+  fail "Cursor collector records a complimentary Grok reset as a tiny current week" "$result"
+pass "Cursor collector records a complimentary Grok reset as a tiny current week"
+
+[[ $(jq -r '.alignedGrokHasStart and .alignedGrokNotEarly' <<<"$result") == "true" ]] ||
+  fail "Cursor collector keeps the Grok week start without marking a scheduled week early" "$result"
+pass "Cursor collector keeps the Grok week start without marking a scheduled week early"
 
 [[ $(jq -r '.grokResetIsIso' <<<"$result") == "true" ]] ||
   fail "Cursor collector keeps Grok Bot on its own weekly reset" "$result"
