@@ -101,12 +101,18 @@ Panel {
   // and that beats reading it back out of the label: a model-scoped limit is
   // titled after its model, and a name like "Opus 5 (1M context)" would parse
   // as a one-minute window.
-  function limitWindow(label, percent, resetAt, title) {
-    return {
+  function limitWindow(label, percent, resetAt, title, extras) {
+    var window = {
       title: String(title || "") !== "" ? String(title) : windowTitle(label),
       percent: Number(percent),
       resetAt: String(resetAt || "")
     }
+    extras = extras || {}
+    if (extras.periodStartedAt)
+      window.periodStartedAt = String(extras.periodStartedAt)
+    if (extras.resetEarly === true)
+      window.resetEarly = true
+    return window
   }
 
   function limitWindows(p) {
@@ -116,7 +122,7 @@ Panel {
     for (var i = 0; i < list.length; i++) {
       var entry = list[i] || {}
       var percent = Number(entry.percent)
-      if (percent >= 0) out.push(limitWindow(entry.label, percent, entry.resetsAt, entry.title))
+      if (percent >= 0) out.push(limitWindow(entry.label, percent, entry.resetsAt, entry.title, entry))
     }
     return out
   }
@@ -146,6 +152,31 @@ Panel {
     if (days > 0) return days + "d " + (hours % 24) + "h"
     if (hours > 0) return hours + "h " + (minutes % 60) + "m"
     return Math.max(1, minutes) + "m"
+  }
+
+  function formatLimitPercent(fraction) {
+    var pct = Number(fraction) * 100
+    if (!(pct > 0)) return "0%"
+    var rounded = Math.round(pct)
+    return (rounded === 0 ? 1 : rounded) + "%"
+  }
+
+  function formatShortDate(iso) {
+    var d = new Date(iso)
+    if (!isFinite(d.getTime())) return ""
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return d.getDate() + " " + months[d.getMonth()]
+  }
+
+  function formatResetCaption(window) {
+    var remainingMs = resetMsFor(window)
+    var countdown = remainingMs > 0 ? "Resets in " + formatDuration(remainingMs) : ""
+    if (!window || window.resetEarly !== true)
+      return countdown
+    var when = formatShortDate(window.periodStartedAt)
+    if (when === "")
+      return countdown
+    return countdown === "" ? "Reset " + when : "Reset " + when + " · " + countdown
   }
 
   // ---------------------------------------------------------------- balance
@@ -733,7 +764,7 @@ Panel {
         id: limitValue
         textFormat: Text.PlainText
         text: limitRow.window && limitRow.window.percent >= 0
-          ? Math.round(limitRow.window.percent * 100) + "%"
+          ? root.formatLimitPercent(limitRow.window.percent)
           : "—"
         color: limitRow.alarming ? root.urgent : root.foreground
         font.family: root.fontFamily
@@ -753,10 +784,7 @@ Panel {
       id: resetText
       textFormat: Text.PlainText
       width: parent.width
-      text: {
-        var remainingMs = root.resetMsFor(limitRow.window)
-        return remainingMs > 0 ? "Resets in " + root.formatDuration(remainingMs) : ""
-      }
+      text: root.formatResetCaption(limitRow.window)
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption

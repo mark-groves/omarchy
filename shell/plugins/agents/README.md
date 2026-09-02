@@ -54,7 +54,7 @@ light surfaces — and the bar glyph stands in when there is none.
 |---|---|---|
 | `claude` | Anthropic's OAuth usage endpoint (5-hour session + 7-day weekly) | `~/.claude/projects` transcripts, opencode sessions on an Anthropic provider, plus `stats-cache.json` and `history.jsonl` as fallback |
 | `codex` | The Codex app-server RPC | native Codex CLI session files (plus pi and opencode sessions) |
-| `cursor` | Cursor's dashboard session API (Cursor Models and Other Models for the billing cycle, plus Grok Bot's weekly pool) | Aggregated token totals by model for the billing cycle, plus the last week of usage events |
+| `cursor` | Cursor's dashboard session API (Cursor Models and Other Models for the billing cycle, plus Grok Bot's weekly pool, including complimentary mid-week resets) | Aggregated token totals by model for the billing cycle, plus the last week of usage events |
 | `fireworks` | Estimated prepaid balance: configured funding minus rated account costs | Fireworks billing API, grouped by day and model for the last 30 days |
 
 Claude limits need a signed-in CLI; without credentials the panel says so and
