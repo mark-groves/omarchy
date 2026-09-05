@@ -349,6 +349,7 @@
   "update.process": {"icon":"","label":"Process","title":"Restart"},
   "update.hardware": {"icon":"󰇅","label":"Hardware","title":"Restart"},
   "update.firmware": {"icon":"","label":"Firmware","action":"omarchy-launch-floating-terminal-with-presentation omarchy-update-firmware"},
+  "update.grok-bot": {"icon":"","iconFont":"omarchy","label":"Grok Bot","when":"omarchy-pkg-present grok-bot","action":"omarchy-launch-floating-terminal-with-presentation omarchy-update-grok-bot"},
   "update.password": {"icon":"","label":"Password"},
   "update.timezone": {"icon":"","label":"Timezone","action":"omarchy-menu-timezone"},
   "update.time": {"icon":"","label":"Time","action":"omarchy-launch-floating-terminal-with-presentation omarchy-update-time"},
