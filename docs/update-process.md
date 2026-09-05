@@ -147,6 +147,9 @@ Important behavior:
   `omarchy-migrate` after pacman finishes.
 - A failure should leave enough output in `/tmp/omarchy-update.log` and the
   terminal transcript to debug.
+- If Grok Bot is installed, `omarchy-update-grok-bot` then checks official Linux
+  releases and upgrades past the Omarchy channel package when a newer build is
+  published. A feed outage skips the step instead of failing the rest of the update.
 
 ## Path 2: direct `sudo pacman -Syu` attempt
 
@@ -283,6 +286,7 @@ scripts.
 | `omarchy-update-available` | Update checker for shell widget and post-update refresh. | **Keep.** Could eventually be renamed `omarchy-update-check`, but current name matches widget semantics. |
 | `omarchy-update-aur-pkgs` | Updates AUR packages with `yay -Sua` if foreign packages exist and AUR is reachable. | **Question.** Omarchy is package-backed now, but users may still install AUR packages. Keep for now. |
 | `omarchy-update-mise` | Runs `MISE_MINIMUM_RELEASE_AGE=0 mise up` for mise-managed tools — the override of mise's release-age cooldown is the point. | **Keep.** Mise-managed tools are intentionally part of the blessed update path. |
+| `omarchy-update-grok-bot` | If `grok-bot` is installed, checks the official Linux release feed (and the public download page) and repackages a newer `.deb` as `grok-bot` so the Omarchy channel cannot leave the desktop app behind. | **Keep.** Official Linux builds now ship faster than the Omarchy package. |
 | `omarchy-update-orphan-pkgs` | Lists orphans and prompts before removal; noninteractive mode never removes. | **Keep for now.** Safe because it is prompt-only. |
 | `omarchy-update-analyze-logs` | Scans `/tmp/omarchy-update.log` for known failure patterns, currently initramfs generation. | **Keep/expand.** Useful safety net; should grow only for high-signal checks. |
 | `omarchy-update-restart` | Prompts for reboot after kernel/Hyprland updates, restarts components with `restart-*-required` markers, and always restarts the shell. | **Keep.** Important final step; may eventually include service-restart checks. |
@@ -315,6 +319,9 @@ scripts.
    - Direct `sudo pacman -Syu` no longer uses a fake user-update marker.
    - User notifications are shown only when `omarchy-migrate --pending` finds
      missing per-user migration state.
+
+7. **Grok Bot tracks official Linux releases**
+   - `omarchy-update-grok-bot` runs during `omarchy update` when the package is installed, and can also be run as `omarchy update grok-bot`.
 
 ## Remaining concerns
 
