@@ -6,8 +6,6 @@
 
 set -euo pipefail
 
-# Stable client id so staged rollouts return the same release on the next run.
-FEED_CLIENT_ID="a1b3c5d7-e9f0-4a2b-8c1d-3e5f7a9b0c2d"
 DOWNLOAD_PAGE="https://cursor.com/download/bot"
 
 latest_version=""
@@ -43,7 +41,7 @@ resolve_from_feed() {
   local response url download_base build_id version resolved
 
   response=$(curl -fsSL --retry 3 --retry-all-errors --max-time 20 \
-    "https://api2.cursor.sh/updates/api/update/${platform}/sand/0.0.1/${FEED_CLIENT_ID}/stable") || return 1
+    "https://api2.cursor.sh/updates/api/update/${platform}/sand/0.0.1/a1b3c5d7-e9f0-4a2b-8c1d-3e5f7a9b0c2d/stable") || return 1
 
   version=$(jq -er '.version // .name // .productVersion' <<<"$response") || return 1
   url=$(jq -er '.url' <<<"$response") || return 1

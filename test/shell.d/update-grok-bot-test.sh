@@ -140,8 +140,6 @@ fi
 /usr/bin/uname "$@"
 '
 
-# Real jq and vercmp stay on PATH after the stubs.
-
 TEST_PRESENT=1
 if ! run_update; then
   fail "an installed outdated Grok Bot updates from the official feed" "$(cat "$test_tmp/err")"
