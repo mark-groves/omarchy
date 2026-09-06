@@ -90,8 +90,10 @@ EOF
   printf 'root:x:0:\ndaemon:x:1:\nseller:x:1000:\nwheel:x:998:seller\n' >"$factory/etc/group"
   printf 'root:!::\ndaemon:!::\nseller:!::\nwheel:!::seller\n' >"$factory/etc/gshadow"
   printf 'USERGROUPS_ENAB yes\n' >"$factory/etc/login.defs"
+  printf 'seller:100000:65536\n' >"$factory/etc/subuid"
+  printf 'seller:100000:65536\n' >"$factory/etc/subgid"
   chmod 600 "$factory/etc/"{shadow,gshadow}
-  for file in passwd shadow group gshadow; do
+  for file in passwd shadow group gshadow subuid subgid; do
     cp "$factory/etc/$file" "$factory/etc/$file-"
   done
 }
@@ -105,7 +107,7 @@ assert_scrubbed() {
   [[ ! -e $root/home/seller ]] || fail "reset removes the seller's baseline home"
   grep -q '^daemon:\*:' "$root/etc/shadow" || fail "reset preserves service accounts"
   [[ $(stat -c '%a' "$root/etc/shadow") == "600" ]] || fail "shadow stays private"
-  for file in passwd shadow group gshadow; do
+  for file in passwd shadow group gshadow subuid subgid; do
     [[ ! -e $root/etc/$file- ]] || fail "reset removes the $file backup"
   done
 }
