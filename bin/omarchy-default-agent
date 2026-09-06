@@ -75,9 +75,11 @@ else
     # inside the menu action instead.
     agent_present() { "$agent_installer" --check; }
     agent_install() { "$agent_installer" --now; }
+    install_failure="Could not install $name"
   else
     agent_present() { mise where "$agent_package" &>/dev/null; }
     agent_install() { mise use -g "$agent_package"; }
+    install_failure="Could not install $name with mise"
   fi
 
   if [[ $installing == "false" ]] && ! agent_present; then
@@ -86,7 +88,7 @@ else
 
   if ! agent_install; then
     if [[ $installing == "true" ]]; then
-      echo "Could not install $name with mise" >&2
+      echo "$install_failure" >&2
     else
       echo "Could not set $name as the default coding agent" >&2
     fi
