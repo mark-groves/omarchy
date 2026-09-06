@@ -310,7 +310,7 @@ scrub_factory_accounts() {
   # passwd --lock preserves the hash. Replace it, then remove the backups
   # that userdel and usermod leave behind.
   usermod --root "$root" --password '!' root >>"$LOG_FILE" 2>&1 || return 1
-  rm -f "$root/etc/"{shadow-,gshadow-,passwd-,group-}
+  rm -f "$root/etc/"{shadow-,gshadow-,passwd-,group-,subuid-,subgid-}
 }
 
 # Remove the seller's account material and machine identity from the retained
