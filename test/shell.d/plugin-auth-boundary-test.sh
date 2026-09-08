@@ -57,7 +57,11 @@ vm.runInContext(
 )
 const service = { destroy() {} }
 store.put('omarchy.lock', service)
+assertEqual(typeof store.get, 'function', 'AuthServiceStore exposes get')
+assert(store.get('omarchy.lock') === service, 'get returns the stored authentication service')
+assertEqual(store.get('omarchy.idle'), null, 'get returns null for a missing id')
 store.destroy('omarchy.lock')
+assertEqual(store.get('omarchy.lock'), null, 'get returns null after destroy')
 assert(
   !store.has('omarchy.lock') && store.isTrusted('omarchy.lock'),
   'authentication classification survives service teardown'
@@ -147,8 +151,8 @@ pass "built-in service and widget clones retain narrow configuration and UI inte
 
 qml_matches "$shell_qml" 'shell\.serviceFor\( *shell\.pluginRegistry\.resolveEnabledId\( *id *\) *\)' ||
   fail "narrow first-party service proxies do not resolve enabled clones"
-qml_matches "$shell_qml" 'return serviceFor\( *shell\.pluginRegistry\.resolveEnabledId\( *pluginId *\) *\)' ||
-  fail "trusted first-party service lookups do not resolve enabled clones"
+qml_matches "$shell_qml" 'function firstPartyServiceFor\( *pluginId *\) *\{ *var id *= *shell\.pluginRegistry\.resolveEnabledId\( *pluginId *\) *return AuthServiceStore\.get\( *id *\) *\|\| *serviceFor\( *id *\)' ||
+  fail "trusted first-party lookups miss AuthServiceStore after resolving the enabled id"
 qml_matches "$shell_qml" 'allowOwnService *&& *shell\.pluginOwnsTarget\( *key, *requestedId *\)[^}]*return shell\.pluginServiceFor\( *key, *requestedId *\)' ||
   fail "cloned widgets cannot use a source id to reach their own service"
 pass "service facades resolve enabled clones without widening replacement-bar access"
