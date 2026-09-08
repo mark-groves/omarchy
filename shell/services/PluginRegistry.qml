@@ -110,8 +110,15 @@ QtObject {
       var metadata = manifest && Util.isPlainObject(manifest.omarchy) ? manifest.omarchy : null
       var clonedFrom = metadata ? String(metadata.clonedFrom || "") : ""
       var source = clonedFrom ? firstParty[clonedFrom] : null
-      manifest.__hostCapabilities = source && Array.isArray(source.__hostCapabilities)
-        ? source.__hostCapabilities.slice() : []
+      // clonedFrom is self-declared; authentication stays first-party only
+      var inherited = []
+      if (source && Array.isArray(source.__hostCapabilities)) {
+        for (var i = 0; i < source.__hostCapabilities.length; i++) {
+          var capability = source.__hostCapabilities[i]
+          if (capability !== "authentication") inherited.push(capability)
+        }
+      }
+      manifest.__hostCapabilities = inherited
     }
   }
 
