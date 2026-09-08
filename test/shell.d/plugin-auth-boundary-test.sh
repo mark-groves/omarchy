@@ -23,10 +23,6 @@ bar_qml="$ROOT/shell/plugins/bar/Bar.qml"
 plugin_shell_api="$ROOT/shell/services/PluginShellApi.qml"
 idle_service="$ROOT/shell/plugins/services/idle/Service.qml"
 
-# Normalize horizontal and vertical whitespace so the wiring assertions survive
-# harmless QML reflow. The runtime fixture below behaviorally covers
-# PluginShellApi and AuthServiceStore; these checks remain the guard for their
-# integration through shell.qml and Bar.qml, including without a compositor.
 qml_matches() {
   local file=$1
   local pattern=$2
