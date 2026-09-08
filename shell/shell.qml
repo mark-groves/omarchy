@@ -877,7 +877,8 @@ ShellRoot {
   }
 
   function firstPartyServiceFor(pluginId) {
-    return serviceFor(shell.pluginRegistry.resolveEnabledId(pluginId))
+    var id = shell.pluginRegistry.resolveEnabledId(pluginId)
+    return AuthServiceStore.get(id) || serviceFor(id)
   }
 
   function isAuthenticationService(manifest, pluginId) {
