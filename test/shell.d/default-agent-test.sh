@@ -144,6 +144,7 @@ omp_package="github:can1357/oh-my-pi"
 crush_package="crush"
 agy_package="antigravity-cli"
 ori_package="github:OpenRouterLabs/ori-releases"
+basecamp_package="github:basecamp/basecamp-cli"
 cursor_agent_package="cursor-agent"
 muse_package="http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]"
 
@@ -164,6 +165,7 @@ assert_lazy_stub "$grok_package" grok
 assert_lazy_stub "$omp_package" omp
 assert_lazy_stub "$crush_package" crush
 assert_lazy_stub "$ori_package" ori
+assert_lazy_stub "$basecamp_package" basecamp
 assert_lazy_stub "$muse_package" muse
 pass "custom agent lazy stubs preserve their mise packages"
 
@@ -173,6 +175,7 @@ grep -Fx "$grok_package grok" "$stub_log" >/dev/null || fail "user setup creates
 grep -Fx "$omp_package omp" "$stub_log" >/dev/null || fail "user setup creates the Oh My Pi lazy stub"
 grep -Fx "$crush_package" "$stub_log" >/dev/null || fail "user setup creates the Crush lazy stub"
 grep -Fx "$ori_package ori" "$stub_log" >/dev/null || fail "user setup creates the Ori lazy stub"
+grep -Fx "$basecamp_package basecamp" "$stub_log" >/dev/null || fail "user setup creates the Basecamp lazy stub"
 grep -F "asdf:icholy/asdf-cursor-agent" "$stub_log" >/dev/null &&
   fail "user setup does not create a Cursor asdf stub"
 grep -F "cursor-agent" "$stub_log" >/dev/null &&
@@ -208,6 +211,17 @@ grep -Fx "$omp_package omp" "$stub_log" >/dev/null || fail "Oh My Pi migration c
 : >"$stub_log"
 source "$ROOT/migrations/1787342993.sh" >/dev/null
 grep -Fx "$ori_package ori" "$stub_log" >/dev/null || fail "Ori migration creates a working lazy stub"
+
+: >"$stub_log"
+source "$ROOT/migrations/1788941927.sh" >/dev/null
+grep -Fx "$basecamp_package basecamp" "$stub_log" >/dev/null || fail "Basecamp migration creates a working lazy stub"
+: >"$stub_log"
+mkdir -p "$test_home/.local/state/omarchy"
+touch "$test_home/.local/state/omarchy/preinstalls-removed"
+source "$ROOT/migrations/1788941927.sh" >/dev/null
+[[ ! -s $stub_log ]] || fail "Basecamp migration ignores the preinstall opt-out"
+rm "$test_home/.local/state/omarchy/preinstalls-removed"
+pass "Basecamp migration creates a lazy stub and honors the preinstall opt-out"
 
 : >"$stub_log"
 export OMARCHY_TEST_MISSING_COMMAND=cursor-agent
