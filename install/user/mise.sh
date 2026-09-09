@@ -16,6 +16,7 @@ omarchy-mise-install npm:@xai-official/grok grok
 omarchy-mise-install npm:@kitlangton/ghui ghui
 omarchy-mise-install aqua:modem-dev/hunk hunk
 omarchy-mise-install github:basecamp/hey-cli hey
+omarchy-mise-install github:basecamp/basecamp-cli basecamp
 omarchy-mise-install github:OpenRouterLabs/ori-releases ori
 # Every line above writes a stub and cannot fail. This one can: it exits
 # non-zero when Hermes Desktop owns Hermes but has not finished setting it up,
