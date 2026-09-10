@@ -223,9 +223,6 @@ vendor_owned_symlink_version() {
   parent=$(dirname "$target")
   ver=$(basename "$parent")
 
-  # Drivers build root from $HOME or $XDG_DATA_HOME, so it is raw while target
-  # came back canonical. Canonicalize root too, or a symlinked home reads
-  # Omarchy's own install as foreign and never updates it.
   root=$(readlink -m "$root")
 
   if [[ $parent == "$root/$ver" && $(basename "$target") == "$member" && -f $target && ! -L $target ]]; then
@@ -236,18 +233,10 @@ vendor_owned_symlink_version() {
   printf 'foreign\t%s\tnot Omarchy'\''s install\n' "${target:-$link}"
 }
 
-# pacman's vercmp reads everything after the last hyphen as a pkgrel, so it
-# orders Cursor Agent's 2026.09.08-6caf4ff by its commit hash and calls a fresh
-# same-day build older than the installed one. Split on '.' and '-' instead and
-# walk the fields: numbers order numerically, and a field that is not a number
-# on both sides is a build identity, so a difference there means the vendor
-# published a different build at the same release position.
 vendor_version_newer() {
   local latest=$1 installed=$2
   local -a new old
   local count i left right
-
-  [[ $latest != "$installed" ]] || return 1
 
   IFS='.-' read -ra new <<<"$latest"
   IFS='.-' read -ra old <<<"$installed"
@@ -262,8 +251,9 @@ vendor_version_newer() {
     if [[ $left =~ ^[0-9]+$ && $right =~ ^[0-9]+$ ]]; then
       (( 10#$left > 10#$right ))
       return
+    else
+      return 0
     fi
-    return 0
   done
 
   (( ${#new[@]} > ${#old[@]} ))
