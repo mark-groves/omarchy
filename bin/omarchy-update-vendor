@@ -231,13 +231,46 @@ vendor_owned_symlink_version() {
   printf 'foreign\t%s\tnot Omarchy'\''s install\n' "${target:-$link}"
 }
 
+# pacman's vercmp reads everything after the last hyphen as a pkgrel, so it
+# orders Cursor Agent's 2026.09.08-6caf4ff by its commit hash and calls a fresh
+# same-day build older than the installed one. Split on '.' and '-' instead and
+# walk the fields: numbers order numerically, and a field that is not a number
+# on both sides is a build identity, so a difference there means the vendor
+# published a different build at the same release position.
+vendor_version_newer() {
+  local latest=$1 installed=$2
+  local -a new old
+  local count i left right
+
+  [[ $latest != "$installed" ]] || return 1
+
+  IFS='.-' read -ra new <<<"$latest"
+  IFS='.-' read -ra old <<<"$installed"
+
+  count=${#new[@]}
+  (( ${#old[@]} < count )) && count=${#old[@]}
+
+  for (( i = 0; i < count; i++ )); do
+    left=${new[i]}
+    right=${old[i]}
+    [[ $left == "$right" ]] && continue
+    if [[ $left =~ ^[0-9]+$ && $right =~ ^[0-9]+$ ]]; then
+      (( 10#$left > 10#$right ))
+      return
+    fi
+    return 0
+  done
+
+  (( ${#new[@]} > ${#old[@]} ))
+}
+
 vendor_status_line() {
   local latest=${VENDOR_RELEASE[version]:-}
   local integrity=${VENDOR_RELEASE[integrity]:-}
 
   if [[ -z $VENDOR_INSTALLED ]]; then
     printf '%-15s not installed\n' "$VENDOR_ID"
-  elif (( $(vercmp "$latest" "$VENDOR_INSTALLED") > 0 )); then
+  elif vendor_version_newer "$latest" "$VENDOR_INSTALLED"; then
     printf '%-15s %s -> %s               %s\n' "$VENDOR_ID" "$VENDOR_INSTALLED" "$latest" "$integrity"
   else
     printf '%-15s %s     current   %s\n' "$VENDOR_ID" "$VENDOR_INSTALLED" "$integrity"
@@ -401,7 +434,7 @@ omarchy_update_vendor() {
 
   if [[ $mode == check ]]; then
     vendor_status_line
-    if [[ -n $VENDOR_INSTALLED ]] && (( $(vercmp "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED") > 0 )); then
+    if [[ -n $VENDOR_INSTALLED ]] && vendor_version_newer "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED"; then
       vendor_record_outcome stale "$VENDOR_INSTALLED" "${VENDOR_RELEASE[version]}"
     else
       vendor_record_outcome current "${VENDOR_INSTALLED:---}" "${VENDOR_RELEASE[version]}"
@@ -409,7 +442,7 @@ omarchy_update_vendor() {
     return 0
   fi
 
-  if [[ -n $VENDOR_INSTALLED ]] && (( $(vercmp "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED") <= 0 )); then
+  if [[ -n $VENDOR_INSTALLED ]] && ! vendor_version_newer "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED"; then
     vendor_finish current
     return "$VENDOR_EXIT"
   fi

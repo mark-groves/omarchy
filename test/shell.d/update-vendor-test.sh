@@ -5,7 +5,6 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 require_command sha256sum
-require_command vercmp
 
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
