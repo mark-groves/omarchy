@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# omarchy:summary=Update the Origin CLI from Cursor's official installer manifest when a newer one is available
+# omarchy:name=origin
+
+set -euo pipefail
+source omarchy-update-vendor
+
+VENDOR_ID=origin
+VENDOR_LABEL="Origin CLI"
+VENDOR_ICON=""
+VENDOR_URL_ALLOW='^https://downloads\.cursor\.com/co/[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9-]+-[0-9a-f]+/linux-(x64|arm64)/co\.tar\.gz$'
+VENDOR_INTEGRITY_FLOOR=digest
+
+ORIGIN_VERSIONS="$HOME/.local/share/cursor/origin"
+ORIGIN_LINK="$HOME/.local/bin/origin"
+
+origin_channel() {
+  local config=${XDG_CONFIG_HOME:-$HOME/.config}/origin-cli/config.json
+  local channel=""
+
+  if [[ -f $config ]]; then
+    channel=$(jq -er '.channel // empty' "$config" 2>/dev/null || true)
+  fi
+  if [[ -z $channel && -n ${ORIGIN_INSTALL_CHANNEL:-} ]]; then
+    channel=$ORIGIN_INSTALL_CHANNEL
+  fi
+  if [[ -z $channel && -n ${CO_INSTALL_CHANNEL:-} ]]; then
+    channel=$CO_INSTALL_CHANNEL
+  fi
+  printf '%s\n' "${channel:-stable}"
+}
+
+vendor_arch() {
+  case "$(uname -m)" in
+  x86_64 | amd64) printf 'linux-x64\n' ;;
+  aarch64 | arm64) printf 'linux-arm64\n' ;;
+  *) return 1 ;;
+  esac
+}
+
+vendor_installed() {
+  vendor_owned_symlink_version "$ORIGIN_LINK" "$ORIGIN_VERSIONS" origin
+}
+
+vendor_resolve() {
+  local arch=$1
+  local script channel version url sha
+  local fields=()
+
+  script=$(curl -fsSL --retry 3 --retry-all-errors --max-time 20 \
+    "https://downloads.cursor.com/origin/install.sh") || return 1
+
+  channel=$(origin_channel)
+  [[ $channel == stable || $channel == latest ]] || return 1
+
+  mapfile -t fields < <(awk -v channel="$channel" -v plat="$arch" '
+    $0 ~ "^[[:space:]]*" channel "\\)" {
+      in_ch = 1
+      next
+    }
+    in_ch && /^[[:space:]]*(latest|stable)\)/ {
+      in_ch = 0
+      in_plat = 0
+      next
+    }
+    in_ch && /version="/ {
+      line = $0
+      sub(/.*version="/, "", line)
+      sub(/".*/, "", line)
+      ver = line
+    }
+    in_ch && $0 ~ "^[[:space:]]*" plat "\\)" {
+      in_plat = 1
+      next
+    }
+    in_plat && /url="/ {
+      line = $0
+      sub(/.*url="/, "", line)
+      sub(/".*/, "", line)
+      u = line
+    }
+    in_plat && /sha="/ {
+      line = $0
+      sub(/.*sha="/, "", line)
+      sub(/".*/, "", line)
+      if (ver != "" && u != "" && line != "") {
+        print ver
+        print u
+        print line
+      }
+      exit
+    }
+  ' <<<"$script")
+
+  version=${fields[0]:-}
+  url=${fields[1]:-}
+  sha=${fields[2]:-}
+  [[ -n $version && -n $url && -n $sha ]] || return 1
+  printf 'version=%s\turl=%s\tintegrity=digest\tdigest=%s\n' "$version" "$url" "$sha"
+}
+
+vendor_apply() {
+  local staging
+  staging=$(vendor_extract_tarball "$1" origin) || return 1
+  vendor_swap_versioned_dir "$staging" "$ORIGIN_VERSIONS/$2" "$ORIGIN_LINK" origin
+}
+
+omarchy_update_vendor "$@"

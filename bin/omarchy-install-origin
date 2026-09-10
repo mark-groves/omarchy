@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# omarchy:summary=Install the Origin CLI from Cursor's official Linux release
+# omarchy:args=[--check]
+
+set -euo pipefail
+
+case "${1:-}" in
+--check | --installed)
+  exec omarchy-update-origin --installed
+  ;;
+-h | --help)
+  echo "Usage: omarchy-install-origin [--check]"
+  echo
+  echo "Installs Cursor's official Origin CLI if it is not already present under"
+  echo "Omarchy's layout. --check exits 0 when that install is present."
+  ;;
+"")
+  exec omarchy-update-origin --install
+  ;;
+*)
+  echo "omarchy-install-origin: unknown option '$1'. Try --help." >&2
+  exit 2
+  ;;
+esac
