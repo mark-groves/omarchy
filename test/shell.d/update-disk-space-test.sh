@@ -75,6 +75,7 @@ for command in \
   omarchy-update-aur-pkgs \
   omarchy-update-mise \
   omarchy-update-grok-bot \
+  omarchy-update-cursor \
   omarchy-update-orphan-pkgs \
   omarchy-hook \
   omarchy-update-analyze-logs \

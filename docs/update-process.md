@@ -150,6 +150,11 @@ Important behavior:
 - If Grok Bot is installed, `omarchy-update-grok-bot` then checks official Linux
   releases and upgrades past the Omarchy channel package when a newer build is
   published. A feed outage skips the step instead of failing the rest of the update.
+- `omarchy-update-cursor` then updates every Omarchy-owned Cursor product that is present: the editor (`cursor-bin`), the Agent CLI, and the Origin CLI. Each product is a driver over `omarchy-update-vendor`.
+- A missing install, a foreign (non-Omarchy) install, an unsupported architecture, or a resolve that never completed is fail-soft and exits 0 so the rest of the update continues. A resolve does not complete when the vendor is unreachable, the record is unparseable, or the record is below the row's integrity floor.
+- A digest mismatch, a failed download, or a failed apply after a completed resolve is fail-hard and exits 1. Origin is the only Cursor product with a vendor-published digest. The editor and Agent CLI pin the artifact URL (`commitSha` or the version in the path) and do not claim a vendor hash.
+- "Newer than installed" reads a version as a release position followed by a build identity. The Agent CLI and Origin end a version with a build hash (`2026.09.08-6caf4ff`, `2026.09.08-22-50-39-8f6b2f8`), and pacman's `vercmp` takes everything after the last hyphen as a pkgrel and orders it, so builds that share a release position sort by their commit hash and a fresh one can read as older. That hits the Agent CLI on any same-day rebuild, and Origin only when two builds share a second. `vendor_version_newer` drops the trailing hash and asks `vercmp` to order what is left, so a strictly older position stays `current` and never downgrades, while the same position with a different version string means the vendor published a new build and the vendor's build wins.
+- This step does not write Cursor's in-app `update.mode`. That remains a follow-up.
 
 ## Path 2: direct `sudo pacman -Syu` attempt
 
@@ -287,6 +292,11 @@ scripts.
 | `omarchy-update-aur-pkgs` | Updates AUR packages with `yay -Sua` if foreign packages exist and AUR is reachable. | **Question.** Omarchy is package-backed now, but users may still install AUR packages. Keep for now. |
 | `omarchy-update-mise` | Runs `MISE_MINIMUM_RELEASE_AGE=0 mise up` for mise-managed tools — the override of mise's release-age cooldown is the point. | **Keep.** Mise-managed tools are intentionally part of the blessed update path. |
 | `omarchy-update-grok-bot` | If `grok-bot` is installed, checks the official Linux release feed (and the public download page) and repackages a newer `.deb` as `grok-bot` so the Omarchy channel cannot leave the desktop app behind. | **Keep.** Official Linux builds now ship faster than the Omarchy package. |
+| `omarchy-update-vendor` | Hidden sourced engine for official vendor releases. Owns the integrity lattice, release record, fetch/verify, and the fail-soft / fail-hard outcome set. | **Keep internal/hidden.** Drivers source it. Do not run it. |
+| `omarchy-update-cursor` | Fan-out that runs the editor, Agent CLI, and Origin CLI drivers. Silent when none of them are Omarchy-installed. | **Keep.** Pipeline slot after Grok Bot. |
+| `omarchy-update-cursor-editor` | If `cursor-bin` is installed, checks Cursor's official Linux API and repackages a newer `.deb` as `cursor-bin`. URL is pinned by `commitSha`. No vendor digest. | **Keep.** Official Linux builds move faster than the Omarchy package. |
+| `omarchy-update-cursor-agent` | If Omarchy's `cursor-agent` layout is present, checks `cursor.com/install` as text and installs a newer official tarball. URL is pinned by the version slug. No vendor digest. No `agent` symlink. | **Keep.** Closes the old install-once hole. |
+| `omarchy-update-origin` | If Omarchy's Origin layout is present, parses `downloads.cursor.com/origin/install.sh` as text and verifies the baked `sha=` before install. | **Keep.** Only Cursor product with a vendor-published digest. |
 | `omarchy-update-orphan-pkgs` | Lists orphans and prompts before removal; noninteractive mode never removes. | **Keep for now.** Safe because it is prompt-only. |
 | `omarchy-update-analyze-logs` | Scans `/tmp/omarchy-update.log` for known failure patterns, currently initramfs generation. | **Keep/expand.** Useful safety net; should grow only for high-signal checks. |
 | `omarchy-update-restart` | Prompts for reboot after kernel/Hyprland updates, restarts components with `restart-*-required` markers, and always restarts the shell. | **Keep.** Important final step; may eventually include service-restart checks. |
@@ -322,6 +332,11 @@ scripts.
 
 7. **Grok Bot tracks official Linux releases**
    - `omarchy-update-grok-bot` runs during `omarchy update` when the package is installed, and can also be run as `omarchy update grok-bot`.
+
+8. **Cursor products track official Linux releases**
+   - `omarchy-update-cursor` runs during `omarchy update` and as `omarchy update cursor`. Individual routes are `omarchy update cursor-editor`, `omarchy update cursor-agent`, and `omarchy update origin`.
+   - Fail-soft on absent, foreign, unsupported, or unresolved. Fail-hard on digest mismatch or a failed download/apply after resolve.
+   - Do not write `update.mode: none` into Cursor settings in this step.
 
 ## Remaining concerns
 
