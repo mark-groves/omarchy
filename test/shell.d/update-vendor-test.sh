@@ -249,7 +249,22 @@ TEST_RECORD=$pinned_record
 assert_exit 0 "--check exits 0" --check
 [[ ! -s $curl_log ]] || fail "--check never downloads" "$(cat "$curl_log")"
 [[ ! -s $apply_log ]] || fail "--check never applies" "$(cat "$apply_log")"
+assert_outcome $'fake\tstale\t1.0.0\t1.2.3' "--check records stale when newer"
 pass "--check never downloads"
+
+TEST_PROBE=$'installed\t1.2.3'
+TEST_RECORD=$pinned_record
+assert_exit 0 "--check current exits 0" --check
+assert_outcome $'fake\tcurrent\t1.2.3\t1.2.3' "--check records current when current"
+pass "--check records current when current"
+
+TEST_PROBE=absent
+TEST_RECORD=$pinned_record
+assert_exit 0 "--check absent exits 0" --check
+grep -q 'not installed' "$test_tmp/out" || fail "--check absent prints not installed" "$(cat "$test_tmp/out")"
+assert_outcome $'fake\tabsent\t--\t--' "--check absent records absent"
+[[ ! -s $apply_log ]] || fail "--check absent does not apply" "$(cat "$apply_log")"
+pass "--check absent prints not installed"
 
 TEST_INSPECT=fail
 TEST_PROBE=$'installed\t1.0.0'

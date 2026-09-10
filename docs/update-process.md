@@ -150,7 +150,10 @@ Important behavior:
 - If Grok Bot is installed, `omarchy-update-grok-bot` then checks official Linux
   releases and upgrades past the Omarchy channel package when a newer build is
   published. A feed outage skips the step instead of failing the rest of the update.
-- `omarchy-update-cursor` then updates every Omarchy-owned Cursor product that is present. That is the editor (`cursor-bin`), the Agent CLI, and the Origin CLI. Each product is a driver over `omarchy-update-vendor`. A missing install, a foreign (non-Omarchy) install, an unsupported architecture, or a resolve that never completed is fail-soft and exits 0 so the rest of the update continues. A resolve does not complete when the vendor is unreachable, the record is unparseable, or the record is below the row's integrity floor. A digest mismatch or a failed download/apply after a completed resolve is fail-hard and exits 1. Origin is the only Cursor product with a vendor-published digest. The editor and Agent CLI pin the artifact URL (`commitSha` or the version in the path) and do not claim a vendor hash. This step does not write Cursor's in-app `update.mode`. That remains a follow-up.
+- `omarchy-update-cursor` then updates every Omarchy-owned Cursor product that is present: the editor (`cursor-bin`), the Agent CLI, and the Origin CLI. Each product is a driver over `omarchy-update-vendor`.
+- A missing install, a foreign (non-Omarchy) install, an unsupported architecture, or a resolve that never completed is fail-soft and exits 0 so the rest of the update continues. A resolve does not complete when the vendor is unreachable, the record is unparseable, or the record is below the row's integrity floor.
+- A digest mismatch, a failed download, or a failed apply after a completed resolve is fail-hard and exits 1. Origin is the only Cursor product with a vendor-published digest. The editor and Agent CLI pin the artifact URL (`commitSha` or the version in the path) and do not claim a vendor hash.
+- This step does not write Cursor's in-app `update.mode`. That remains a follow-up.
 
 ## Path 2: direct `sudo pacman -Syu` attempt
 

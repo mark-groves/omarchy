@@ -2,6 +2,7 @@
 
 # omarchy:summary=Install or update Cursor Agent from Cursor's official Linux tarball
 # omarchy:name=cursor-agent
+# omarchy:args=[--check]
 
 set -euo pipefail
 source omarchy-update-vendor

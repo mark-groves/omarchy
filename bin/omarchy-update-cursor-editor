@@ -2,6 +2,7 @@
 
 # omarchy:summary=Update the Cursor editor from Cursor's official Linux release when a newer one is available
 # omarchy:name=cursor-editor
+# omarchy:args=[--check]
 # omarchy:requires-sudo=true
 
 set -euo pipefail
@@ -97,7 +98,6 @@ conflicts=('cursor')
 source=('${deb_name}')
 noextract=('${deb_name}')
 options=('!debug' '!strip')
-# Local digest of the file the engine already cleared. Not a vendor-published checksum.
 sha256sums=('${digest}')
 
 package() {

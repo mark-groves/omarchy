@@ -8,11 +8,6 @@
   exit 1
 }
 
-# How much a resolution is trusted. A resolver may exceed its row's floor, never fall below it.
-#
-#   tls         HTTPS to an allowlisted vendor host, redirects disabled. Bottom of the order.
-#   pinned-url  tls, plus the artifact URL was emitted by a vendor-controlled source and carries the version.
-#   digest      pinned-url, plus a SHA-256 published by that source and compared before install.
 if ! declare -p VENDOR_INTEGRITY_RANK >/dev/null 2>&1; then
   declare -A VENDOR_INTEGRITY_RANK=([tls]=1 [pinned-url]=2 [digest]=3)
 fi
@@ -237,8 +232,8 @@ vendor_owned_symlink_version() {
 }
 
 vendor_status_line() {
-  local latest=${VENDOR_RELEASE[version]}
-  local integrity=${VENDOR_RELEASE[integrity]}
+  local latest=${VENDOR_RELEASE[version]:-}
+  local integrity=${VENDOR_RELEASE[integrity]:-}
 
   if [[ -z $VENDOR_INSTALLED ]]; then
     printf '%-15s not installed\n' "$VENDOR_ID"
@@ -315,7 +310,9 @@ vendor_finish() {
   refused)
     echo "Official ${VENDOR_LABEL} ${VENDOR_RELEASE[version]} digest mismatch (expected ${VENDOR_RELEASE[digest]}, got ${extra})."
     ;;
-  failed) ;;
+  failed)
+    echo "Official ${VENDOR_LABEL} update failed."
+    ;;
   esac
 }
 
@@ -358,6 +355,11 @@ omarchy_update_vendor() {
 
   case $tag in
   absent)
+    if [[ $mode == check ]]; then
+      vendor_status_line
+      vendor_record_outcome absent -- --
+      return 0
+    fi
     if [[ $mode != install ]]; then
       vendor_finish absent
       return "$VENDOR_EXIT"
@@ -399,7 +401,11 @@ omarchy_update_vendor() {
 
   if [[ $mode == check ]]; then
     vendor_status_line
-    vendor_record_outcome current "${VENDOR_INSTALLED:---}" "${VENDOR_RELEASE[version]}"
+    if [[ -n $VENDOR_INSTALLED ]] && (( $(vercmp "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED") > 0 )); then
+      vendor_record_outcome stale "$VENDOR_INSTALLED" "${VENDOR_RELEASE[version]}"
+    else
+      vendor_record_outcome current "${VENDOR_INSTALLED:---}" "${VENDOR_RELEASE[version]}"
+    fi
     return 0
   fi
 

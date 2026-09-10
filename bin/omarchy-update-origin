@@ -2,6 +2,7 @@
 
 # omarchy:summary=Update the Origin CLI from Cursor's official installer manifest when a newer one is available
 # omarchy:name=origin
+# omarchy:args=[--check]
 
 set -euo pipefail
 source omarchy-update-vendor

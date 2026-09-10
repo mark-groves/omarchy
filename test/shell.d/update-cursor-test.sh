@@ -71,6 +71,32 @@ grep -q 'Cursor: 1 updated, 1 current, 1 not installed.' "$test_tmp/out" ||
   fail "fan-out prints a summary" "$(cat "$test_tmp/out")"
 pass "fan-out prints members and a summary"
 
+write_child omarchy-update-cursor-editor '
+printf "%s\t%s\t%s\t%s\n" cursor-editor stale 3.19.18 3.19.19 >>"$OMARCHY_VENDOR_OUTCOME"
+echo "cursor-editor   3.19.18 -> 3.19.19               pinned-url"
+exit 0
+'
+write_child omarchy-update-cursor-agent '
+printf "%s\t%s\t%s\t%s\n" cursor-agent current 2026.09.08-6caf4ff 2026.09.08-6caf4ff >>"$OMARCHY_VENDOR_OUTCOME"
+echo "cursor-agent    2026.09.08-6caf4ff     current   pinned-url"
+exit 0
+'
+write_child omarchy-update-origin '
+printf "%s\t%s\t%s\t%s\n" origin absent -- -- >>"$OMARCHY_VENDOR_OUTCOME"
+echo "origin          not installed"
+exit 0
+'
+
+set +e
+run_fanout --check
+rc=$?
+set -e
+(( rc == 0 )) || fail "fan-out --check exits 0" "exit $rc"
+grep -q 'cursor-editor   3.19.18 -> 3.19.19' "$test_tmp/out" || fail "fan-out --check prints member status"
+grep -q 'Cursor: 1 newer, 1 current, 1 not installed.' "$test_tmp/out" ||
+  fail "fan-out --check summarizes stale as newer" "$(cat "$test_tmp/out")"
+pass "fan-out --check summarizes stale as newer"
+
 set +e
 run_fanout --please
 rc=$?

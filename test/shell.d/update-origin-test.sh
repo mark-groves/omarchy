@@ -115,7 +115,7 @@ run_origin --check
 rc=$?
 set -e
 (( rc == 0 )) || fail "origin --check exits 0" "$(cat "$test_tmp/err")"
-assert_outcome $'origin\tcurrent\t1.0.0\t2026.09.08-22-50-39-8f6b2f8' "origin --check parses today's stable linux-x64 block"
+assert_outcome $'origin\tstale\t1.0.0\t2026.09.08-22-50-39-8f6b2f8' "origin --check parses today's stable linux-x64 block"
 tarball_fetched && fail "origin --check does not fetch the tarball"
 pass "origin --check parses the stable linux-x64 block"
 
@@ -139,7 +139,7 @@ run_origin --check
 rc=$?
 set -e
 (( rc == 0 )) || fail "config.json channel --check exits 0"
-assert_outcome $'origin\tcurrent\t1.0.0\t2026.09.10-22-25-12-9621f10' "config.json channel wins over the stable default"
+assert_outcome $'origin\tstale\t1.0.0\t2026.09.10-22-25-12-9621f10' "config.json channel wins over the stable default"
 rm -f "$test_home/.config/origin-cli/config.json"
 pass "origin channel reads config.json before env"
 

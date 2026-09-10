@@ -41,6 +41,7 @@ fi
 n_absent=0
 n_updated=0
 n_current=0
+n_stale=0
 n_foreign=0
 n_other=0
 while IFS=$'\t' read -r _id out _have _latest; do
@@ -48,21 +49,35 @@ while IFS=$'\t' read -r _id out _have _latest; do
   absent) n_absent=$((n_absent + 1)) ;;
   updated) n_updated=$((n_updated + 1)) ;;
   current) n_current=$((n_current + 1)) ;;
+  stale) n_stale=$((n_stale + 1)) ;;
   foreign) n_foreign=$((n_foreign + 1)) ;;
   *) n_other=$((n_other + 1)) ;;
   esac
 done <"$outcome"
 
-if (( n_updated == 0 && n_current == 0 && n_foreign == 0 && n_other == 0 )); then
+if (( n_updated == 0 && n_current == 0 && n_stale == 0 && n_foreign == 0 && n_other == 0 )); then
   exit 0
 fi
 
 parts=()
-(( n_updated > 0 )) && parts+=("$n_updated updated")
-(( n_current > 0 )) && parts+=("$n_current current")
-(( n_absent > 0 )) && parts+=("$n_absent not installed")
-(( n_foreign > 0 )) && parts+=("$n_foreign left alone")
-(( n_other > 0 )) && parts+=("$n_other skipped")
+if (( n_updated > 0 )); then
+  parts+=("$n_updated updated")
+fi
+if (( n_stale > 0 )); then
+  parts+=("$n_stale newer")
+fi
+if (( n_current > 0 )); then
+  parts+=("$n_current current")
+fi
+if (( n_absent > 0 )); then
+  parts+=("$n_absent not installed")
+fi
+if (( n_foreign > 0 )); then
+  parts+=("$n_foreign left alone")
+fi
+if (( n_other > 0 )); then
+  parts+=("$n_other skipped")
+fi
 
 if (( ${#parts[@]} > 0 )); then
   summary=$(printf '%s, ' "${parts[@]}")
