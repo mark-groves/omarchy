@@ -1,0 +1,441 @@
+#!/bin/bash
+
+# omarchy:summary=Shared engine for updating apps from their official vendor releases (source this, do not run it)
+# omarchy:hidden=true
+
+[[ ${BASH_SOURCE[0]} != "$0" ]] || {
+  echo "omarchy-update-vendor is a library; source it from a bin/omarchy-update-<app> driver" >&2
+  exit 1
+}
+
+# How much a resolution is trusted. A resolver may exceed its row's floor, never fall below it.
+#
+#   tls         HTTPS to an allowlisted vendor host, redirects disabled. Bottom of the order.
+#   pinned-url  tls, plus the artifact URL was emitted by a vendor-controlled source and carries the version.
+#   digest      pinned-url, plus a SHA-256 published by that source and compared before install.
+if ! declare -p VENDOR_INTEGRITY_RANK >/dev/null 2>&1; then
+  declare -A VENDOR_INTEGRITY_RANK=([tls]=1 [pinned-url]=2 [digest]=3)
+fi
+
+declare -A VENDOR_RELEASE=()
+VENDOR_TMP=""
+VENDOR_INSTALLED=""
+VENDOR_EXIT=0
+
+vendor_cleanup() {
+  if [[ -n ${VENDOR_TMP:-} && -d $VENDOR_TMP ]]; then
+    rm -rf "$VENDOR_TMP"
+  fi
+  VENDOR_TMP=""
+}
+
+vendor_record_outcome() {
+  local outcome=$1 have=${2:---} latest=${3:---}
+
+  [[ -n ${OMARCHY_VENDOR_OUTCOME:-} ]] || return 0
+  printf '%s\t%s\t%s\t%s\n' "$VENDOR_ID" "$outcome" "$have" "$latest" >>"$OMARCHY_VENDOR_OUTCOME"
+}
+
+vendor_record_reject() {
+  echo "Official ${VENDOR_LABEL} release did not pass ${1}; skipping."
+  return 1
+}
+
+vendor_record_parse() {
+  local line pair key value
+  VENDOR_RELEASE=()
+
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -n $line ]] || continue
+    IFS=$'\t' read -ra pairs <<<"$line"
+    for pair in "${pairs[@]}"; do
+      [[ -n $pair ]] || continue
+      [[ $pair == *=* ]] || vendor_record_reject record || return 1
+      key=${pair%%=*}
+      value=${pair#*=}
+      [[ -n $key ]] || vendor_record_reject record || return 1
+      [[ -z ${VENDOR_RELEASE[$key]+x} ]] || vendor_record_reject record || return 1
+      VENDOR_RELEASE[$key]=$value
+    done
+  done
+
+  vendor_record_validate
+}
+
+vendor_record_validate() {
+  local key digest got need
+
+  for key in "${!VENDOR_RELEASE[@]}"; do
+    case $key in
+    version | url | integrity | digest | filename) ;;
+    *) vendor_record_reject "unknown field" || return 1 ;;
+    esac
+  done
+
+  [[ -n ${VENDOR_RELEASE[version]:-} && -n ${VENDOR_RELEASE[url]:-} && -n ${VENDOR_RELEASE[integrity]:-} ]] ||
+    vendor_record_reject "required fields" || return 1
+
+  [[ ${VENDOR_RELEASE[version]} =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+    vendor_record_reject version || return 1
+
+  [[ ${VENDOR_RELEASE[url]} =~ $VENDOR_URL_ALLOW ]] ||
+    vendor_record_reject "url allowlist" || return 1
+
+  [[ ${VENDOR_RELEASE[url]} == *"${VENDOR_RELEASE[version]}"* ]] ||
+    vendor_record_reject "version in url" || return 1
+
+  got=${VENDOR_INTEGRITY_RANK[${VENDOR_RELEASE[integrity]}]:-0}
+  need=${VENDOR_INTEGRITY_RANK[$VENDOR_INTEGRITY_FLOOR]:-0}
+  (( got >= need && got > 0 )) || vendor_record_reject "integrity floor" || return 1
+
+  digest=${VENDOR_RELEASE[digest]:-}
+  if [[ ${VENDOR_RELEASE[integrity]} == digest ]]; then
+    [[ $digest =~ ^[0-9a-f]{64}$ ]] || vendor_record_reject digest || return 1
+  else
+    [[ -z $digest ]] || vendor_record_reject digest || return 1
+  fi
+
+  VENDOR_RELEASE[filename]=${VENDOR_RELEASE[filename]:-${VENDOR_RELEASE[url]##*/}}
+}
+
+vendor_local_digest() {
+  sha256sum "$1" | awk '{ print $1 }'
+}
+
+vendor_fetch() {
+  local url=${VENDOR_RELEASE[url]} dest
+
+  [[ $url == https://downloads.cursor.com/* ]] || return 1
+  VENDOR_TMP=$(mktemp -d)
+  dest="$VENDOR_TMP/${VENDOR_RELEASE[filename]}"
+  curl -fL --retry 3 --retry-all-errors --max-redirs 0 -o "$dest" "$url" || return 1
+  printf '%s\n' "$dest"
+}
+
+vendor_verify() {
+  local file=$1
+
+  [[ ${VENDOR_RELEASE[integrity]} == digest ]] || return 0
+  printf '%s  %s\n' "${VENDOR_RELEASE[digest]}" "$file" | sha256sum -c --status
+}
+
+vendor_extract_tarball() {
+  local tarball=$1 member=$2
+  local staging stripped
+
+  staging=$(mktemp -d)
+  if ! tar --no-same-owner -xzf "$tarball" -C "$staging"; then
+    rm -rf "$staging"
+    return 1
+  fi
+
+  if [[ -f $staging/$member && ! -L $staging/$member ]]; then
+    chmod +x "$staging/$member"
+    printf '%s\n' "$staging"
+    return 0
+  fi
+
+  stripped=$(mktemp -d)
+  if tar --no-same-owner --strip-components=1 -xzf "$tarball" -C "$stripped" &&
+    [[ -f $stripped/$member && ! -L $stripped/$member ]]; then
+    rm -rf "$staging"
+    chmod +x "$stripped/$member"
+    printf '%s\n' "$stripped"
+    return 0
+  fi
+
+  rm -rf "$staging" "$stripped"
+  return 1
+}
+
+vendor_swap_versioned_dir() {
+  local staging=$1 dest=$2 link=$3 member=$4
+  local backup=""
+
+  mkdir -p "$(dirname "$dest")" "$(dirname "$link")"
+
+  if [[ -e $dest || -L $dest ]]; then
+    backup="${dest}.backup.$$"
+    mv "$dest" "$backup"
+  fi
+
+  if ! mv "$staging" "$dest"; then
+    if [[ -n $backup ]]; then
+      mv "$backup" "$dest"
+    fi
+    return 1
+  fi
+
+  ln -sfn "$dest/$member" "$link"
+  if [[ -n $backup ]]; then
+    rm -rf "$backup"
+  fi
+}
+
+vendor_pacman_repackage() {
+  local deb=$1 pkgname=$2 pkgver=$3
+  local work digest deb_name pkg pkgs rc
+
+  work=$(mktemp -d)
+  deb_name=${deb##*/}
+  digest=$(vendor_local_digest "$deb")
+
+  if ! (
+    cd "$work"
+    cp -f "$deb" "$deb_name"
+    vendor_pkgbuild "$pkgver" "$deb_name" "$digest"
+    PKGDEST="$work" makepkg -f --noconfirm --nodeps
+  ); then
+    rm -rf "$work"
+    return 1
+  fi
+
+  shopt -s nullglob
+  pkgs=("$work"/${pkgname}-${pkgver}-*.pkg.tar.*)
+  shopt -u nullglob
+  if (( ${#pkgs[@]} != 1 )); then
+    rm -rf "$work"
+    echo "Failed to build an Arch package from the official ${VENDOR_LABEL} release" >&2
+    return 1
+  fi
+  pkg=${pkgs[0]}
+
+  if (( EUID == 0 )); then
+    pacman -U --noconfirm "$pkg"
+  else
+    sudo pacman -U --noconfirm "$pkg"
+  fi
+  rc=$?
+  rm -rf "$work"
+  return "$rc"
+}
+
+vendor_owned_symlink_version() {
+  local link=$1 root=$2 member=$3
+  local target parent ver
+
+  if [[ ! -e $link && ! -L $link ]]; then
+    printf 'absent\n'
+    return 0
+  fi
+
+  if [[ ! -L $link ]]; then
+    printf 'foreign\t%s\tnot Omarchy'\''s install\n' "$link"
+    return 0
+  fi
+
+  target=$(readlink -f "$link" 2>/dev/null || readlink "$link")
+  parent=$(dirname "$target")
+  ver=$(basename "$parent")
+
+  if [[ $parent == "$root/$ver" && $(basename "$target") == "$member" && -f $target && ! -L $target ]]; then
+    printf 'installed\t%s\n' "$ver"
+    return 0
+  fi
+
+  printf 'foreign\t%s\tnot Omarchy'\''s install\n' "${target:-$link}"
+}
+
+vendor_status_line() {
+  local latest=${VENDOR_RELEASE[version]}
+  local integrity=${VENDOR_RELEASE[integrity]}
+
+  if [[ -z $VENDOR_INSTALLED ]]; then
+    printf '%-15s not installed\n' "$VENDOR_ID"
+  elif (( $(vercmp "$latest" "$VENDOR_INSTALLED") > 0 )); then
+    printf '%-15s %s -> %s               %s\n' "$VENDOR_ID" "$VENDOR_INSTALLED" "$latest" "$integrity"
+  else
+    printf '%-15s %s     current   %s\n' "$VENDOR_ID" "$VENDOR_INSTALLED" "$integrity"
+  fi
+}
+
+vendor_notify_updated() {
+  local body
+
+  if [[ -n $VENDOR_INSTALLED ]]; then
+    body="Updated from ${VENDOR_INSTALLED} to ${VENDOR_RELEASE[version]}."
+  else
+    body="Updated to ${VENDOR_RELEASE[version]}."
+  fi
+
+  if [[ -n ${VENDOR_ICON:-} ]]; then
+    omarchy-notification-send -u normal -g "$VENDOR_ICON" "${VENDOR_LABEL} updated" "$body" || true
+  else
+    omarchy-notification-send -u normal "${VENDOR_LABEL} updated" "$body" || true
+  fi
+}
+
+vendor_header() {
+  echo -e "\e[32m\nUpdate ${VENDOR_LABEL}\e[0m"
+}
+
+vendor_finish() {
+  local outcome=$1 extra=${2:-}
+  local have=${VENDOR_INSTALLED:---}
+  local latest=${VENDOR_RELEASE[version]:---}
+  VENDOR_EXIT=0
+
+  case $outcome in
+  absent | foreign)
+    have=--
+    latest=--
+    ;;
+  unsupported | unreachable)
+    latest=--
+    ;;
+  refused | failed)
+    VENDOR_EXIT=1
+    ;;
+  esac
+
+  vendor_record_outcome "$outcome" "$have" "$latest"
+  vendor_cleanup
+
+  case $outcome in
+  absent) ;;
+  foreign)
+    echo "${VENDOR_ID} at ${extra} is not Omarchy's install; leaving it alone."
+    ;;
+  unsupported)
+    echo "Official ${VENDOR_LABEL} Linux builds are not published for $(uname -m); skipping."
+    ;;
+  unreachable)
+    echo "Could not reach official ${VENDOR_LABEL} releases; skipping."
+    ;;
+  current)
+    echo "${VENDOR_LABEL} is already current (${VENDOR_INSTALLED})."
+    ;;
+  updated)
+    echo "${VENDOR_LABEL} updated to ${VENDOR_RELEASE[version]}."
+    if declare -F vendor_running >/dev/null && vendor_running; then
+      echo "Restart ${VENDOR_LABEL} to use the new version."
+    fi
+    vendor_notify_updated
+    ;;
+  refused)
+    echo "Official ${VENDOR_LABEL} ${VENDOR_RELEASE[version]} digest mismatch (expected ${VENDOR_RELEASE[digest]}, got ${extra})."
+    ;;
+  failed) ;;
+  esac
+}
+
+omarchy_update_vendor() {
+  local mode=update
+  local probe tag rest path record file actual arch
+
+  VENDOR_EXIT=0
+  VENDOR_INSTALLED=""
+  VENDOR_RELEASE=()
+
+  case "${1:-}" in
+  "") ;;
+  --check) mode=check ;;
+  --install) mode=install ;;
+  --installed) mode=installed ;;
+  *)
+    echo "${0##*/}: unknown option '${1}'. Try --help." >&2
+    return 2
+    ;;
+  esac
+
+  if (( $# > 1 )); then
+    echo "${0##*/}: unknown option '${2}'. Try --help." >&2
+    return 2
+  fi
+
+  probe=$(vendor_installed)
+  tag=${probe%%$'\t'*}
+  if [[ $probe == *$'\t'* ]]; then
+    rest=${probe#*$'\t'}
+  else
+    rest=""
+  fi
+
+  if [[ $mode == installed ]]; then
+    [[ $tag == installed ]]
+    return
+  fi
+
+  case $tag in
+  absent)
+    if [[ $mode != install ]]; then
+      vendor_finish absent
+      return "$VENDOR_EXIT"
+    fi
+    VENDOR_INSTALLED=""
+    ;;
+  foreign)
+    path=${rest%%$'\t'*}
+    [[ $mode != check ]] && vendor_header
+    vendor_finish foreign "$path"
+    return "$VENDOR_EXIT"
+    ;;
+  installed)
+    VENDOR_INSTALLED=$rest
+    ;;
+  *)
+    vendor_finish failed
+    return "$VENDOR_EXIT"
+    ;;
+  esac
+
+  [[ $mode != check ]] && vendor_header
+
+  if ! arch=$(vendor_arch); then
+    vendor_finish unsupported
+    return "$VENDOR_EXIT"
+  fi
+
+  if ! record=$(vendor_resolve "$arch"); then
+    vendor_finish unreachable
+    return "$VENDOR_EXIT"
+  fi
+
+  if ! vendor_record_parse <<<"$record"; then
+    vendor_record_outcome unreachable "${VENDOR_INSTALLED:---}" --
+    vendor_cleanup
+    return 0
+  fi
+
+  if [[ $mode == check ]]; then
+    vendor_status_line
+    vendor_record_outcome current "${VENDOR_INSTALLED:---}" "${VENDOR_RELEASE[version]}"
+    return 0
+  fi
+
+  if [[ -n $VENDOR_INSTALLED ]] && (( $(vercmp "${VENDOR_RELEASE[version]}" "$VENDOR_INSTALLED") <= 0 )); then
+    vendor_finish current
+    return "$VENDOR_EXIT"
+  fi
+
+  if [[ -n $VENDOR_INSTALLED ]]; then
+    echo "Official ${VENDOR_LABEL} ${VENDOR_RELEASE[version]} is newer than installed ${VENDOR_INSTALLED}."
+  fi
+
+  echo "Downloading ${VENDOR_LABEL} ${VENDOR_RELEASE[version]}..."
+  if ! file=$(vendor_fetch); then
+    vendor_finish failed
+    return "$VENDOR_EXIT"
+  fi
+
+  if ! vendor_verify "$file"; then
+    actual=$(vendor_local_digest "$file")
+    vendor_finish refused "$actual"
+    return "$VENDOR_EXIT"
+  fi
+
+  if declare -F vendor_inspect >/dev/null; then
+    if ! vendor_inspect "$file" "${VENDOR_RELEASE[version]}"; then
+      vendor_finish failed
+      return "$VENDOR_EXIT"
+    fi
+  fi
+
+  if ! vendor_apply "$file" "${VENDOR_RELEASE[version]}"; then
+    vendor_finish failed
+    return "$VENDOR_EXIT"
+  fi
+
+  vendor_finish updated
+  return "$VENDOR_EXIT"
+}
