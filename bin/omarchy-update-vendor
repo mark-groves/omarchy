@@ -223,6 +223,11 @@ vendor_owned_symlink_version() {
   parent=$(dirname "$target")
   ver=$(basename "$parent")
 
+  # Drivers build root from $HOME or $XDG_DATA_HOME, so it is raw while target
+  # came back canonical. Canonicalize root too, or a symlinked home reads
+  # Omarchy's own install as foreign and never updates it.
+  root=$(readlink -m "$root")
+
   if [[ $parent == "$root/$ver" && $(basename "$target") == "$member" && -f $target && ! -L $target ]]; then
     printf 'installed\t%s\n' "$ver"
     return 0
