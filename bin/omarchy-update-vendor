@@ -169,16 +169,16 @@ vendor_swap_versioned_dir() {
 
 vendor_pacman_repackage() {
   local deb=$1 pkgname=$2 pkgver=$3
-  local work digest deb_name pkg pkgs rc
+  local work local_digest deb_name pkg pkgs rc
 
   work=$(mktemp -d)
   deb_name=${deb##*/}
-  digest=$(vendor_local_digest "$deb")
+  local_digest=$(vendor_local_digest "$deb")
 
   if ! (
     cd "$work"
     cp -f "$deb" "$deb_name"
-    vendor_pkgbuild "$pkgver" "$deb_name" "$digest"
+    vendor_pkgbuild "$pkgver" "$deb_name" "$local_digest"
     PKGDEST="$work" makepkg -f --noconfirm --nodeps
   ); then
     rm -rf "$work"

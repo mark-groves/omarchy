@@ -63,7 +63,7 @@ vendor_inspect() {
 }
 
 vendor_pkgbuild() {
-  local pkgver=$1 deb_name=$2 digest=$3
+  local pkgver=$1 deb_name=$2 local_digest=$3
   local pkg_arch
 
   case "$(uname -m)" in
@@ -98,7 +98,7 @@ conflicts=('cursor')
 source=('${deb_name}')
 noextract=('${deb_name}')
 options=('!debug' '!strip')
-sha256sums=('${digest}')
+sha256sums=('${local_digest}')
 
 package() {
   bsdtar -xf "\$srcdir/${deb_name}" -C "\$srcdir"

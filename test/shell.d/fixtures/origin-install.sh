@@ -1,5 +1,4 @@
 #!/bin/sh
-# Trimmed from today's downloads.cursor.com/origin/install.sh (stable/latest linux blocks).
 CHANNEL="${ORIGIN_INSTALL_CHANNEL:-${CO_INSTALL_CHANNEL:-stable}}"
 case "$CHANNEL" in
 latest)
