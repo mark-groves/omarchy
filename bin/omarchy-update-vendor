@@ -233,30 +233,13 @@ vendor_owned_symlink_version() {
   printf 'foreign\t%s\tnot Omarchy'\''s install\n' "${target:-$link}"
 }
 
+# Cursor Agent and Origin end a version with a build hash, which vercmp reads as
+# a pkgrel and orders, so same-day builds sort by hash. Drop the hash and let
+# vercmp order the release position that is left.
 vendor_version_newer() {
   local latest=$1 installed=$2
-  local -a new old
-  local count i left right
 
-  IFS='.-' read -ra new <<<"$latest"
-  IFS='.-' read -ra old <<<"$installed"
-
-  count=${#new[@]}
-  (( ${#old[@]} < count )) && count=${#old[@]}
-
-  for (( i = 0; i < count; i++ )); do
-    left=${new[i]}
-    right=${old[i]}
-    [[ $left == "$right" ]] && continue
-    if [[ $left =~ ^[0-9]+$ && $right =~ ^[0-9]+$ ]]; then
-      (( 10#$left > 10#$right ))
-      return
-    else
-      return 0
-    fi
-  done
-
-  (( ${#new[@]} > ${#old[@]} ))
+  [[ $latest != "$installed" ]] && (( $(vercmp "${latest%-*}" "${installed%-*}") >= 0 ))
 }
 
 vendor_status_line() {

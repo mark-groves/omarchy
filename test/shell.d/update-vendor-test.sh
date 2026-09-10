@@ -5,6 +5,7 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 require_command sha256sum
+require_command vercmp
 
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
@@ -28,6 +29,8 @@ current_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '1.0.0' 'https://down
 untrusted_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '1.2.3' 'https://evil.example/fake/1.2.3/app.tar.gz' 'pinned-url')
 rebuild_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.09.08-e8db854' 'https://downloads.cursor.com/fake/2026.09.08-e8db854/app.tar.gz' 'pinned-url')
 older_date_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.08.11-e8db854' 'https://downloads.cursor.com/fake/2026.08.11-e8db854/app.tar.gz' 'pinned-url')
+unpadded_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.9.9-abc1234' 'https://downloads.cursor.com/fake/2026.9.9-abc1234/app.tar.gz' 'pinned-url')
+digit_hash_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.09.08-0999999' 'https://downloads.cursor.com/fake/2026.09.08-0999999/app.tar.gz' 'pinned-url')
 
 cat >"$stub_bin/curl" <<'SH'
 #!/bin/bash
@@ -264,6 +267,18 @@ TEST_RECORD=$rebuild_record
 assert_exit 0 "--check same-day rebuild exits 0" --check
 assert_outcome $'fake\tstale\t2026.09.08-6caf4ff\t2026.09.08-e8db854' "--check records stale for a same-day rebuild"
 pass "--check records stale for a same-day rebuild"
+
+TEST_PROBE=$'installed\t2026.09.08-def5678'
+TEST_RECORD=$unpadded_record
+assert_exit 0 "--check unpadded date exits 0" --check
+assert_outcome $'fake\tstale\t2026.09.08-def5678\t2026.9.9-abc1234' "--check records stale for an unpadded later date"
+pass "--check records stale for an unpadded later date"
+
+TEST_PROBE=$'installed\t2026.09.08-1000000'
+TEST_RECORD=$digit_hash_record
+assert_exit 0 "--check all-digit build hash exits 0" --check
+assert_outcome $'fake\tstale\t2026.09.08-1000000\t2026.09.08-0999999' "--check records stale for an all-digit build hash"
+pass "--check records stale for an all-digit build hash"
 
 rm -f "$installed_file"
 TEST_PROBE=$'installed\t2026.09.08-6caf4ff'
