@@ -82,11 +82,13 @@ SH
 
 chmod +x "$stub_bin"/*
 
+agent_home="$test_home"
+
 run_agent() {
   : >"$curl_urls"
   : >"$outcome"
-  HOME="$test_home" \
-    XDG_DATA_HOME="$test_home/.local/share" \
+  HOME="$agent_home" \
+    XDG_DATA_HOME="$agent_home/.local/share" \
     PATH="$test_home/.local/bin:$stub_bin:$ROOT/bin:/usr/bin:/bin" \
     OMARCHY_VENDOR_OUTCOME="$outcome" \
     TEST_CURL_URLS="$curl_urls" \
@@ -128,6 +130,38 @@ assert_outcome $'cursor-agent\tupdated\t2026.08.11-e8db854\t2026.09.08-6caf4ff' 
   fail "newer agent resolve relinks cursor-agent"
 [[ ! -e $test_home/.local/bin/agent ]] || fail "agent update does not create an agent symlink"
 pass "second resolve newer applies"
+
+write_install_script 2026.09.08-e8db854
+set +e
+run_agent --check
+rc=$?
+set -e
+(( rc == 0 )) || fail "same-day rebuild --check exits 0" "$(cat "$test_tmp/err")"
+assert_outcome $'cursor-agent\tstale\t2026.09.08-6caf4ff\t2026.09.08-e8db854' "same-day rebuild --check records stale"
+set +e
+run_agent
+rc=$?
+set -e
+(( rc == 0 )) || fail "same-day rebuild exits 0" "$(cat "$test_tmp/err")"
+assert_outcome $'cursor-agent\tupdated\t2026.09.08-6caf4ff\t2026.09.08-e8db854' "same-day rebuild records updated"
+[[ -x $test_home/.local/share/cursor-agent/versions/2026.09.08-e8db854/cursor-agent ]] ||
+  fail "same-day rebuild writes the new versions dir"
+pass "a same-day rebuild with a lower commit hash is newer"
+
+home_link="$test_tmp/home-link"
+ln -sfn "$test_home" "$home_link"
+agent_home="$home_link"
+write_install_script 2026.09.09-4d5e6f7
+set +e
+run_agent
+rc=$?
+set -e
+(( rc == 0 )) || fail "symlinked HOME exits 0" "$(cat "$test_tmp/err")"
+assert_outcome $'cursor-agent\tupdated\t2026.09.08-e8db854\t2026.09.09-4d5e6f7' "symlinked HOME keeps the install owned"
+[[ -x $test_home/.local/share/cursor-agent/versions/2026.09.09-4d5e6f7/cursor-agent ]] ||
+  fail "symlinked HOME writes the new versions dir"
+agent_home="$test_home"
+pass "a symlinked HOME still resolves to Omarchy's install"
 
 rm -rf "$test_home/.local/share/cursor-agent" "$test_home/.local/bin/cursor-agent"
 mkdir -p "$test_home/.local/share/mise/shims"

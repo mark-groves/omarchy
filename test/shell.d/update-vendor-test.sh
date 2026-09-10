@@ -27,6 +27,8 @@ pinned_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '1.2.3' "$good_url" 'p
 digest_record=$(printf 'version=%s\turl=%s\tintegrity=%s\tdigest=%s' '1.2.3' "$good_url" 'digest' "$right_digest")
 current_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '1.0.0' 'https://downloads.cursor.com/fake/1.0.0/app.tar.gz' 'pinned-url')
 untrusted_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '1.2.3' 'https://evil.example/fake/1.2.3/app.tar.gz' 'pinned-url')
+rebuild_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.09.08-e8db854' 'https://downloads.cursor.com/fake/2026.09.08-e8db854/app.tar.gz' 'pinned-url')
+older_date_record=$(printf 'version=%s\turl=%s\tintegrity=%s' '2026.08.11-e8db854' 'https://downloads.cursor.com/fake/2026.08.11-e8db854/app.tar.gz' 'pinned-url')
 
 cat >"$stub_bin/curl" <<'SH'
 #!/bin/bash
@@ -257,6 +259,20 @@ TEST_RECORD=$pinned_record
 assert_exit 0 "--check current exits 0" --check
 assert_outcome $'fake\tcurrent\t1.2.3\t1.2.3' "--check records current when current"
 pass "--check records current when current"
+
+TEST_PROBE=$'installed\t2026.09.08-6caf4ff'
+TEST_RECORD=$rebuild_record
+assert_exit 0 "--check same-day rebuild exits 0" --check
+assert_outcome $'fake\tstale\t2026.09.08-6caf4ff\t2026.09.08-e8db854' "--check records stale for a same-day rebuild"
+pass "--check records stale for a same-day rebuild"
+
+rm -f "$installed_file"
+TEST_PROBE=$'installed\t2026.09.08-6caf4ff'
+TEST_RECORD=$older_date_record
+assert_exit 0 "older release date exits 0"
+[[ ! -s $apply_log ]] || fail "older release date does not apply" "$(cat "$apply_log")"
+assert_outcome $'fake\tcurrent\t2026.09.08-6caf4ff\t2026.08.11-e8db854' "older release date stays current"
+pass "an older release date never downgrades"
 
 TEST_PROBE=absent
 TEST_RECORD=$pinned_record

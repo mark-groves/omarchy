@@ -79,10 +79,12 @@ install_owned() {
   ln -sfn "$dir/origin" "$test_home/.local/bin/origin"
 }
 
+origin_home="$test_home"
+
 run_origin() {
   : >"$curl_urls"
   : >"$outcome"
-  HOME="$test_home" \
+  HOME="$origin_home" \
     XDG_CONFIG_HOME="$test_home/.config" \
     PATH="$test_home/.local/bin:$stub_bin:$ROOT/bin:/usr/bin:/bin" \
     OMARCHY_VENDOR_OUTCOME="$outcome" \
@@ -118,6 +120,18 @@ set -e
 assert_outcome $'origin\tstale\t1.0.0\t2026.09.08-22-50-39-8f6b2f8' "origin --check parses today's stable linux-x64 block"
 tarball_fetched && fail "origin --check does not fetch the tarball"
 pass "origin --check parses the stable linux-x64 block"
+
+home_link="$test_tmp/home-link"
+ln -sfn "$test_home" "$home_link"
+origin_home="$home_link"
+set +e
+run_origin --check
+rc=$?
+set -e
+(( rc == 0 )) || fail "symlinked HOME --check exits 0" "$(cat "$test_tmp/err")"
+assert_outcome $'origin\tstale\t1.0.0\t2026.09.08-22-50-39-8f6b2f8' "symlinked HOME keeps the Origin install owned"
+origin_home="$test_home"
+pass "a symlinked HOME still resolves to Omarchy's Origin install"
 
 set +e
 run_origin
