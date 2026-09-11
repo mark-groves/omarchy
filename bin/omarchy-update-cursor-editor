@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# omarchy:summary=Update the Cursor editor from Cursor's official Linux release when a newer one is available
+# omarchy:name=cursor-editor
+# omarchy:args=[--check]
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+source omarchy-update-vendor
+
+VENDOR_ID=cursor-editor
+VENDOR_LABEL="Cursor Editor"
+VENDOR_ICON=""
+VENDOR_URL_ALLOW='^https://downloads\.cursor\.com/production/[0-9a-f]{40}/linux/(x64|arm64)/deb/(amd64|arm64)/deb/cursor_[0-9][A-Za-z0-9.+-]*_(amd64|arm64)\.deb$'
+VENDOR_INTEGRITY_FLOOR=pinned-url
+
+vendor_arch() {
+  case "$(uname -m)" in
+  x86_64 | amd64) printf 'linux-x64\n' ;;
+  aarch64 | arm64) printf 'linux-arm64\n' ;;
+  *) return 1 ;;
+  esac
+}
+
+vendor_installed() {
+  local full
+  if ! full=$(pacman -Q cursor-bin 2>/dev/null); then
+    printf 'absent\n'
+    return 0
+  fi
+  full=$(awk '{ print $2 }' <<<"$full")
+  printf 'installed\t%s\n' "${full%-*}"
+}
+
+vendor_resolve() {
+  local arch=$1
+  local response version deb_url commit_sha
+
+  response=$(curl -fsSL --retry 3 --retry-all-errors --max-time 20 \
+    "https://www.cursor.com/api/download?platform=${arch}&releaseTrack=stable") || return 1
+
+  version=$(jq -er '.version' <<<"$response") || return 1
+  deb_url=$(jq -er '.debUrl' <<<"$response") || return 1
+  commit_sha=$(jq -er '.commitSha' <<<"$response") || return 1
+  [[ -n $version && -n $deb_url && -n $commit_sha ]] || return 1
+  [[ $deb_url == *"$commit_sha"* ]] || return 1
+
+  printf 'version=%s\turl=%s\tintegrity=pinned-url\n' "$version" "$deb_url"
+}
+
+vendor_inspect() {
+  local file=$1 version=$2
+  local archive control="" control_ver
+
+  for archive in control.tar.gz control.tar.xz control.tar.zst; do
+    control=$(bsdtar -xOf "$file" "$archive" 2>/dev/null | bsdtar -xO ./control 2>/dev/null || true)
+    [[ -n $control ]] && break
+  done
+
+  control_ver=$(sed -n 's/^Version:[[:space:]]*//p' <<<"$control" | head -1)
+  [[ -n $control_ver ]] || return 1
+  [[ $control_ver == "$version" || $control_ver == "$version"-* ]]
+}
+
+vendor_pkgbuild() {
+  local pkgver=$1 deb_name=$2 local_digest=$3
+  local pkg_arch
+
+  case "$(uname -m)" in
+  x86_64) pkg_arch=x86_64 ;;
+  aarch64) pkg_arch=aarch64 ;;
+  *) pkg_arch=$(uname -m) ;;
+  esac
+
+  cat >PKGBUILD <<EOF
+pkgname=cursor-bin
+pkgver=${pkgver}
+pkgrel=1
+pkgdesc="Cursor editor"
+arch=('${pkg_arch}')
+url="https://cursor.com"
+license=('custom')
+depends=(
+  at-spi2-core
+  gtk3
+  hicolor-icon-theme
+  libnotify
+  libsecret
+  libxss
+  libxtst
+  nss
+  util-linux-libs
+  xdg-utils
+)
+optdepends=('libappindicator-gtk3: tray support')
+provides=('cursor')
+conflicts=('cursor')
+source=('${deb_name}')
+noextract=('${deb_name}')
+options=('!debug' '!strip')
+sha256sums=('${local_digest}')
+
+package() {
+  bsdtar -xf "\$srcdir/${deb_name}" -C "\$srcdir"
+  bsdtar -xf "\$srcdir"/data.tar.* -C "\$pkgdir"
+
+  if [[ ! -x \$pkgdir/usr/share/cursor/cursor && ! -x \$pkgdir/opt/Cursor/cursor && ! -x \$pkgdir/opt/cursor-bin/cursor && ! -x \$pkgdir/opt/cursor/cursor ]]; then
+    echo "Official Cursor package did not contain the expected cursor binary" >&2
+    return 1
+  fi
+
+  install -dm755 "\$pkgdir/usr/bin"
+  cat >"\$pkgdir/usr/bin/cursor" <<'WRAP'
+#!/bin/bash
+
+XDG_CONFIG_HOME=\${XDG_CONFIG_HOME:-~/.config}
+
+export ELECTRON_OZONE_PLATFORM_HINT="\${ELECTRON_OZONE_PLATFORM_HINT:-wayland}"
+export NIXOS_OZONE_WL="\${NIXOS_OZONE_WL:-1}"
+
+if [[ -f \$XDG_CONFIG_HOME/cursor-flags.conf ]]; then
+  CURSOR_USER_FLAGS="\$(sed 's/#.*//' "\$XDG_CONFIG_HOME/cursor-flags.conf" | tr '\\n' ' ')"
+fi
+
+if [[ -x /usr/share/cursor/cursor ]]; then
+  CURSOR_BIN=/usr/share/cursor/cursor
+elif [[ -x /opt/Cursor/cursor ]]; then
+  CURSOR_BIN=/opt/Cursor/cursor
+elif [[ -x /opt/cursor-bin/cursor ]]; then
+  CURSOR_BIN=/opt/cursor-bin/cursor
+else
+  CURSOR_BIN=/opt/cursor/cursor
+fi
+
+exec "\$CURSOR_BIN" \\
+  --ozone-platform=wayland \\
+  --enable-features=UseOzonePlatform,WaylandWindowDecorations \\
+  --enable-wayland-ime \\
+  "\$@" \$CURSOR_USER_FLAGS
+WRAP
+  chmod 755 "\$pkgdir/usr/bin/cursor"
+
+  local desktop
+  for desktop in "\$pkgdir"/usr/share/applications/*.desktop; do
+    [[ -f \$desktop ]] || continue
+    sed -i 's|^Exec=.*|Exec=cursor %U|' "\$desktop"
+  done
+
+  if [[ -f \$pkgdir/usr/share/cursor/chrome-sandbox ]]; then
+    chmod 4755 "\$pkgdir/usr/share/cursor/chrome-sandbox"
+  fi
+  if [[ -f \$pkgdir/opt/Cursor/chrome-sandbox ]]; then
+    chmod 4755 "\$pkgdir/opt/Cursor/chrome-sandbox"
+  fi
+  if [[ -f \$pkgdir/opt/cursor-bin/chrome-sandbox ]]; then
+    chmod 4755 "\$pkgdir/opt/cursor-bin/chrome-sandbox"
+  fi
+  if [[ -f \$pkgdir/opt/cursor/chrome-sandbox ]]; then
+    chmod 4755 "\$pkgdir/opt/cursor/chrome-sandbox"
+  fi
+}
+EOF
+}
+
+vendor_apply() {
+  vendor_pacman_repackage "$1" cursor-bin "$2"
+}
+
+vendor_running() {
+  pgrep -f '/usr/share/cursor/cursor|/opt/Cursor/cursor|/opt/cursor-bin/cursor|/opt/cursor/cursor' >/dev/null 2>&1
+}
+
+omarchy_update_vendor "$@"

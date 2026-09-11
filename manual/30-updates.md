@@ -4,7 +4,20 @@ Omarchy and your packages are kept up to date via _Update > Omarchy_ in the Omar
 
 Omarchy itself is installed as regular pacman packages from the [Omarchy Package Repository](https://github.com/omacom-io/omarchy-pkgs), so an update installs [the latest Omarchy release](https://github.com/basecamp/omarchy/releases), runs any pending migrations to get your system in sync with the latest, and updates all system packages from the [Omarchy Arch Mirror](https://github.com/omacom-io/omarchy-mirror) and [AUR](https://aur.archlinux.org/) (if you have installed any AUR packages). If Grok Bot is installed, that same update also checks Cursor's official Linux releases and installs a newer build when the Omarchy package channel is behind.
 
+If any Cursor product is installed the Omarchy way, that same update also checks its official feed: the editor (`omarchy update cursor-editor`), the Agent CLI (`omarchy update cursor-agent`), and the Origin CLI (`omarchy update origin`). `omarchy update cursor` covers all three. Each route skips when that product is not installed, so they are safe to run on any machine. Add `--check` to see what would happen without downloading.
+
 When new releases are made, a circle arrow icon will appear to the right of your clock. Click it and the update process will start.
+
+You can also update Cursor products on demand:
+
+```
+omarchy update cursor           # every installed Cursor product
+omarchy update cursor-editor    # the desktop editor (pacman cursor-bin)
+omarchy update cursor-agent     # the Agent CLI (~/.local/bin/cursor-agent)
+omarchy update origin           # the Origin CLI (~/.local/bin/origin)
+```
+
+Each of those skips when the product is not installed. Add `--check` to resolve without downloading.
 
 ![update-available](images/update-available.webp)
 
