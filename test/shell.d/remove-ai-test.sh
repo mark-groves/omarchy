@@ -16,7 +16,8 @@ SCRIPT
 chmod +x "$tmp_dir/bin/omarchy-pkg-drop"
 
 # omarchy-remove-ai-claude quits the running app before deleting its state;
-# a real pkill or pidwait here would take the developer's own Claude with it.
+# a real pkill here would take the developer's own Claude with it, and a
+# real pidwait would wait for that process.
 cat >"$tmp_dir/bin/pkill" <<'SCRIPT'
 #!/bin/bash
 printf 'pkill:%s\n' "$*" >>"$TEST_LOG"
@@ -87,9 +88,6 @@ pass "ChatGPT removal keeps the Codex CLI's runtime cache"
 [[ -d $HOME/.codex ]] || fail "ChatGPT removal keeps the Codex CLI's config"
 pass "ChatGPT removal keeps the Codex CLI's config"
 
-# The Claude Code CLI ships in its own package and keeps its state in
-# ~/.claude, ~/.claude.json, and ~/.cache/claude-cli-nodejs, so removing the
-# desktop app must not take it.
 fresh_home
 mkdir -p "$HOME/.config/Claude" "$HOME/.cache/Claude" "$HOME/.cache/claude-cli-nodejs" "$HOME/.claude"
 touch "$HOME/.claude.json"
@@ -108,8 +106,6 @@ pass "Claude removal keeps the Claude Code CLI's state"
 grep -qx 'pkill:-x claude-desktop' "$TEST_LOG" || fail "Claude removal quits the running app before deleting its state"
 pass "Claude removal quits the running app before deleting its state"
 
-# Electron keeps writing ~/.config/Claude after SIGTERM until the process
-# actually exits. The remover has to wait, or the directory comes back.
 fresh_home
 mkdir -p "$HOME/.config/Claude" "$HOME/.cache/Claude"
 export FAKE_CLAUDE_PID_FILE="$tmp_dir/fake-claude.pid"
