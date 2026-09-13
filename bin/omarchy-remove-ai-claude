@@ -9,6 +9,12 @@ set -euo pipefail
 # The app rewrites ~/.config/Claude for as long as it runs, so a removal that
 # leaves it running deletes the directory and watches it come straight back.
 pkill -x claude-desktop || true
+wait_status=0
+timeout 5 pidwait -x claude-desktop || wait_status=$?
+if (( wait_status == 124 )); then
+  pkill -KILL -x claude-desktop || true
+  timeout 2 pidwait -x claude-desktop || true
+fi
 
 omarchy-pkg-drop claude-desktop
 

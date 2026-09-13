@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
+trap '[[ -f $tmp_dir/fake-claude.pid ]] && kill -9 $(<"$tmp_dir/fake-claude.pid") 2>/dev/null || true; rm -rf "$tmp_dir"' EXIT
 
 mkdir -p "$tmp_dir/bin"
 
@@ -16,12 +16,36 @@ SCRIPT
 chmod +x "$tmp_dir/bin/omarchy-pkg-drop"
 
 # omarchy-remove-ai-claude quits the running app before deleting its state;
-# a real pkill here would take the developer's own Claude with it.
+# a real pkill or pidwait here would take the developer's own Claude with it.
 cat >"$tmp_dir/bin/pkill" <<'SCRIPT'
 #!/bin/bash
 printf 'pkill:%s\n' "$*" >>"$TEST_LOG"
+if [[ -n ${FAKE_CLAUDE_PID_FILE:-} && -f $FAKE_CLAUDE_PID_FILE ]]; then
+  pid=$(<"$FAKE_CLAUDE_PID_FILE")
+  if [[ -n $pid ]]; then
+    if [[ $* == *-9* || $* == *KILL* ]]; then
+      kill -9 "$pid" 2>/dev/null || true
+    else
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  fi
+fi
 SCRIPT
 chmod +x "$tmp_dir/bin/pkill"
+
+cat >"$tmp_dir/bin/pidwait" <<'SCRIPT'
+#!/bin/bash
+printf 'pidwait:%s\n' "$*" >>"$TEST_LOG"
+if [[ -n ${FAKE_CLAUDE_PID_FILE:-} && -f $FAKE_CLAUDE_PID_FILE ]]; then
+  pid=$(<"$FAKE_CLAUDE_PID_FILE")
+  if [[ -n $pid ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 0.05
+    done
+  fi
+fi
+SCRIPT
+chmod +x "$tmp_dir/bin/pidwait"
 
 # omarchy-remove-ai-perplexity asks through gum whether the user's data goes
 # too. The stub answers "no" unless a test says otherwise and logs the call: a
@@ -83,6 +107,41 @@ pass "Claude removal keeps the Claude Code CLI's state"
 
 grep -qx 'pkill:-x claude-desktop' "$TEST_LOG" || fail "Claude removal quits the running app before deleting its state"
 pass "Claude removal quits the running app before deleting its state"
+
+# Electron keeps writing ~/.config/Claude after SIGTERM until the process
+# actually exits. The remover has to wait, or the directory comes back.
+fresh_home
+mkdir -p "$HOME/.config/Claude" "$HOME/.cache/Claude"
+export FAKE_CLAUDE_PID_FILE="$tmp_dir/fake-claude.pid"
+(
+  end=0
+  trap 'end=1' TERM
+  while true; do
+    mkdir -p "$HOME/.config/Claude"
+    printf rewritten >"$HOME/.config/Claude/still-here"
+    if (( end )); then
+      sleep 0.3
+      mkdir -p "$HOME/.config/Claude"
+      printf rewritten >"$HOME/.config/Claude/still-here"
+      exit 0
+    fi
+    sleep 0.05
+  done
+) &
+echo $! >"$FAKE_CLAUDE_PID_FILE"
+
+"$ROOT/bin/omarchy-remove-ai-claude" >/dev/null
+
+sleep 0.5
+[[ ! -e $HOME/.config/Claude ]] || fail "Claude removal waits for the app to exit before deleting its config"
+pass "Claude removal waits for the app to exit before deleting its config"
+
+fake_pid=$(<"$FAKE_CLAUDE_PID_FILE")
+if kill -0 "$fake_pid" 2>/dev/null; then
+  kill -9 "$fake_pid" 2>/dev/null || true
+  fail "Claude removal leaves the desktop process running"
+fi
+unset FAKE_CLAUDE_PID_FILE
 
 # LM Studio's models follow a relocatable home, named only by the pointer file.
 fresh_home
