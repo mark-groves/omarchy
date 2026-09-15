@@ -34,6 +34,9 @@ allowed = {
   # they are written. Both drop configuration into another project's tree rather
   # than Omarchy's, which is why neither is a candidate for omarchy-settings.
   "/usr/share/chromium/extensions",
+  # Claude's extension is registered only when the user selects Claude.
+  "/usr/share/google-chrome/extensions",
+  "/usr/share/microsoft-edge/extensions",
   "/usr/lib/firefox/distribution",
   # Static content that belongs in omarchy-settings. It cannot move there in the
   # same release that first ships omarchy-update-system-pkgs-when-conflicted: the
