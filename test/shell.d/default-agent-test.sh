@@ -22,7 +22,17 @@ menu_log="$test_tmp/menu"
 cursor_install_log="$test_tmp/cursor-install"
 hermes_install_log="$test_tmp/hermes-install"
 muse_login_log="$test_tmp/muse-login"
+claude_ext_log="$test_tmp/claude-ext"
 mkdir -p "$mock_bin" "$test_home"
+
+cat >"$mock_bin/omarchy-install-chromium-claude" <<'SH'
+#!/bin/bash
+echo claude-extension >>"$OMARCHY_TEST_CLAUDE_EXT_LOG"
+if [[ ${OMARCHY_TEST_EXTENSION_FAIL:-false} == "true" ]]; then
+  echo "Extension installation failed" >&2
+  exit 1
+fi
+SH
 
 cat >"$mock_bin/omarchy-notification-send" <<'SH'
 #!/bin/bash
@@ -137,6 +147,7 @@ export OMARCHY_TEST_AGENT_MENU_LOG="$menu_log"
 export OMARCHY_TEST_CURSOR_INSTALL_LOG="$cursor_install_log"
 export OMARCHY_TEST_HERMES_INSTALL_LOG="$hermes_install_log"
 export OMARCHY_TEST_MUSE_LOGIN_LOG="$muse_login_log"
+export OMARCHY_TEST_CLAUDE_EXT_LOG="$claude_ext_log"
 export OMARCHY_PATH="$ROOT"
 
 grok_package="npm:@xai-official/grok"
@@ -470,6 +481,7 @@ for selection in "${!expected_agents[@]}"; do
   : >"$mise_log"
   : >"$cursor_install_log"
   : >"$hermes_install_log"
+  : >"$claude_ext_log"
   if [[ $expected == "cursor-agent" ]]; then
     OMARCHY_TEST_CURSOR_INSTALLED=true omarchy-default-agent "$selection"
     [[ ! -s $mise_log ]] || fail "default agent does not install Cursor through mise"
@@ -494,6 +506,12 @@ for selection in "${!expected_agents[@]}"; do
 
   [[ $(omarchy-default-agent) == $expected ]] || fail "default agent canonicalizes $selection"
 
+  if [[ $expected == "claude" ]]; then
+    grep -qx claude-extension "$claude_ext_log" || fail "Claude selection installs the browser extension"
+  else
+    [[ ! -s $claude_ext_log ]] || fail "other agents do not install the Claude extension"
+  fi
+
   mapfile -d '' -t agent_open_args <"$agent_open_log"
   [[ ${#agent_open_args[@]} == 1 && ${agent_open_args[0]} == "omarchy-agent" ]] ||
     fail "default agent opens $selection after selecting it"
@@ -503,6 +521,14 @@ pass "default agent selects and opens every supported provider and alias"
   fail "default agent stores its selection in Omarchy user config"
 pass "default agent stores its selection in Omarchy user config"
 
+OMARCHY_TEST_AGENT_INSTALLED=true omarchy-default-agent pi
+: >"$agent_open_log"
+OMARCHY_TEST_AGENT_INSTALLED=true OMARCHY_TEST_EXTENSION_FAIL=true omarchy-default-agent claude >"$test_tmp/extension-failure" 2>&1
+[[ $(omarchy-default-agent) == "claude" ]] || fail "extension installation failure still selects Claude"
+mapfile -d '' -t agent_open_args <"$agent_open_log"
+[[ ${agent_open_args[*]} == "omarchy-agent" ]] || fail "extension installation failure still launches Claude"
+[[ ! -s $test_tmp/extension-failure ]] || fail "extension installation failure is silent"
+pass "extension installation failure silently continues selecting and launching Claude"
 OMARCHY_TEST_AGENT_INSTALLED=true omarchy-default-agent pi
 : >"$notification_history"
 : >"$agent_open_log"
