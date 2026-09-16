@@ -52,6 +52,9 @@ php)
 laravel)
   echo -e "Removing Laravel...\n"
   mise x php -- composer global remove laravel/installer 2>/dev/null || true
+
+  # Composer cannot run once PHP is gone, so drop the installer binary directly (new and old bin-dir)
+  rm -f "$HOME/.local/bin/laravel" "$HOME/.config/composer/vendor/bin/laravel"
   ;;
 symfony)
   echo -e "Removing Symfony CLI...\n"
