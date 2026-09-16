@@ -39,6 +39,9 @@
       ],
       "right": [
         {
+          "id": "omacom.elsewhen"
+        },
+        {
           "id": "omarchy.tray"
         },
         {
