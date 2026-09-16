@@ -15,7 +15,6 @@ install_php() {
   mise tool-alias set php github:nunomaduro/static-php-builds
   mise use --global php@latest
 
-  # Composer's global binaries go to ~/.local/bin, which is already on PATH
   mise x php -- composer global config bin-dir "$HOME/.local/bin"
 }
 
