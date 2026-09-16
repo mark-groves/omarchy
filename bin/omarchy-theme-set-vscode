@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Sync Omarchy theme to VS Code, VSCodium, and Cursor
+# omarchy:summary=Sync Omarchy theme to VS Code and VSCodium
 # omarchy:hidden=true
 
 VS_CODE_THEME_DESCRIPTOR="$HOME/.local/state/omarchy/current/theme/vscode.json"
@@ -150,4 +150,5 @@ set_theme() {
 ! omarchy-toggle-enabled skip-vscode-theme-changes && set_theme "code" "$HOME/.config/Code/User/settings.json" "$HOME/.vscode/extensions"
 ! omarchy-toggle-enabled skip-vscode-insiders-theme-changes && set_theme "code-insiders" "$HOME/.config/Code - Insiders/User/settings.json" "$HOME/.vscode-insiders/extensions"
 ! omarchy-toggle-enabled skip-codium-theme-changes && set_theme "codium" "$HOME/.config/VSCodium/User/settings.json" "$HOME/.vscode-oss/extensions"
-! omarchy-toggle-enabled skip-cursor-theme-changes && set_theme "/usr/bin/cursor" "$HOME/.config/Cursor/User/settings.json" "$HOME/.cursor/extensions"
+# This fork does not theme Cursor. /usr/bin/cursor is the GUI launcher, so
+# calling set_theme would open extra editor windows on every vscode.json theme.
