@@ -106,9 +106,19 @@ pass "validate accepts polkit-chrome with a polkitFace slot"
 
 dir=$(write_plugin "polkit-chrome-empty" '["polkit-chrome"]' '{"service": "Entry.qml"}')
 output=$(validate "$dir") && fail "validate refuses polkit-chrome without a polkit slot" "$output"
-grep -qF "kind 'polkit-chrome' requires an 'entryPoints.polkitFace'" <<<"$output" \
+grep -qF "kind 'polkit-chrome' requires an 'entryPoints.polkitFace' or 'entryPoints.polkitFingerprint'" <<<"$output" \
   || fail "validate names the polkit slot polkit-chrome is missing" "$output"
 pass "validate refuses polkit-chrome without a polkit slot"
+
+dir=$(write_plugin "polkit-chrome-typo" '["polkit-chrome"]' '{"polkitFcae": "Face.qml"}')
+output=$(validate "$dir") && fail "validate refuses a typo'd polkit slot key" "$output"
+grep -qF "entryPoints.polkitFace" <<<"$output" \
+  || fail "validate names the real face slot when the key is mistyped" "$output"
+pass "validate refuses a typo'd polkit slot key"
+
+dir=$(write_plugin "polkit-fingerprint" '["polkit-chrome"]' '{"polkitFingerprint": "Print.qml"}')
+validate "$dir" >/dev/null || fail "validate accepts polkit-chrome with a polkitFingerprint slot"
+pass "validate accepts polkit-chrome with a polkitFingerprint slot"
 
 # The check reports the manifest, so a path that does not resolve still gets the
 # more specific complaint it had before.

@@ -78,6 +78,27 @@ function chromeSlotKeyFor(kind) {
   return cardSpec(kind).slot || ""
 }
 
+function chromeSlotKeys() {
+  var keys = []
+  var kind
+  for (kind in CARD) {
+    var slot = CARD[kind].slot
+    if (slot && keys.indexOf(slot) === -1) keys.push(slot)
+  }
+  keys.sort()
+  return keys
+}
+
+function chromeKindFor(steps, laptopClosed) {
+  return cardModeFor(steps, true, laptopClosed).kind
+}
+
+function failedUrlsFor(source) {
+  if (!source || !source.failedUrls) return null
+  if ((source.failedRevision || 0) !== (source.revision || 0)) return null
+  return source.failedUrls
+}
+
 function resolveChromeSlot(kind, source) {
   var key = chromeSlotKeyFor(kind)
   if (!key) return null
@@ -85,6 +106,7 @@ function resolveChromeSlot(kind, source) {
   var registry = source.registry
   var plugins = registry.installedPlugins
   if (!plugins) return null
+  var failedUrls = failedUrlsFor(source)
 
   var eligible = []
   var id
@@ -97,7 +119,7 @@ function resolveChromeSlot(kind, source) {
     if (typeof registry.isEnabled !== "function" || !registry.isEnabled(id)) continue
     var url = typeof registry.entryPointUrl === "function" ? registry.entryPointUrl(manifest, key) : ""
     if (!url) continue
-    if (source.failedUrls && source.failedUrls[url]) continue
+    if (failedUrls && failedUrls[url]) continue
     eligible.push({ id: id, url: url })
   }
   if (!eligible.length) return null
@@ -123,14 +145,19 @@ function resolveChromeSlot(kind, source) {
 
 function cardPresentationFor(steps, waitingOnPam, laptopClosed, source) {
   var kind = cardModeFor(steps, waitingOnPam, laptopClosed).kind
+  var chromeKind = chromeKindFor(steps, laptopClosed)
   var spec = cardSpec(kind)
-  var slot = resolveChromeSlot(kind, source)
+  var chromeSpec = cardSpec(chromeKind)
+  var slot = resolveChromeSlot(chromeKind, source)
   return {
     kind: kind,
+    chromeKind: chromeKind,
     glyph: spec.glyph,
     hint: spec.hint,
-    square: !!spec.square,
-    extraSpace: slot ? spec.extraSpace : 0,
+    chromeGlyph: chromeSpec.glyph,
+    chromeHint: chromeSpec.hint,
+    square: slot ? !!chromeSpec.square : !!spec.square,
+    extraSpace: slot ? chromeSpec.extraSpace : 0,
     slot: slot
   }
 }
@@ -138,7 +165,8 @@ function cardPresentationFor(steps, waitingOnPam, laptopClosed, source) {
 function chromeSlotDiagnostic(presentation) {
   if (!presentation || !presentation.slot) return ""
   var slot = presentation.slot
-  var line = "polkit chrome: " + presentation.kind + " painted by " + slot.pluginId
+  var painted = presentation.chromeKind || presentation.kind
+  var line = "polkit chrome: " + painted + " painted by " + slot.pluginId
   if (slot.shadowed && slot.shadowed.length) line += "; ignoring " + slot.shadowed.join(", ")
   return line
 }
@@ -164,6 +192,9 @@ if (typeof module !== "undefined") {
     pamStepsFromConfig: pamStepsFromConfig,
     cardModeFor: cardModeFor,
     chromeSlotKeyFor: chromeSlotKeyFor,
+    chromeSlotKeys: chromeSlotKeys,
+    chromeKindFor: chromeKindFor,
+    failedUrlsFor: failedUrlsFor,
     resolveChromeSlot: resolveChromeSlot,
     cardPresentationFor: cardPresentationFor,
     chromeSlotDiagnostic: chromeSlotDiagnostic,

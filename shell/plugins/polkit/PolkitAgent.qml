@@ -38,35 +38,31 @@ Item {
 
   property var pluginRegistry: null
   property var failedSlotUrls: ({})
-  property string lastFilledSlotUrl: ""
+  property int failedSlotRevision: 0
   property string lastChromeLog: ""
 
   readonly property bool dialogVisible: polkitAgent.isActive || closing
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
   readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
+  readonly property int registryRevision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0
   readonly property var slotSource: ({
     registry: root.pluginRegistry,
-    revision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0,
-    failedUrls: root.failedSlotUrls
+    revision: root.registryRevision,
+    failedUrls: root.failedSlotUrls,
+    failedRevision: root.failedSlotRevision
   })
   readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
   readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
-  readonly property string slotUrl: {
-    if (presentation && presentation.slot && presentation.slot.url) return presentation.slot.url
-    if (root.errorFlash && root.lastFilledSlotUrl && !(root.failedSlotUrls && root.failedSlotUrls[root.lastFilledSlotUrl]))
-      return root.lastFilledSlotUrl
-    return ""
-  }
+  readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
   readonly property bool slotPainting: slotLoader.status === Loader.Ready && root.cardKind !== "password"
   readonly property int slotExtra: Style.space(presentation && presentation.extraSpace ? presentation.extraSpace : 0)
   readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
 
   readonly property QtObject chromeContext: QtObject {
-    readonly property string kind: root.presentation && root.presentation.kind ? root.presentation.kind : ""
     readonly property bool active: root.slotPainting
-    readonly property string glyph: root.presentation && root.presentation.glyph ? root.presentation.glyph : ""
-    readonly property string hint: root.presentation && root.presentation.hint ? root.presentation.hint : ""
+    readonly property string glyph: root.presentation && root.presentation.chromeGlyph ? root.presentation.chromeGlyph : ""
+    readonly property string hint: root.presentation && root.presentation.chromeHint ? root.presentation.chromeHint : ""
     readonly property color accent: root.accent
     readonly property color foreground: root.foreground
     readonly property color errorColor: Color.polkit.textError
@@ -75,6 +71,12 @@ Item {
     readonly property int hintFontSize: Style.font.bodySmall
     readonly property real lineWidth: Math.max(1, Style.space(2))
     readonly property real gap: Style.space(10)
+  }
+
+  onRegistryRevisionChanged: {
+    if (failedSlotRevision === registryRevision) return
+    failedSlotUrls = ({})
+    failedSlotRevision = registryRevision
   }
 
   function authorizationLabel(message) {
@@ -89,13 +91,11 @@ Item {
     for (existing in root.failedSlotUrls) next[existing] = root.failedSlotUrls[existing]
     next[key] = true
     root.failedSlotUrls = next
-    if (root.lastFilledSlotUrl === key) root.lastFilledSlotUrl = ""
+    root.failedSlotRevision = root.registryRevision
     console.warn("polkit chrome failed to load, keeping first-party card:", key)
   }
 
   onPresentationChanged: {
-    if (presentation && presentation.slot && presentation.slot.url)
-      lastFilledSlotUrl = presentation.slot.url
     var line = PolkitModel.chromeSlotDiagnostic(presentation)
     if (!line || !presentation || !presentation.slot) return
     var key = presentation.slot.pluginId + "@" + presentation.slot.revision
@@ -122,7 +122,6 @@ Item {
     errorFlash = false
     submitted = false
     passwordInput.text = ""
-    lastFilledSlotUrl = ""
   }
 
   function syncFromFlow() {
@@ -324,9 +323,11 @@ Item {
         height: parent.height - card.contentTopInset - card.contentBottomInset
         source: root.slotUrl
         asynchronous: true
+        enabled: false
+        focus: false
+        clip: true
         opacity: root.slotPainting ? 1 : 0
         visible: opacity > 0
-        enabled: root.slotPainting
 
         Behavior on opacity {
           NumberAnimation { duration: 160 }

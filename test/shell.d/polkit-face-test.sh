@@ -106,7 +106,10 @@ assert(!polkit.cardIsSquare('password'), 'password card is wide')
 assert(polkit.cardIsSquare('fingerprint'), 'fingerprint card stays square')
 assertEqual(polkit.chromeSlotKeyFor('password'), '', 'password card is not replaceable')
 assertEqual(polkit.chromeSlotKeyFor('face'), 'polkitFace', 'face card loads the polkitFace slot')
+assertDeepEqual(polkit.chromeSlotKeys(), ['polkitFace', 'polkitFingerprint'], 'validate and discovery share the card slot keys')
 assertEqual(polkit.CHROME_KIND, 'polkit-chrome', 'chrome plugins declare the unrecognized kind')
+assertEqual(polkit.chromeKindFor(polkit.pamStepsFromConfig(faceOnly), false), 'face', 'chrome kind follows the configured biometric')
+assertEqual(polkit.chromeKindFor(polkit.pamStepsFromConfig(faceOnly), true), 'password', 'closed lid has no chrome kind')
 
 function fakeRegistry(plugins, enabled) {
   return {
@@ -117,8 +120,14 @@ function fakeRegistry(plugins, enabled) {
   }
 }
 
-function source(plugins, enabled, failed) {
-  return { registry: fakeRegistry(plugins, enabled), revision: 1, failedUrls: failed || {} }
+function source(plugins, enabled, failed, revision) {
+  const rev = revision === undefined ? 1 : revision
+  return {
+    registry: fakeRegistry(plugins, enabled),
+    revision: rev,
+    failedUrls: failed || {},
+    failedRevision: failed ? rev : 0
+  }
 }
 
 const facePlugin = {
@@ -142,10 +151,20 @@ const fingerprintSteps = polkit.pamStepsFromConfig(fingerprintIsland)
 
 const filled = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, ['markgroves.polkit-face']))
 assertEqual(filled.kind, 'face', 'open lid waiting on face still picks the face card')
+assertEqual(filled.chromeKind, 'face', 'chrome kind stays on the configured face step')
 assertEqual(filled.slot.pluginId, 'markgroves.polkit-face', 'enabled chrome plugin fills the face slot')
 assertEqual(filled.slot.url, 'file:///plugins/markgroves.polkit-face/PolkitFaceCard.qml', 'slot url stays inside the plugin dir')
 assertEqual(filled.extraSpace, 28, 'filled face slot adds the face extra space')
 assertEqual(filled.hint, 'Look at the camera', 'first-party face hint stays when the slot paints')
+assertEqual(filled.chromeHint, 'Look at the camera', 'the loaded item keeps the face hint')
+
+const duringError = polkit.cardPresentationFor(faceSteps, false, false, source(plugins, ['markgroves.polkit-face']))
+assertEqual(duringError.kind, 'password', 'a miss still shows the password card')
+assertEqual(duringError.chromeKind, 'face', 'chrome kind does not follow waitingOnPam')
+assertEqual(duringError.slot.pluginId, 'markgroves.polkit-face', 'the face slot stays resolved through the error flash')
+assertEqual(duringError.extraSpace, 28, 'geometry does not collapse while the slot stays loaded')
+assertEqual(duringError.hint, 'Enter password', 'the password row keeps its own hint')
+assertEqual(duringError.chromeHint, 'Look at the camera', 'the hidden face item keeps the face hint')
 
 const disabled = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, []))
 assertEqual(disabled.slot, null, 'installed but disabled chrome is an empty slot')
@@ -161,6 +180,15 @@ const failedUrl = 'file:///plugins/markgroves.polkit-face/PolkitFaceCard.qml'
 const broken = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, ['markgroves.polkit-face'], { [failedUrl]: true }))
 assertEqual(broken.slot, null, 'a failed Loader url is an empty slot')
 assertEqual(broken.extraSpace, 0, 'a failed Loader url collapses extra space')
+
+const retried = polkit.cardPresentationFor(
+  faceSteps,
+  true,
+  false,
+  Object.assign(source(plugins, ['markgroves.polkit-face'], { [failedUrl]: true }), { revision: 2, failedRevision: 1 })
+)
+assertEqual(retried.slot.pluginId, 'markgroves.polkit-face', 'a registry rescan retries a previously failed slot')
+assertEqual(polkit.failedUrlsFor({ failedUrls: { [failedUrl]: true }, failedRevision: 1, revision: 2 }), null, 'stale failed urls do not apply after a rescan')
 
 const firstParty = polkit.cardPresentationFor(faceSteps, true, false, source({
   'omarchy.polkit': { ...facePlugin, __isFirstParty: true }
@@ -239,6 +267,14 @@ assert(
 assert(
   /item\.chrome = root\.chromeContext/.test(agentQml) && !/item\.flow/.test(agentQml),
   'polkit agent hands the loaded item chrome and never flow'
+)
+assert(
+  /enabled:\s*false/.test(agentQml) && /focus:\s*false/.test(agentQml) && /clip:\s*true/.test(agentQml),
+  'slot Loader cannot take focus or expand the card'
+)
+assert(
+  !/readonly property string kind:/.test(agentQml),
+  'chrome context does not re-export card kind'
 )
 assert(
   !fs.existsSync(path.join(root, 'shell/plugins/polkit/FaceScanRing.qml')),

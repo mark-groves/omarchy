@@ -17,7 +17,7 @@ First-party `omarchy.polkit` owns PAM detection, the exclusive overlay, the pass
 
 The slot key is taken from the first-party card table: `polkitFace` for face, `polkitFingerprint` for fingerprint. `password` has an empty key and cannot be replaced. Extra `entryPoints` keys are allowed on third-party manifests and forbidden on first-party ones.
 
-Discovery scans enabled third-party manifests for the kind plus the card's key. The lowest plugin id wins; other eligible ids are ignored for that session. First-party manifests, disabled plugins, missing files, and a `Loader.Error` are the same empty slot.
+Discovery scans enabled third-party manifests for the kind plus the card's key. The lowest plugin id wins; other eligible ids are ignored for that session. First-party manifests, disabled plugins, missing files, and a `Loader.Error` are the same empty slot. A `Loader.Error` is remembered only for the current `registryRevision`; a rescan retries. The slot follows the configured biometric, so a miss that flips the live card to password does not unload the item.
 
 ## What the loaded item receives
 
@@ -25,7 +25,6 @@ The host sets `chrome` to a `QtObject` after load. Properties are value types an
 
 | Property | Type | Meaning |
 | --- | --- | --- |
-| `kind` | string | `"face"` or `"fingerprint"` |
 | `active` | bool | animate only while the slot is shown |
 | `glyph` | string | host-owned codepoint |
 | `hint` | string | host-owned wording |
