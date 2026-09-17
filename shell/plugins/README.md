@@ -94,6 +94,8 @@ Quickshell's native `Quickshell.Services.Polkit.PolkitAgent` backend and
 runs inside the long-lived `omarchy-shell` process, replacing the old
 `polkit-gnome-authentication-agent-1` autostart.
 
+The password field and PAM detection stay first-party. Unique face chrome loads from an enabled third-party `polkit-chrome` plugin; without one, the card shows the first-party face glyph and hint at password size. See [`docs/polkit-chrome-slot.md`](../../docs/polkit-chrome-slot.md).
+
 ## Omarchy menu
 
 Quickshell-powered Omarchy command menu.

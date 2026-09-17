@@ -8,10 +8,12 @@ var CHROME_BY_MODULE = {
   "pam_fprintd.so": { method: "fingerprint", lidGated: true }
 }
 
+var CHROME_KIND = "polkit-chrome"
+
 var CARD = {
-  password: { glyph: "\uf023", hint: "Enter password", square: false },
-  face: { glyph: "\uDB80\uDE08", hint: "Look at the camera", square: false },
-  fingerprint: { glyph: "\uDB80\uDE37", hint: "", square: true }
+  password: { glyph: "\uf023", hint: "Enter password", square: false, slot: "", extraSpace: 0 },
+  face: { glyph: "\uDB80\uDE08", hint: "Look at the camera", square: false, slot: "polkitFace", extraSpace: 28 },
+  fingerprint: { glyph: "\uDB80\uDE37", hint: "", square: true, slot: "polkitFingerprint", extraSpace: 0 }
 }
 
 function chromeForModule(line) {
@@ -72,6 +74,75 @@ function cardIsSquare(kind) {
   return !!cardSpec(kind).square
 }
 
+function chromeSlotKeyFor(kind) {
+  return cardSpec(kind).slot || ""
+}
+
+function resolveChromeSlot(kind, source) {
+  var key = chromeSlotKeyFor(kind)
+  if (!key) return null
+  if (!source || !source.registry) return null
+  var registry = source.registry
+  var plugins = registry.installedPlugins
+  if (!plugins) return null
+
+  var eligible = []
+  var id
+  for (id in plugins) {
+    var manifest = plugins[id]
+    if (!manifest || typeof manifest !== "object") continue
+    if (manifest.__isFirstParty) continue
+    if (!Array.isArray(manifest.kinds) || manifest.kinds.indexOf(CHROME_KIND) === -1) continue
+    if (!manifest.entryPoints || typeof manifest.entryPoints[key] !== "string" || !manifest.entryPoints[key]) continue
+    if (typeof registry.isEnabled !== "function" || !registry.isEnabled(id)) continue
+    var url = typeof registry.entryPointUrl === "function" ? registry.entryPointUrl(manifest, key) : ""
+    if (!url) continue
+    if (source.failedUrls && source.failedUrls[url]) continue
+    eligible.push({ id: id, url: url })
+  }
+  if (!eligible.length) return null
+
+  eligible.sort(function(a, b) {
+    if (a.id < b.id) return -1
+    if (a.id > b.id) return 1
+    return 0
+  })
+
+  var shadowed = []
+  var i
+  for (i = 1; i < eligible.length; i++) shadowed.push(eligible[i].id)
+
+  return {
+    pluginId: eligible[0].id,
+    entryPointKey: key,
+    url: eligible[0].url,
+    revision: source.revision || 0,
+    shadowed: shadowed
+  }
+}
+
+function cardPresentationFor(steps, waitingOnPam, laptopClosed, source) {
+  var kind = cardModeFor(steps, waitingOnPam, laptopClosed).kind
+  var spec = cardSpec(kind)
+  var slot = resolveChromeSlot(kind, source)
+  return {
+    kind: kind,
+    glyph: spec.glyph,
+    hint: spec.hint,
+    square: !!spec.square,
+    extraSpace: slot ? spec.extraSpace : 0,
+    slot: slot
+  }
+}
+
+function chromeSlotDiagnostic(presentation) {
+  if (!presentation || !presentation.slot) return ""
+  var slot = presentation.slot
+  var line = "polkit chrome: " + presentation.kind + " painted by " + slot.pluginId
+  if (slot.shadowed && slot.shadowed.length) line += "; ignoring " + slot.shadowed.join(", ")
+  return line
+}
+
 function fingerprintConfiguredFromPamConfig(raw) {
   var steps = pamStepsFromConfig(raw)
   var i
@@ -92,6 +163,11 @@ if (typeof module !== "undefined") {
     promptLooksFingerprint: promptLooksFingerprint,
     pamStepsFromConfig: pamStepsFromConfig,
     cardModeFor: cardModeFor,
+    chromeSlotKeyFor: chromeSlotKeyFor,
+    resolveChromeSlot: resolveChromeSlot,
+    cardPresentationFor: cardPresentationFor,
+    chromeSlotDiagnostic: chromeSlotDiagnostic,
+    CHROME_KIND: CHROME_KIND,
     glyphFor: glyphFor,
     hintFor: hintFor,
     cardIsSquare: cardIsSquare,

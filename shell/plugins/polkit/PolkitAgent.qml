@@ -36,17 +36,72 @@ Item {
   property bool laptopClosed: false
   property int shakeOffset: 0
 
+  property var pluginRegistry: null
+  property var failedSlotUrls: ({})
+  property string lastFilledSlotUrl: ""
+  property string lastChromeLog: ""
+
   readonly property bool dialogVisible: polkitAgent.isActive || closing
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
   readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
-  readonly property var card: PolkitModel.cardModeFor(pamSteps, waitingOnPam, laptopClosed)
-  readonly property string cardKind: card && card.kind ? card.kind : "password"
-  readonly property int faceExtra: cardKind === "face" ? Style.space(28) : 0
-  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + faceExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + faceExtra
-  readonly property int cardWidth: PolkitModel.cardIsSquare(cardKind) ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+  readonly property var slotSource: ({
+    registry: root.pluginRegistry,
+    revision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0,
+    failedUrls: root.failedSlotUrls
+  })
+  readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
+  readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
+  readonly property string slotUrl: {
+    if (presentation && presentation.slot && presentation.slot.url) return presentation.slot.url
+    if (root.errorFlash && root.lastFilledSlotUrl && !(root.failedSlotUrls && root.failedSlotUrls[root.lastFilledSlotUrl]))
+      return root.lastFilledSlotUrl
+    return ""
+  }
+  readonly property bool slotPainting: slotLoader.status === Loader.Ready && root.cardKind !== "password"
+  readonly property int slotExtra: Style.space(presentation && presentation.extraSpace ? presentation.extraSpace : 0)
+  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
+  readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+
+  readonly property QtObject chromeContext: QtObject {
+    readonly property string kind: root.presentation && root.presentation.kind ? root.presentation.kind : ""
+    readonly property bool active: root.slotPainting
+    readonly property string glyph: root.presentation && root.presentation.glyph ? root.presentation.glyph : ""
+    readonly property string hint: root.presentation && root.presentation.hint ? root.presentation.hint : ""
+    readonly property color accent: root.accent
+    readonly property color foreground: root.foreground
+    readonly property color errorColor: Color.polkit.textError
+    readonly property bool errorFlash: root.errorFlash
+    readonly property string fontFamily: root.fontFamily
+    readonly property int hintFontSize: Style.font.bodySmall
+    readonly property real lineWidth: Math.max(1, Style.space(2))
+    readonly property real gap: Style.space(10)
+  }
 
   function authorizationLabel(message) {
     return PolkitModel.authorizationLabel(message)
+  }
+
+  function noteSlotFailure(url) {
+    var key = String(url || "")
+    if (!key || (root.failedSlotUrls && root.failedSlotUrls[key])) return
+    var next = {}
+    var existing
+    for (existing in root.failedSlotUrls) next[existing] = root.failedSlotUrls[existing]
+    next[key] = true
+    root.failedSlotUrls = next
+    if (root.lastFilledSlotUrl === key) root.lastFilledSlotUrl = ""
+    console.warn("polkit chrome failed to load, keeping first-party card:", key)
+  }
+
+  onPresentationChanged: {
+    if (presentation && presentation.slot && presentation.slot.url)
+      lastFilledSlotUrl = presentation.slot.url
+    var line = PolkitModel.chromeSlotDiagnostic(presentation)
+    if (!line || !presentation || !presentation.slot) return
+    var key = presentation.slot.pluginId + "@" + presentation.slot.revision
+    if (key === lastChromeLog) return
+    lastChromeLog = key
+    console.log(line)
   }
 
   function loadPamConfig(raw) {
@@ -67,6 +122,7 @@ Item {
     errorFlash = false
     submitted = false
     passwordInput.text = ""
+    lastFilledSlotUrl = ""
   }
 
   function syncFromFlow() {
@@ -261,68 +317,62 @@ Item {
         }
       }
 
-      Item {
-        id: faceLayer
-        anchors.fill: parent
-        opacity: root.cardKind === "face" ? 1 : 0
+      Loader {
+        id: slotLoader
+        anchors.centerIn: parent
+        width: parent.width - card.contentLeftInset - card.contentRightInset
+        height: parent.height - card.contentTopInset - card.contentBottomInset
+        source: root.slotUrl
+        asynchronous: true
+        opacity: root.slotPainting ? 1 : 0
         visible: opacity > 0
-        enabled: root.cardKind === "face"
+        enabled: root.slotPainting
 
         Behavior on opacity {
           NumberAnimation { duration: 160 }
         }
 
-        Column {
-          anchors.centerIn: parent
-          spacing: Style.space(10)
-          width: parent.width
+        onLoaded: {
+          if (item && "chrome" in item) item.chrome = root.chromeContext
+        }
 
-          Item {
-            width: Math.round(root.fieldHeight * 0.9)
-            height: width
-            anchors.horizontalCenter: parent.horizontalCenter
-
-            FaceScanRing {
-              anchors.fill: parent
-              color: root.errorFlash ? Color.polkit.textError : root.accent
-              running: faceLayer.visible
-              strokeWidth: Math.max(2, Style.space(2))
-            }
-
-            OpticalGlyph {
-              anchors.centerIn: parent
-              width: Math.round(parent.width * 0.55)
-              height: width
-              text: PolkitModel.glyphFor("face")
-              fontFamily: root.fontFamily
-              fontSize: Math.round(parent.width * 0.55)
-              color: root.errorFlash ? Color.polkit.textError : root.accent
-            }
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            text: PolkitModel.hintFor("face")
-            color: root.errorFlash ? Color.polkit.textError : root.foreground
-            opacity: 0.72
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
-          }
+        onStatusChanged: {
+          if (status === Loader.Error) root.noteSlotFailure(String(source))
         }
       }
 
-      OpticalGlyph {
+      Row {
+        id: defaultChrome
         anchors.centerIn: parent
-        width: Math.round(root.fieldHeight * 0.7)
-        height: width
-        visible: root.cardKind === "fingerprint"
-        text: PolkitModel.glyphFor("fingerprint")
-        fontFamily: root.fontFamily
-        fontSize: Math.round(root.fieldHeight * 0.7)
-        color: root.errorFlash ? Color.polkit.textError : root.accent
+        spacing: Style.space(10)
+        opacity: root.cardKind !== "password" && !root.slotPainting ? 1 : 0
+        visible: opacity > 0
+        enabled: visible
+
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
+        OpticalGlyph {
+          width: Math.round(root.fieldHeight * 0.7)
+          height: width
+          text: root.presentation.glyph
+          fontFamily: root.fontFamily
+          fontSize: Math.round(root.fieldHeight * 0.7)
+          color: root.errorFlash ? Color.polkit.textError : root.accent
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          text: root.presentation.hint
+          visible: text !== ""
+          color: root.errorFlash ? Color.polkit.textError : root.foreground
+          opacity: 0.72
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          verticalAlignment: Text.AlignVCenter
+          elide: Text.ElideRight
+        }
       }
 
       Row {
@@ -343,7 +393,7 @@ Item {
 
         Text {
           textFormat: Text.PlainText
-          text: PolkitModel.glyphFor("password")
+          text: root.presentation.glyph
           color: root.errorFlash ? Color.polkit.textError : root.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.iconLarge
@@ -387,7 +437,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : PolkitModel.hintFor("password"))
+            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : root.presentation.hint)
             color: root.errorFlash ? Color.polkit.textError : root.foreground
             opacity: root.errorFlash ? 1 : 0.36
             font.family: root.fontFamily
