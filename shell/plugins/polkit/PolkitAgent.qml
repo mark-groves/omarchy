@@ -32,30 +32,25 @@ Item {
   property bool responseVisible: false
   property bool failed: false
   property bool errorFlash: false
-  // pam_fprintd appears in the polkit PAM stack (a sensor is enrolled).
-  property bool fingerprintConfigured: false
-  // Lid shut right now — the reader is physically unreachable, so we fall back
-  // to the password even when a sensor is enrolled. Refreshed per request.
+  property string pamRaw: ""
   property bool laptopClosed: false
   property int shakeOffset: 0
 
   readonly property bool dialogVisible: polkitAgent.isActive || closing
-  // We show one method at a time. Fingerprint owns the dialog while PAM is
-  // waiting on the reader (lid open, sensor enrolled); the moment PAM asks for
-  // a password — including immediately when the lid is shut and the clamshell
-  // gate skips pam_fprintd — we switch to the password field instead.
-  readonly property bool fingerprintMode: fingerprintConfigured && !laptopClosed && dialogVisible && !responseRequired && !submitted && !errorFlash
-  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2
-  // Password mode is a wide field; fingerprint mode collapses to a square that
-  // just frames the centered sensor icon.
-  readonly property int cardWidth: fingerprintMode ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+  readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
+  readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
+  readonly property var card: PolkitModel.cardModeFor(pamSteps, waitingOnPam, laptopClosed)
+  readonly property string cardKind: card && card.kind ? card.kind : "password"
+  readonly property int faceExtra: cardKind === "face" ? Style.space(28) : 0
+  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + faceExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + faceExtra
+  readonly property int cardWidth: PolkitModel.cardIsSquare(cardKind) ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
 
   function authorizationLabel(message) {
     return PolkitModel.authorizationLabel(message)
   }
 
   function loadPamConfig(raw) {
-    fingerprintConfigured = PolkitModel.fingerprintConfiguredFromPamConfig(raw)
+    pamRaw = String(raw || "")
   }
 
   function refreshLidState() {
@@ -102,8 +97,8 @@ Item {
     if (!dialogVisible) return
     // In fingerprint mode there is no field to type into — park focus on the
     // key catcher so Escape still cancels; otherwise focus the password field.
-    if (fingerprintMode) keyCatcher.forceActiveFocus()
-    else passwordInput.forceActiveFocus()
+    if (cardKind === "password") passwordInput.forceActiveFocus()
+    else keyCatcher.forceActiveFocus()
   }
 
   function submitResponse() {
@@ -162,7 +157,7 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: root.loadPamConfig(text())
-    onLoadFailed: root.fingerprintConfigured = false
+    onLoadFailed: root.pamRaw = ""
     onFileChanged: reload()
   }
 
@@ -268,14 +263,65 @@ Item {
         }
       }
 
-      // Fingerprint mode shows just the sensor icon, centered and alone \u2014 no
-      // padlock, no field, no prompt text.
+      Item {
+        id: faceLayer
+        anchors.fill: parent
+        opacity: root.cardKind === "face" ? 1 : 0
+        visible: opacity > 0
+        enabled: root.cardKind === "face"
+
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
+        Column {
+          anchors.centerIn: parent
+          spacing: Style.space(10)
+          width: parent.width
+
+          Item {
+            width: Math.round(root.fieldHeight * 0.9)
+            height: width
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            FaceScanRing {
+              anchors.fill: parent
+              color: root.errorFlash ? Color.polkit.textError : root.accent
+              running: faceLayer.visible
+              strokeWidth: Math.max(2, Style.space(2))
+            }
+
+            OpticalGlyph {
+              anchors.centerIn: parent
+              width: Math.round(parent.width * 0.55)
+              height: width
+              text: PolkitModel.glyphFor("face")
+              fontFamily: root.fontFamily
+              fontSize: Math.round(parent.width * 0.55)
+              color: root.errorFlash ? Color.polkit.textError : root.accent
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            text: PolkitModel.hintFor("face")
+            color: root.errorFlash ? Color.polkit.textError : root.foreground
+            opacity: 0.72
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+          }
+        }
+      }
+
       OpticalGlyph {
         anchors.centerIn: parent
         width: Math.round(root.fieldHeight * 0.7)
         height: width
-        visible: root.fingerprintMode
-        text: "\udb80\ude37"
+        visible: root.cardKind === "fingerprint"
+        text: PolkitModel.glyphFor("fingerprint")
         fontFamily: root.fontFamily
         fontSize: Math.round(root.fieldHeight * 0.7)
         color: root.errorFlash ? Color.polkit.textError : root.accent
@@ -283,7 +329,9 @@ Item {
 
       Row {
         id: cardRow
-        visible: !root.fingerprintMode
+        opacity: root.cardKind === "password" ? 1 : 0
+        visible: opacity > 0
+        enabled: root.cardKind === "password"
         anchors.fill: parent
         anchors.topMargin: card.contentTopInset
         anchors.rightMargin: card.contentRightInset
@@ -291,8 +339,13 @@ Item {
         anchors.leftMargin: card.contentLeftInset
         spacing: Style.space(14)
 
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
         Text {
-          text: "\uf023"
+          textFormat: Text.PlainText
+          text: PolkitModel.glyphFor("password")
           color: root.errorFlash ? Color.polkit.textError : root.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.iconLarge
@@ -336,7 +389,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : "Enter password")
+            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : PolkitModel.hintFor("password"))
             color: root.errorFlash ? Color.polkit.textError : root.foreground
             opacity: root.errorFlash ? 1 : 0.36
             font.family: root.fontFamily
