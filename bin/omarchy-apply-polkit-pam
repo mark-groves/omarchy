@@ -6,9 +6,6 @@
 # omarchy:requires-sudo=true
 # omarchy:hidden=true
 
-# Single writer of /etc/pam.d/polkit-1. The lid gate is derived at emit time
-# as success=N and is never stored as a line a remover can steal.
-
 set -euo pipefail
 
 if (( EUID == 0 )); then

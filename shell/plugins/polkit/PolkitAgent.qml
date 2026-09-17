@@ -95,8 +95,6 @@ Item {
 
   function refocus() {
     if (!dialogVisible) return
-    // In fingerprint mode there is no field to type into — park focus on the
-    // key catcher so Escape still cancels; otherwise focus the password field.
     if (cardKind === "password") passwordInput.forceActiveFocus()
     else keyCatcher.forceActiveFocus()
   }

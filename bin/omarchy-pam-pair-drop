@@ -6,9 +6,6 @@
 # omarchy:requires-sudo=true
 # omarchy:hidden=true
 
-# Removes MODULE and the laptop-closed pam_exec line immediately above it.
-# Other lid gates stay, so a howdy gate is not stolen by a fprintd remove.
-
 set -euo pipefail
 
 if (( EUID == 0 )); then
