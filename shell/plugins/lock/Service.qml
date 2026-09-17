@@ -503,12 +503,13 @@ Item {
     command: ["bash", "-c", "omarchy-hw-laptop-closed && echo closed || echo open"]
     stdout: StdioCollector { id: laptopClosedOut; waitForEnd: true }
     onExited: {
+      var wasClosed = root.laptopClosed
       root.laptopClosed = String(laptopClosedOut.text || "").trim() === "closed"
       if (root.laptopClosed) {
         faceRetryTimer.stop()
         faceAuthenticating = false
         if (facePam.active) facePam.abort()
-      } else if (root.lockRequested && root.faceConfigured) {
+      } else if (wasClosed && root.lockRequested && root.faceConfigured) {
         root.startFace()
       }
     }

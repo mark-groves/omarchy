@@ -58,6 +58,17 @@ assert(
   'blanking the panel does not clear faceAuthenticating'
 )
 
+const lidHandler = serviceQml.match(/id:\s*laptopClosedProc[\s\S]*?onExited:\s*\{[\s\S]*?\n    \}/)
+assert(lidHandler, 'lock has a laptopClosedProc onExited handler')
+assert(
+  /wasClosed/.test(lidHandler[0]) && /else if \(wasClosed && root\.lockRequested && root\.faceConfigured\)/.test(lidHandler[0]),
+  'an already-open lid poll does not start a new Howdy scan'
+)
+assert(
+  !/else if \(root\.lockRequested && root\.faceConfigured\) \{\s*root\.startFace\(\)/.test(lidHandler[0]),
+  'lid poll no longer starts face on every open reading'
+)
+
 assert(
   /faceConfigured/.test(viewQml) && /objectName:\s*"faceIndicator"/.test(viewQml),
   'the lock field shows a face glyph when face is configured'
