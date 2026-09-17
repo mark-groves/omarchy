@@ -277,10 +277,12 @@ write_atomically() {
     mapfile -t verbs < "$verbs_file"
   fi
 
+  # Open the lock after becoming root. /run/lock is root-owned, and sudo closefrom drops inherited fd 9.
   as_root bash -c '
     set -euo pipefail
     source "$1"
     shift
+    exec 9>"$LOCK_FILE"
     flock 9
     parse_pam "$PAM_FILE"
     if (( $# > 0 )); then
@@ -299,7 +301,7 @@ write_atomically() {
       fi
       exit "$status"
     fi
-  ' bash "$0" "${verbs[@]}" 9>"$LOCK_FILE"
+  ' bash "$0" "${verbs[@]}"
 }
 
 list_methods() {
@@ -424,4 +426,7 @@ main() {
   rm -f "$verbs_file"
 }
 
-main "$@"
+# write_atomically sources this file in a privileged bash. Do not run main there.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

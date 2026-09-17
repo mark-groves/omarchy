@@ -127,5 +127,40 @@ for fixture in face-only.pam fingerprint-island-plus-face.pam fido2-island-plus-
   assert_fixed_point "$fixtures/$fixture"
 done
 
+source_out=$(mktemp)
+source_err=$(mktemp)
+set +e
+bash -c '
+  set -euo pipefail
+  source "$1"
+  printf "sourced_ok\n"
+' bash "$apply" >"$source_out" 2>"$source_err"
+source_status=$?
+set -e
+(( source_status == 0 )) || fail "sourcing the compiler does not run main" "$(cat "$source_err")"
+[[ $(<"$source_out") == "sourced_ok" ]] || fail "sourcing the compiler reaches the caller" "$(cat "$source_out")"
+rm -f "$source_out" "$source_err"
+pass "sourcing the compiler does not run main"
+
+lib_out=$(mktemp)
+bash -c '
+  set -euo pipefail
+  source "$1"
+  parse_pam "$2"
+  apply_verbs add face
+  emit_pam
+' bash "$apply" "$fixtures/vendor-includes.pam" >"$lib_out"
+diff -u "$fixtures/face-only.pam" "$lib_out" >/dev/null ||
+  fail "sourced compiler emits face-only from vendor" "$(diff -u "$fixtures/face-only.pam" "$lib_out")"
+rm -f "$lib_out"
+pass "sourced compiler emits face-only from vendor"
+
+lock_opens=$(grep -c 'exec 9>"\$LOCK_FILE"' "$apply" || true)
+(( lock_opens == 1 )) || fail "the privileged child opens the lock fd"
+if grep -E '9>"\$LOCK_FILE"' "$apply" | grep -vq 'exec 9>'; then
+  fail "the caller does not open the lock fd across sudo"
+fi
+pass "the lock fd is opened after becoming root"
+
 assert_overlay_untouched
 pass "--from --print never writes $polkit_overlay"

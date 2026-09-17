@@ -10,7 +10,7 @@ var CHROME_BY_MODULE = {
 
 var CARD = {
   password: { glyph: "\uf023", hint: "Enter password", square: false },
-  face: { glyph: "\uF0208", hint: "Look at the camera", square: false },
+  face: { glyph: "\uDB80\uDE08", hint: "Look at the camera", square: false },
   fingerprint: { glyph: "\uDB80\uDE37", hint: "", square: true }
 }
 

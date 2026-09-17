@@ -96,7 +96,8 @@ assertDeepEqual(
   'vendor polkit stays on the password card'
 )
 
-assertEqual(polkit.glyphFor('face'), '\uF0208', 'face card uses the lock face glyph')
+assertEqual(polkit.glyphFor('face').codePointAt(0), 0xF0208, 'face glyph is U+F0208')
+assertEqual(polkit.glyphFor('face'), '\uDB80\uDE08', 'face card uses the lock face glyph')
 assertEqual(polkit.hintFor('face'), 'Look at the camera', 'face card asks the user to look')
 assertEqual(polkit.hintFor('password'), 'Enter password', 'password card keeps the field hint')
 assertEqual(polkit.hintFor('fingerprint'), '', 'fingerprint card has no hint')
