@@ -9,6 +9,7 @@ Item {
   property string backgroundPath: ""
   property int backgroundVersion: 0
   property bool fingerprintConfigured: false
+  property bool faceConfigured: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
@@ -31,7 +32,7 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: fingerprintConfigured ? Math.round(fingerprintIcon.implicitWidth + 12) : 0
+  readonly property real fingerprintReserve: (fingerprintConfigured || faceConfigured) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -210,6 +211,21 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: root.fingerprintConfigured
         text: "󰈷"
+        color: Color.lock.placeholder
+        font.family: Style.font.family
+        font.pixelSize: Math.round(root.fieldFontSize * 1.1)
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+      }
+
+      Text {
+        id: faceIcon
+        objectName: "faceIndicator"
+        anchors.right: parent.right
+        anchors.rightMargin: inputField.borderRight + 18
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.faceConfigured && !root.fingerprintConfigured
+        text: "󰈈"
         color: Color.lock.placeholder
         font.family: Style.font.family
         font.pixelSize: Math.round(root.fieldFontSize * 1.1)
