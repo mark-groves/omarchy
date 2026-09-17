@@ -1,0 +1,2 @@
+auth      sufficient pam_howdy.so
+session   include    system-auth
