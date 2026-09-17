@@ -213,6 +213,14 @@ cat >"$stub_bin/omarchy-pkg-add" <<'SH'
 #!/bin/bash
 SH
 
+cat >"$stub_bin/omarchy-apply-polkit-pam" <<'SH'
+#!/bin/bash
+printf 'apply-polkit-pam' >>"$TEST_LOG"
+printf '\t%s' "$@" >>"$TEST_LOG"
+printf '\n' >>"$TEST_LOG"
+exit 0
+SH
+
 # Record what pamu2fcfg's stdout actually targets. The fixed implementation
 # gives it a pipe to privileged tee; refusing a regular-file descriptor keeps a
 # regression from writing credential bytes into a caller-owned named file.
@@ -243,7 +251,7 @@ esac
 SH
 
 chmod +x "$stub_bin/mktemp" "$stub_bin/sudo" "$stub_bin/fido2-token" \
-  "$stub_bin/omarchy-pkg-add" "$stub_bin/pamu2fcfg"
+  "$stub_bin/omarchy-pkg-add" "$stub_bin/omarchy-apply-polkit-pam" "$stub_bin/pamu2fcfg"
 
 reset_run() {
   : >"$calls"
@@ -325,6 +333,8 @@ run_setup
   fail "FIDO2 setup stages nothing when a registration already exists"
 ! grep -Fq $'sudo\tmktemp\t' "$calls" ||
   fail "FIDO2 setup creates no stage over an existing registration" "$(cat "$calls")"
+grep -Fxq $'apply-polkit-pam\tadd\tfido2' "$calls" ||
+  fail "FIDO2 setup adds polkit fido2 through the compiler" "$(cat "$calls")"
 pass "FIDO2 setup leaves an existing registration alone"
 
 reset_run
