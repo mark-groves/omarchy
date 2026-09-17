@@ -37,8 +37,25 @@ assert(
 )
 
 assert(
-  /if \(root\.lockRequested && !root\.authenticatingPassword\) root\.runBlank\(\)/.test(serviceQml),
-  'only a password check in flight stops the blank timer'
+  /if \(root\.lockRequested && !root\.authenticatingPassword && !root\.faceAuthenticating\) root\.runBlank\(\)/.test(serviceQml),
+  'a password or face check in flight stops the blank timer'
+)
+
+assert(
+  /onFaceAuthenticatingChanged/.test(serviceQml) &&
+    /if \(faceAuthenticating\) idleBlankTimer\.stop\(\)/.test(serviceQml),
+  'face authentication holds the idle blank timer'
+)
+
+const blankHandler = serviceQml.match(/onDisplaysBlankChanged:\s*\{[\s\S]*?\n  \}/)
+assert(blankHandler, 'lock has an onDisplaysBlankChanged handler')
+assert(
+  !/facePam\.abort\(\)/.test(blankHandler[0]),
+  'blanking the panel does not abort an in-flight Howdy scan'
+)
+assert(
+  !/faceAuthenticating\s*=\s*false/.test(blankHandler[0]),
+  'blanking the panel does not clear faceAuthenticating'
 )
 
 assert(

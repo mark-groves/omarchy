@@ -577,10 +577,10 @@ Item {
         root.armBlankTimer()
         return
       }
-      // Only a password check in flight should hold the display up. The
-      // fingerprint PAM stays armed for the whole lock, so gating on
-      // `authenticating` here would keep the panel lit until unlock.
-      if (root.lockRequested && !root.authenticatingPassword) root.runBlank()
+      // Fingerprint PAM stays armed for the whole lock, so gating on
+      // `authenticating` would keep the panel lit until unlock. Face is a
+      // bounded Howdy scan. Hold the panel while that scan is in flight.
+      if (root.lockRequested && !root.authenticatingPassword && !root.faceAuthenticating) root.runBlank()
     }
   }
 
@@ -638,11 +638,15 @@ Item {
     else armBlankTimer()
   }
 
+  onFaceAuthenticatingChanged: {
+    if (!lockRequested) return
+    if (faceAuthenticating) idleBlankTimer.stop()
+    else armBlankTimer()
+  }
+
   onDisplaysBlankChanged: {
     if (displaysBlank) {
       faceRetryTimer.stop()
-      if (facePam.active) facePam.abort()
-      faceAuthenticating = false
     } else if (lockRequested) {
       startFace()
     }
