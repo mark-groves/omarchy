@@ -215,11 +215,13 @@ run_isolated_privileged_tree() {
   status=0
   if command -v bwrap >/dev/null &&
     bwrap --ro-bind / / --dev /dev --proc /proc \
+      --bind "$test_tmp" "$test_tmp" \
       --bind "$pam_overlay" /etc/pam.d \
       --bind "$test_tmp/lock" /run/lock \
       --uid 0 --gid 0 \
       true 2>/dev/null; then
     bwrap --ro-bind / / --dev /dev --proc /proc \
+      --bind "$test_tmp" "$test_tmp" \
       --bind "$pam_overlay" /etc/pam.d \
       --bind "$test_tmp/lock" /run/lock \
       --uid 0 --gid 0 \
