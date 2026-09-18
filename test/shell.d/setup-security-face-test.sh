@@ -6,6 +6,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 setup="$ROOT/bin/omarchy-setup-security-face"
 remove="$ROOT/bin/omarchy-remove-security-face"
+fingerprint_setup="$ROOT/bin/omarchy-setup-security-fingerprint"
 fingerprint_remove="$ROOT/bin/omarchy-remove-security-fingerprint"
 
 grep -F '/usr/lib/security/pam_howdy.so' "$setup" >/dev/null ||
@@ -40,6 +41,12 @@ if grep -F 'omarchy-pkg-drop' "$remove" >/dev/null; then
 fi
 pass "face remove drops lock, sudo, and polkit face"
 
+grep -F 'omarchy-pam-pair-add /etc/pam.d/sudo pam_fprintd.so' "$fingerprint_setup" >/dev/null ||
+  fail "fingerprint setup pair-adds sudo fprintd"
+if grep -E "sed[[:space:]].*pam_fprintd" "$fingerprint_setup" >/dev/null; then
+  fail "fingerprint setup no longer sed-inserts sudo fprintd"
+fi
+pass "fingerprint setup pair-adds sudo fprintd"
 grep -F 'omarchy-pam-pair-drop' "$fingerprint_remove" >/dev/null ||
   fail "fingerprint remove pair-drops sudo fprintd"
 if grep -E "sed[[:space:]].*omarchy-hw-laptop-closed" "$fingerprint_remove" >/dev/null; then
