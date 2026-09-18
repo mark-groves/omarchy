@@ -21,6 +21,9 @@ Item {
   property bool authenticatingPassword: false
   property bool fingerprintAuthenticating: false
   property bool faceAuthenticating: false
+  // What the shared face card should be showing. Lock previously bound nothing
+  // face-related into the view, so a scan and a miss were both silent.
+  property string faceState: "scanning"
   property bool passwordPamConfigured: false
   property bool fingerprintConfigured: false
   property bool faceConfigured: false
@@ -141,6 +144,8 @@ Item {
     faceAuthenticating = false
     fingerprintRetryTimer.stop()
     faceRetryTimer.stop()
+    faceHoldTimer.stop()
+    faceState = "scanning"
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
     if (facePam.active) facePam.abort()
@@ -271,6 +276,7 @@ Item {
     if (laptopClosed || displaysBlank) return
     if (facePam.active || faceAuthenticating) return
 
+    faceState = "scanning"
     faceAuthenticating = true
     if (!facePam.start()) {
       faceAuthenticating = false
@@ -283,8 +289,21 @@ Item {
 
     if (!lockRequested) return
     if (result === PamResult.Success) {
+      // Hold the recognised frame so the card is seen finishing. PAM has
+      // already succeeded, so this delays the teardown, not the unlock. With
+      // no chrome installed the hold is zero and this is the old behaviour.
+      var hold = FaceChrome.holdMs("recognized")
+      faceState = "recognized"
+      if (hold > 0) {
+        faceHoldTimer.interval = hold
+        faceHoldTimer.restart()
+        return
+      }
       finishUnlock()
     } else if (faceConfigured && !laptopClosed && !displaysBlank) {
+      // The retry timer already outlasts the miss animation, so a miss needs
+      // no new delay. It only needed a state to show.
+      faceState = "notRecognized"
       faceRetryTimer.restart()
     }
   }
@@ -346,6 +365,8 @@ Item {
         backgroundVersion: root.backgroundVersion
         fingerprintConfigured: root.fingerprintConfigured
         faceConfigured: root.faceConfigured
+        faceState: root.faceState
+        faceScanning: root.faceAuthenticating
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
@@ -379,6 +400,8 @@ Item {
       backgroundVersion: root.backgroundVersion
       fingerprintConfigured: root.fingerprintConfigured
       faceConfigured: root.faceConfigured
+      faceState: "scanning"
+      faceScanning: false
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0
@@ -443,7 +466,10 @@ Item {
 
     onError: function(error) {
       root.faceAuthenticating = false
-      if (root.lockRequested && root.faceConfigured && !root.laptopClosed && !root.displaysBlank) faceRetryTimer.restart()
+      if (root.lockRequested && root.faceConfigured && !root.laptopClosed && !root.displaysBlank) {
+        root.faceState = "notRecognized"
+        faceRetryTimer.restart()
+      }
     }
   }
 
@@ -452,6 +478,12 @@ Item {
     interval: 250
     repeat: false
     onTriggered: root.startFingerprint()
+  }
+
+  Timer {
+    id: faceHoldTimer
+    repeat: false
+    onTriggered: root.finishUnlock()
   }
 
   Timer {
