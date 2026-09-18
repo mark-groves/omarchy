@@ -8,8 +8,6 @@ set -euo pipefail
 readonly MODULE=/usr/lib/security/pam_howdy.so
 readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
 
-echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
-
 if [[ ! -f $MODULE ]]; then
   echo -e "\e[31mhowdy-next is not installed ($MODULE is missing).\e[0m"
   exit 1
@@ -26,6 +24,7 @@ fi
 
 export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
 
+echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
 echo
 

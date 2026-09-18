@@ -5,13 +5,13 @@
 
 set -euo pipefail
 
-echo -e "\e[32mRemoving face authentication from lock, sudo, and system prompts.\n\e[0m"
-
 if (( EUID != 0 )); then
   exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
 fi
 
 export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+
+echo -e "\e[32mRemoving face authentication from lock, sudo, and system prompts.\n\e[0m"
 
 if [[ -f /etc/pam.d/omarchy-lock-face ]]; then
   echo "Removing lock screen face authentication..."
