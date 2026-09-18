@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Set up face authentication for system prompts
+# omarchy:summary=Set up face authentication for lock, sudo, and system prompts
 # omarchy:requires-sudo=true
 
 set -euo pipefail
@@ -8,7 +8,15 @@ set -euo pipefail
 readonly MODULE=/usr/lib/security/pam_howdy.so
 readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
 
-echo -e "\e[32mSetting up face authentication for system prompts.\n\e[0m"
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
 
 if [[ ! -f $MODULE ]]; then
   echo -e "\e[31mhowdy-next is not installed ($MODULE is missing).\e[0m"
@@ -21,10 +29,21 @@ if [[ ! -f $HOWDY_HELPER_DROPIN ]]; then
 fi
 
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
-echo "This does not change the lock screen or sudo."
 echo
 
+echo "Configuring lock screen for face authentication..."
+as_root tee /etc/pam.d/omarchy-lock-face >/dev/null <<'EOF'
+#%PAM-1.0
+auth       required                    pam_howdy.so
+account    include                     system-local-login
+EOF
+
+echo "Configuring sudo for face authentication..."
+omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so
+
+echo "Configuring polkit for face authentication..."
 omarchy-apply-polkit-pam add face
 
-echo -e "\e[32m\nFace authentication is now used for system prompts.\e[0m"
+echo -e "\e[32m\nFace authentication is now used for lock, sudo, and system prompts.\e[0m"
 echo "Password remains the fallback. Look at the lid camera when asked."
+echo "This command does not enroll. Change the face with howdy."

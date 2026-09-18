@@ -12,11 +12,11 @@ You can remove the fingerprint authentication under _Remove > Security > Fingerp
 
 ### Face authentication
 
-If Howdy is already enrolled for the lock screen, you can use the same lid camera for system prompts — `pkexec`, the 1Password system unlock, and other polkit dialogs — with _Setup > Security > Face_ in the Omarchy menu (`Super + Space`).
+If Howdy is installed, _Setup > Security > Face_ in the Omarchy menu (`Super + Space`) puts the lid camera in front of the password on the lock screen (`Super + Ctrl + L`), `sudo`, and system prompts (`pkexec`, the 1Password system unlock, and other polkit dialogs).
 
-That adds face in front of the password on those prompts. It does not change the lock screen, `sudo`, LUKS, or login. When the lid is closed, the camera is skipped and you type the password. If face misses, the password field is still there.
+It does not enroll a face. Enroll or change the model with `howdy add`. Every prompt uses that one model. It does not change LUKS or login. When the lid is closed, the camera is skipped and you type the password. If face misses, the password field is still there.
 
-You can remove it under _Remove > Security > Face_. Lock screen face and `sudo` stay as they are.
+You can remove it under _Remove > Security > Face_. That takes face off the lock screen, `sudo`, and system prompts. The password still works. Howdy models stay until you remove them with howdy.
 
 ### Fido2 authentication
 
