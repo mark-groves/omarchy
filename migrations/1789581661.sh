@@ -50,8 +50,8 @@ if [[ -e $checkout || -L $checkout ]]; then
   fi
 fi
 
-# The widget opens the right section of the default bar, just before the
-# tray, which a machine without a shell.json takes on as soon as the shell
+# The widget sits just before the clock in the center of the default bar,
+# which a machine without a shell.json takes on as soon as the shell
 # restarts. A customized bar gets the entry written into its file rather than
 # placed over IPC: the shell this runs under cannot see a widget its scan
 # never reached and would refuse it, whereas the file it hot-reloads carries
@@ -76,10 +76,10 @@ commit "$NORMALIZE | $entry_id"'
   def insert_at($section; $index):
     .bar.layout[$section] = .bar.layout[$section][:$index] + [{id: "omacom.elsewhen"}] + .bar.layout[$section][$index:];
   . as $config
-  | (["left", "center", "right"] | map(select($config.bar.layout[.] | ids | index("omarchy.tray") != null)) | first) as $section
+  | (["left", "center", "right"] | map(select($config.bar.layout[.] | ids | index("omarchy.clock") != null)) | first) as $section
   | if $section != null then
-      insert_at($section; .bar.layout[$section] | ids | index("omarchy.tray"))
+      insert_at($section; .bar.layout[$section] | ids | index("omarchy.clock"))
     else
-      insert_at("right"; 0)
+      insert_at("center"; 0)
     end
 '

@@ -142,16 +142,7 @@ You can still drop a plugin in without git:
 
 ### Packaged plugins
 
-Some default plugins ship as their own Arch package rather than in this
-checkout: Elsewhen (`omacom.elsewhen`) is the `elsewhen` package. pacman installs such a plugin,
-root-owned, at `/usr/share/omarchy/plugins/<plugin-id>/`, and
-the shell scans that root between its bundled plugins and the user's. A
-packaged `omarchy.*` id is trusted exactly like a bundled one; a packaged
-plugin under any other id is treated like a user plugin. They update with
-`omarchy update` and are removed with pacman, so `omarchy plugin update` and
-`omarchy plugin remove` refuse them and name the package instead. A bundled
-copy in `$OMARCHY_PATH/shell/plugins` wins over the packaged one, which is how
-a packaged plugin is developed under `omarchy dev link`.
+Some default plugins ship as their own Arch package rather than in this checkout: Elsewhen (`omacom.elsewhen`) is the `elsewhen` package. pacman installs such a plugin, root-owned, at `/usr/share/omarchy/plugins/<plugin-id>/`, and the shell scans that root between its bundled plugins and the user's. A packaged `omarchy.*` id is trusted exactly like a bundled one; a packaged plugin under any other id is treated like a user plugin. They update with `omarchy update` and are removed with pacman, so `omarchy plugin update` and `omarchy plugin remove` refuse them and name the package instead. A bundled copy in `$OMARCHY_PATH/shell/plugins` wins over the packaged one, which is how a packaged plugin is developed under `omarchy dev link`.
 
 The lower-level IPC equivalents remain available via `omarchy-shell shell rescanPlugins`,
 `omarchy-shell shell enablePlugin <id> '{}'`, and `omarchy-shell shell listPlugins`.

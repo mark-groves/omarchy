@@ -34,6 +34,15 @@ jq -e '
 pass "default center anchor exists in center layout"
 
 jq -e '
+  def ids: map(.id // .);
+  (.bar.layout.center | ids) as $ids |
+  ($ids | index("omacom.elsewhen")) as $elsewhen |
+  ($ids | index("omarchy.clock")) as $clock |
+  $elsewhen != null and $clock == $elsewhen + 1
+' "$ROOT/config/omarchy/shell.json" >/dev/null
+pass "default center layout puts elsewhen immediately before the clock"
+
+jq -e '
   any(.bar.layout.center[]; (.id // .) == "omarchy.clock" and (.formatAlt // "") == "d MMMM \u0027W\u0027ww yyyy")
 ' "$ROOT/config/omarchy/shell.json" >/dev/null
 pass "default clock date format has no leading zero"
@@ -41,12 +50,11 @@ pass "default clock date format has no leading zero"
 jq -e '
   def ids: map(.id // .);
   (.bar.layout.right | ids) as $ids |
-  ($ids | index("omacom.elsewhen")) as $elsewhen |
   ($ids | index("omarchy.tray")) as $tray |
   ($ids | index("omarchy.agents")) as $agents |
-  $elsewhen == 0 and $tray == 1 and $agents == $tray + 1
+  $tray == 0 and $agents == $tray + 1
 ' "$ROOT/config/omarchy/shell.json" >/dev/null
-pass "default right layout opens with elsewhen and the tray, then agents"
+pass "default right layout opens with the tray, then agents"
 
 ROOT="$ROOT" python3 <<'PY'
 import json

@@ -89,14 +89,14 @@ run_migration
 grep -Fxq elsewhen "$CALL_LOG" || fail "migration installs the elsewhen package" "$(cat "$CALL_LOG")"
 pass "migration installs the elsewhen package"
 
-[[ $(ids right) == '["omacom.elsewhen","omarchy.tray","omarchy.agents","omarchy.power"]' ]] ||
-  fail "migration puts the widget just before the tray" "$(cat "$config")"
-pass "migration puts the widget just before the tray"
+[[ $(ids center) == '["omacom.elsewhen","omarchy.clock"]' && $(ids right) == '["omarchy.tray","omarchy.agents","omarchy.power"]' ]] ||
+  fail "migration puts the widget just before the center clock" "$(cat "$config")"
+pass "migration puts the widget just before the center clock"
 
-[[ $(jq -c '.bar.layout.right[2]' "$config") == '{"id":"omarchy.agents","syncMode":"On"}' ]] ||
+[[ $(jq -c '.bar.layout.right[1]' "$config") == '{"id":"omarchy.agents","syncMode":"On"}' ]] ||
   fail "migration keeps the settings of its neighbours" "$(cat "$config")"
-[[ $(jq -c '.bar.layout.center[0]' "$config") == '{"format":"HH:mm","id":"omarchy.clock"}' ]] ||
-  fail "migration leaves other sections alone" "$(cat "$config")"
+[[ $(jq -c '.bar.layout.center[1]' "$config") == '{"format":"HH:mm","id":"omarchy.clock"}' ]] ||
+  fail "migration keeps the clock settings" "$(cat "$config")"
 pass "migration leaves the rest of the layout alone"
 
 grep -q 'shell rescanPlugins' "$SHELL_CALLS" && grep -q 'shell reloadConfig' "$SHELL_CALLS" ||
@@ -117,17 +117,17 @@ cat >"$config" <<'JSON'
 }
 JSON
 run_migration
-[[ $(ids center) == '["omarchy.clock","omacom.elsewhen","omarchy.tray"]' && $(ids right) == '["omarchy.power"]' ]] ||
-  fail "migration follows the tray into another section and reads string entries" "$(cat "$config")"
-pass "migration follows the tray into another section and reads string entries"
+[[ $(ids center) == '["omacom.elsewhen","omarchy.clock","omarchy.tray"]' && $(ids right) == '["omarchy.power"]' ]] ||
+  fail "migration reads string clock entries" "$(cat "$config")"
+pass "migration reads string clock entries"
 
 cat >"$config" <<'JSON'
 { "version": 1, "bar": { "layout": { "right": [{ "id": "omarchy.agents" }, { "id": "omarchy.power" }] } } }
 JSON
 run_migration
-[[ $(ids right) == '["omacom.elsewhen","omarchy.agents","omarchy.power"]' ]] ||
-  fail "migration prepends to the right section when the tray is off the bar" "$(cat "$config")"
-pass "migration prepends to the right section when the tray is off the bar"
+[[ $(ids center) == '["omacom.elsewhen"]' && $(ids right) == '["omarchy.agents","omarchy.power"]' ]] ||
+  fail "migration prepends to the center section when the clock is off the bar" "$(cat "$config")"
+pass "migration prepends to the center section when the clock is off the bar"
 
 cat >"$config" <<'JSON'
 {
@@ -140,6 +140,15 @@ run_migration
 [[ $before == $(sha256sum "$config") ]] ||
   fail "migration leaves a widget the user already placed where it is" "$(cat "$config")"
 pass "migration leaves a widget the user already placed where it is"
+
+# A customized clock keeps its section and settings; insert only its neighbour.
+for section in left right; do
+  jq -n --arg section "$section" '{version: 1, bar: {layout: {center: ["omarchy.weather"], ($section): ["omarchy.menu", {id: "omarchy.clock", format: "HH:mm"}]}}}' >"$config"
+  run_migration
+  [[ $(ids "$section") == '["omarchy.menu","omacom.elsewhen","omarchy.clock"]' && $(ids center) == '["omarchy.weather"]' ]] ||
+    fail "migration follows a clock customized into $section" "$(cat "$config")"
+  pass "migration follows a clock customized into $section"
+done
 
 # ------------------------------------------------------------- edge cases
 rm -f "$config"
@@ -156,7 +165,7 @@ cat >"$config" <<'JSON'
 { "version": 1, "bar": { "layout": { "right": [{ "id": "omarchy.tray" }, { "id": "omarchy.agents" }] } } }
 JSON
 SHELL_STATUS=1 run_migration
-[[ $(ids right) == '["omacom.elsewhen","omarchy.tray","omarchy.agents"]' ]] ||
+[[ $(ids center) == '["omacom.elsewhen"]' && $(ids right) == '["omarchy.tray","omarchy.agents"]' ]] ||
   fail "migration places the widget with no shell running" "$(cat "$config")"
 pass "migration places the widget with no shell running"
 
@@ -201,7 +210,7 @@ JSON
 }
 
 assert_widget_placed() {
-  [[ $(ids right) == '["omacom.elsewhen","omarchy.tray","omarchy.power"]' ]] ||
+  [[ $(ids center) == '["omacom.elsewhen"]' && $(ids right) == '["omarchy.tray","omarchy.power"]' ]] ||
     fail "$1 still gets the widget" "$(cat "$config")"
 }
 
