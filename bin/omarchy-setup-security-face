@@ -8,14 +8,6 @@ set -euo pipefail
 readonly MODULE=/usr/lib/security/pam_howdy.so
 readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
 
-as_root() {
-  if (( EUID == 0 )); then
-    "$@"
-  else
-    sudo "$@"
-  fi
-}
-
 echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
 
 if [[ ! -f $MODULE ]]; then
@@ -28,11 +20,17 @@ if [[ ! -f $HOWDY_HELPER_DROPIN ]]; then
   exit 1
 fi
 
+if (( EUID != 0 )); then
+  exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
+fi
+
+export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
 echo
 
 echo "Configuring lock screen for face authentication..."
-as_root tee /etc/pam.d/omarchy-lock-face >/dev/null <<'EOF'
+tee /etc/pam.d/omarchy-lock-face >/dev/null <<'EOF'
 #%PAM-1.0
 auth       required                    pam_howdy.so
 account    include                     system-local-login
