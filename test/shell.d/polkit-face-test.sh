@@ -132,7 +132,7 @@ function source(plugins, enabled, failed, revision) {
 
 const facePlugin = {
   kinds: ['polkit-chrome'],
-  entryPoints: { polkitFace: 'PolkitFaceCard.qml' },
+  entryPoints: { polkitFace: 'FaceCardFrame.js' },
   __sourceDir: '/plugins/markgroves.polkit-face',
   __isFirstParty: false
 }
@@ -153,18 +153,18 @@ const filled = polkit.cardPresentationFor(faceSteps, true, false, source(plugins
 assertEqual(filled.kind, 'face', 'open lid waiting on face still picks the face card')
 assertEqual(filled.chromeKind, 'face', 'chrome kind stays on the configured face step')
 assertEqual(filled.slot.pluginId, 'markgroves.polkit-face', 'enabled chrome plugin fills the face slot')
-assertEqual(filled.slot.url, 'file:///plugins/markgroves.polkit-face/PolkitFaceCard.qml', 'slot url stays inside the plugin dir')
-assertEqual(filled.extraSpace, 28, 'filled face slot adds the face extra space')
+assertEqual(filled.slot.url, 'file:///plugins/markgroves.polkit-face/FaceCardFrame.js', 'slot url stays inside the plugin dir')
+assertEqual(filled.extraSpace, 150, 'filled face slot adds room for the shared face card')
 assertEqual(filled.hint, 'Look at the camera', 'first-party face hint stays when the slot paints')
-assertEqual(filled.chromeHint, 'Look at the camera', 'the loaded item keeps the face hint')
+assertEqual(filled.chromeHint, 'Look at the camera', 'the resolved slot keeps the face hint')
 
 const duringError = polkit.cardPresentationFor(faceSteps, false, false, source(plugins, ['markgroves.polkit-face']))
 assertEqual(duringError.kind, 'password', 'a miss still shows the password card')
 assertEqual(duringError.chromeKind, 'face', 'chrome kind does not follow waitingOnPam')
 assertEqual(duringError.slot.pluginId, 'markgroves.polkit-face', 'the face slot stays resolved through the error flash')
-assertEqual(duringError.extraSpace, 28, 'geometry does not collapse while the slot stays loaded')
+assertEqual(duringError.extraSpace, 150, 'geometry does not collapse while the slot stays resolved')
 assertEqual(duringError.hint, 'Enter password', 'the password row keeps its own hint')
-assertEqual(duringError.chromeHint, 'Look at the camera', 'the hidden face item keeps the face hint')
+assertEqual(duringError.chromeHint, 'Look at the camera', 'the held face card keeps the face hint')
 
 const disabled = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, []))
 assertEqual(disabled.slot, null, 'installed but disabled chrome is an empty slot')
@@ -176,7 +176,7 @@ assertEqual(missing.slot, null, 'no chrome plugin is the same empty slot as disa
 assertEqual(missing.extraSpace, 0, 'missing chrome collapses extra space')
 assertEqual(missing.hint, 'Look at the camera', 'missing chrome keeps the first-party hint')
 
-const failedUrl = 'file:///plugins/markgroves.polkit-face/PolkitFaceCard.qml'
+const failedUrl = 'file:///plugins/markgroves.polkit-face/FaceCardFrame.js'
 const broken = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, ['markgroves.polkit-face'], { [failedUrl]: true }))
 assertEqual(broken.slot, null, 'a failed Loader url is an empty slot')
 assertEqual(broken.extraSpace, 0, 'a failed Loader url collapses extra space')
@@ -257,23 +257,63 @@ assert(
   'polkit agent does not declare shell'
 )
 assert(
-  !/Loader/.test(agentQml) && !/FaceScanRing/.test(agentQml),
-  'polkit agent does not load sibling QML into the card'
+  !/Loader/.test(agentQml) && !/slotLoader/.test(agentQml) && !/FaceScanRing/.test(agentQml),
+  'the agent does not load sibling QML into the card'
+)
+assert(
+  !/chromeContext/.test(agentQml),
+  'chromeContext is gone: a QtObject parented to the agent root is a walk back to the field'
+)
+assert(
+  /FaceChromeCanvas/.test(agentQml),
+  'the agent paints chrome itself through the host canvas'
+)
+assert(
+  /FaceChrome\.sourceUrl\s*=\s*root\.slotUrl/.test(agentQml),
+  'the agent points the shared loader at the resolved slot url'
+)
+assert(
+  !/item\.chrome/.test(agentQml) && !/item\.flow/.test(agentQml),
+  'nothing host-owned is handed to a chrome plugin'
+)
+assert(
+  /id: faceChrome[\s\S]{0,600}?enabled:\s*false/.test(agentQml),
+  'the chrome column cannot take focus'
+)
+assert(
+  /FaceChrome\.holdMs\("recognized"\)/.test(agentQml) && /FaceChrome\.holdMs\("notRecognized"\)/.test(agentQml),
+  'the agent holds a result for as long as the plugin declares'
+)
+assert(
+  /successTimer/.test(agentQml) && /root\.closing = true/.test(agentQml),
+  'a held success still closes the dialog'
 )
 assert(
   /Look at the camera/.test(agentQml) === false,
-  'polkit agent still reads the face hint from the model'
-)
-assert(
-  !/chromeContext/.test(agentQml) && !/item\.flow/.test(agentQml) && !/item\.chrome/.test(agentQml),
-  'polkit agent does not hand chrome or flow to a plugin item'
-)
-assert(
-  !/readonly property string kind:/.test(agentQml),
-  'chrome context does not re-export card kind'
+  'the agent still reads the face hint from the model'
 )
 assert(
   !fs.existsSync(path.join(root, 'shell/plugins/polkit/FaceScanRing.qml')),
   'first-party FaceScanRing is gone'
+)
+
+const painter = fs.readFileSync(path.join(root, 'shell/Commons/FaceCardPainter.js'), 'utf8')
+assert(
+  /function paint\(ctx, size, ops, palette\)/.test(painter),
+  'the host owns the painter and takes ops, not a plugin item'
+)
+assert(
+  /MAX_OPS/.test(painter) && /MAX_CMDS/.test(painter) && /isFinite/.test(painter),
+  'the painter treats a returned frame as hostile input'
+)
+
+const chrome = fs.readFileSync(path.join(root, 'shell/Commons/FaceChrome.qml'), 'utf8')
+assert(
+  /new Function\(/.test(chrome) && !/\beval\(/.test(chrome),
+  'the plugin module is evaluated without capturing local scope'
+)
+assert(
+  /Math\.min\(ms, 2000\)/.test(chrome),
+  'a plugin cannot pin a credential dialog open'
 )
 JS

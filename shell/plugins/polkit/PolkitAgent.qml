@@ -37,6 +37,9 @@ Item {
   property int shakeOffset: 0
 
   property var pluginRegistry: null
+  property var failedSlotUrls: ({})
+  property int failedSlotRevision: 0
+  property string lastChromeLog: ""
 
   readonly property bool dialogVisible: polkitAgent.isActive || closing
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
@@ -45,16 +48,53 @@ Item {
   readonly property var slotSource: ({
     registry: root.pluginRegistry,
     revision: root.registryRevision,
-    failedUrls: ({}),
-    failedRevision: 0
+    failedUrls: root.failedSlotUrls,
+    failedRevision: root.failedSlotRevision
   })
   readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
   readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
-  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2
+  readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
+  readonly property bool slotPainting: FaceChrome.ready && root.slotUrl !== ""
+  // A miss holds the not-recognized frame before the password row replaces it.
+  property bool missHold: false
+  property string faceState: "scanning"
+  readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold)
+  readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold
+  readonly property int slotExtra: root.showFaceChrome && presentation && presentation.extraSpace ? Style.space(presentation.extraSpace) : 0
+  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+
+  onSlotUrlChanged: FaceChrome.sourceUrl = root.slotUrl
+
+  onRegistryRevisionChanged: {
+    if (failedSlotRevision === registryRevision) return
+    failedSlotUrls = ({})
+    failedSlotRevision = registryRevision
+  }
 
   function authorizationLabel(message) {
     return PolkitModel.authorizationLabel(message)
+  }
+
+  function noteSlotFailure(url) {
+    var key = String(url || "")
+    if (!key || (root.failedSlotUrls && root.failedSlotUrls[key])) return
+    var next = {}
+    var existing
+    for (existing in root.failedSlotUrls) next[existing] = root.failedSlotUrls[existing]
+    next[key] = true
+    root.failedSlotUrls = next
+    root.failedSlotRevision = root.registryRevision
+    console.warn("polkit chrome failed to load, keeping first-party card:", key)
+  }
+
+  onPresentationChanged: {
+    var line = PolkitModel.chromeSlotDiagnostic(presentation)
+    if (!line || !presentation || !presentation.slot) return
+    var key = presentation.slot.pluginId + "@" + presentation.slot.revision
+    if (key === lastChromeLog) return
+    lastChromeLog = key
+    console.log(line)
   }
 
   function loadPamConfig(raw) {
@@ -63,6 +103,19 @@ Item {
 
   function refreshLidState() {
     if (!laptopClosedProc.running) laptopClosedProc.running = true
+  }
+
+  // Howdy has no "not recognized" exit; PAM simply falls through to asking for
+  // a password. That fall-through is the miss, so the card holds the
+  // not-recognized frame before the password row takes over.
+  function noteFaceMiss() {
+    if (!slotPainting || faceState !== "scanning") return
+    var hold = FaceChrome.holdMs("notRecognized")
+    if (hold <= 0) return
+    faceState = "notRecognized"
+    missHold = true
+    missTimer.interval = hold
+    missTimer.restart()
   }
 
   function resetSnapshot() {
@@ -93,6 +146,10 @@ Item {
 
   function beginFlow() {
     closeTimer.stop()
+    successTimer.stop()
+    missTimer.stop()
+    missHold = false
+    faceState = "scanning"
     closing = false
     submitted = false
     passwordInput.text = ""
@@ -103,7 +160,7 @@ Item {
 
   function refocus() {
     if (!dialogVisible) return
-    if (cardKind === "password") passwordInput.forceActiveFocus()
+    if (root.showPasswordRow) passwordInput.forceActiveFocus()
     else keyCatcher.forceActiveFocus()
   }
 
@@ -142,6 +199,28 @@ Item {
     onTriggered: {
       closing = false
       resetSnapshot()
+    }
+  }
+
+  // A successful face match closes the dialog. Hold it open just long enough
+  // for the card to finish, then close exactly as before. PAM has already
+  // succeeded by this point, so this delays pixels, not authorization.
+  Timer {
+    id: successTimer
+    repeat: false
+    onTriggered: {
+      root.closing = true
+      closeTimer.restart()
+    }
+  }
+
+  Timer {
+    id: missTimer
+    repeat: false
+    onTriggered: {
+      root.missHold = false
+      root.faceState = "scanning"
+      Qt.callLater(root.refocus)
     }
   }
 
@@ -193,6 +272,7 @@ Item {
     target: polkitAgent.flow
 
     function onIsResponseRequiredChanged() {
+      if (polkitAgent.flow && polkitAgent.flow.isResponseRequired) root.noteFaceMiss()
       root.syncFromFlow()
       if (!polkitAgent.flow || !polkitAgent.flow.isResponseRequired) passwordInput.text = ""
       Qt.callLater(root.refocus)
@@ -209,6 +289,17 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
+      if (root.showFaceChrome) {
+        var hold = FaceChrome.holdMs("recognized")
+        if (hold > 0) {
+          root.faceState = "recognized"
+          root.missHold = false
+          missTimer.stop()
+          successTimer.interval = hold
+          successTimer.restart()
+          return
+        }
+      }
       root.closing = true
       closeTimer.restart()
     }
@@ -269,11 +360,64 @@ Item {
         }
       }
 
+      // Host-owned. The chrome plugin supplies numbers and never sees this
+      // item, this window, or the field beside it.
+      Column {
+        id: faceChrome
+        anchors.centerIn: parent
+        spacing: Style.space(10)
+        width: parent.width - card.contentLeftInset - card.contentRightInset
+        opacity: root.showFaceChrome ? 1 : 0
+        visible: opacity > 0
+        enabled: false
+
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
+        FaceChromeCanvas {
+          id: faceCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Math.min(parent.width, Style.space(116))
+          height: width
+          cardState: root.faceState
+          active: root.dialogVisible
+          accent: root.accent
+          foreground: root.foreground
+          errorColor: Color.polkit.textError
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.faceState === "notRecognized"
+            ? "Face not recognized"
+            : (root.faceState === "recognized" ? "Face recognized" : root.presentation.chromeHint)
+          color: root.faceState === "notRecognized" ? Color.polkit.textError : root.foreground
+          opacity: 0.86
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.faceState === "notRecognized" ? "Type your password"
+            : (root.faceState === "scanning" ? "Esc cancels" : "")
+          visible: text !== ""
+          color: root.foreground
+          opacity: 0.44
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+
       Row {
         id: defaultChrome
         anchors.centerIn: parent
         spacing: Style.space(10)
-        opacity: root.cardKind !== "password" ? 1 : 0
+        opacity: root.cardKind !== "password" && !root.showFaceChrome ? 1 : 0
         visible: opacity > 0
         enabled: visible
 
@@ -305,9 +449,9 @@ Item {
 
       Row {
         id: cardRow
-        opacity: root.cardKind === "password" ? 1 : 0
+        opacity: root.showPasswordRow ? 1 : 0
         visible: opacity > 0
-        enabled: root.cardKind === "password"
+        enabled: root.showPasswordRow
         anchors.fill: parent
         anchors.topMargin: card.contentTopInset
         anchors.rightMargin: card.contentRightInset
