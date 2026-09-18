@@ -1,14 +1,34 @@
 #!/bin/bash
 
-# omarchy:summary=Remove face authentication from system prompts
+# omarchy:summary=Remove face authentication from lock, sudo, and system prompts
 # omarchy:requires-sudo=true
 
 set -euo pipefail
 
-echo -e "\e[32mRemoving face authentication from system prompts.\n\e[0m"
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+echo -e "\e[32mRemoving face authentication from lock, sudo, and system prompts.\n\e[0m"
+
+if [[ -f /etc/pam.d/omarchy-lock-face ]]; then
+  echo "Removing lock screen face authentication..."
+  as_root rm -f /etc/pam.d/omarchy-lock-face
+fi
+
+if grep -q pam_howdy.so /etc/pam.d/sudo; then
+  echo "Removing face authentication from sudo..."
+  omarchy-pam-pair-drop /etc/pam.d/sudo pam_howdy.so
+fi
 
 if [[ -f /etc/pam.d/polkit-1 ]]; then
+  echo "Removing face authentication from polkit..."
   omarchy-apply-polkit-pam remove face
 fi
 
-echo "Lock screen face and sudo are unchanged."
+echo -e "\e[32mFace authentication has been removed from lock, sudo, and system prompts.\e[0m"
+echo "Password is still the way in. Howdy models are unchanged."

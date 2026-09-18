@@ -14,24 +14,31 @@ grep -F 'polkit-agent-helper@.service.d/10-howdy.conf' "$setup" >/dev/null ||
   fail "face setup requires the Howdy polkit helper drop-in"
 grep -F 'omarchy-apply-polkit-pam add face' "$setup" >/dev/null ||
   fail "face setup adds face through the polkit compiler"
+grep -F 'omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so' "$setup" >/dev/null ||
+  fail "face setup pair-adds sudo howdy"
+grep -F '/etc/pam.d/omarchy-lock-face' "$setup" >/dev/null ||
+  fail "face setup writes omarchy-lock-face"
+grep -F 'auth       required                    pam_howdy.so' "$setup" >/dev/null ||
+  fail "lock face is a required howdy conversation"
 
 if grep -E 'howdy[[:space:]]+(enroll|add)' "$setup" >/dev/null; then
   fail "face setup does not enroll"
 fi
-if grep -F 'omarchy-lock-face' "$setup" >/dev/null || grep -F 'omarchy-lock-face' "$remove" >/dev/null; then
-  fail "face setup and remove do not write omarchy-lock-face"
-fi
-if grep -F '/etc/pam.d/sudo' "$setup" >/dev/null || grep -F '/etc/pam.d/sudo' "$remove" >/dev/null; then
-  fail "face setup and remove do not edit sudo"
-fi
 if grep -F 'system-auth' "$setup" >/dev/null; then
   fail "face setup does not edit system-auth"
 fi
-pass "face setup checks Howdy and only adds polkit face"
+pass "face setup checks Howdy and writes lock, sudo, and polkit"
 
 grep -F 'omarchy-apply-polkit-pam remove face' "$remove" >/dev/null ||
   fail "face remove goes through the polkit compiler"
-pass "face remove only drops polkit face"
+grep -F 'omarchy-pam-pair-drop /etc/pam.d/sudo pam_howdy.so' "$remove" >/dev/null ||
+  fail "face remove pair-drops sudo howdy"
+grep -F '/etc/pam.d/omarchy-lock-face' "$remove" >/dev/null ||
+  fail "face remove deletes omarchy-lock-face"
+if grep -F 'omarchy-pkg-drop' "$remove" >/dev/null; then
+  fail "face remove does not drop howdy packages"
+fi
+pass "face remove drops lock, sudo, and polkit face"
 
 grep -F 'omarchy-pam-pair-drop' "$fingerprint_remove" >/dev/null ||
   fail "fingerprint remove pair-drops sudo fprintd"
