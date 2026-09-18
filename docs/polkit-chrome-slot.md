@@ -1,6 +1,6 @@
 # Polkit chrome slot
 
-First-party `omarchy.polkit` owns PAM detection, the exclusive overlay, the password field, and card geometry. Unique face (or later fingerprint) motion lives in a third-party plugin. The agent loads that plugin with one `Loader` and never hands it `flow.submit` or a `PamContext`.
+First-party `omarchy.polkit` owns PAM detection, the exclusive overlay, the password field, and card geometry. Unique face (or later fingerprint) motion is reserved for a plugin, but the agent does not instantiate plugin QML in the credential card. A loaded item under the same `BorderSurface` as `passwordInput` can walk `parent` and read the field. The card paints the first-party glyph and hint. The plugin is not handed `flow.submit` or a `PamContext`.
 
 ## Manifest
 
@@ -17,30 +17,10 @@ First-party `omarchy.polkit` owns PAM detection, the exclusive overlay, the pass
 
 The slot key is taken from the first-party card table: `polkitFace` for face, `polkitFingerprint` for fingerprint. `password` has an empty key and cannot be replaced. Extra `entryPoints` keys are allowed on third-party manifests and forbidden on first-party ones.
 
-Discovery scans enabled third-party manifests for the kind plus the card's key. The lowest plugin id wins; other eligible ids are ignored for that session. First-party manifests, disabled plugins, missing files, and a `Loader.Error` are the same empty slot. A `Loader.Error` is remembered only for the current `registryRevision`; a rescan retries. The slot follows the configured biometric, so a miss that flips the live card to password does not unload the item.
-
-## What the loaded item receives
-
-The host sets `chrome` to a `QtObject` after load. Properties are value types and additive:
-
-| Property | Type | Meaning |
-| --- | --- | --- |
-| `active` | bool | animate only while the slot is shown |
-| `glyph` | string | host-owned codepoint |
-| `hint` | string | host-owned wording |
-| `accent` | color | theme accent |
-| `foreground` | color | theme text |
-| `errorColor` | color | theme error |
-| `errorFlash` | bool | true only during the short error fade |
-| `fontFamily` | string | host UI font |
-| `hintFontSize` | int | host body-small size |
-| `lineWidth` | real | host hairline |
-| `gap` | real | host vertical rhythm |
-
-The item should import `QtQuick` only. It must not declare or expect `flow`, a `PamContext`, `polkitAgent`, or any way to size the card. Geometry stays first-party: extra height is applied only while a slot URL is actually resolved.
+Discovery scans enabled third-party manifests for the kind plus the card's key. The lowest plugin id wins; other eligible ids are ignored for that session. First-party manifests, disabled plugins, and missing files are an empty slot. The agent may still resolve a slot URL. It does not load that URL into the card.
 
 ## Empty slot
 
-When no plugin is enabled, the card stays password-sized and paints the first-party glyph and hint (`CARD.face` keeps U+F0208 and "Look at the camera"). Howdy still runs from `/etc/pam.d/polkit-1`. Missing chrome is a normal state, not a failed agent.
+The card stays password-sized and paints the first-party glyph and hint (`CARD.face` keeps U+F0208 and "Look at the camera"), even when a `polkit-chrome` plugin is enabled. Howdy still runs from `/etc/pam.d/polkit-1`. Missing chrome is a normal state, not a failed agent.
 
 The published sibling is [mark-groves/omarchy-polkit-face](https://github.com/mark-groves/omarchy-polkit-face). Install with `omarchy plugin add https://github.com/mark-groves/omarchy-polkit-face --enable`. That command never uses sudo.

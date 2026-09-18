@@ -37,9 +37,6 @@ Item {
   property int shakeOffset: 0
 
   property var pluginRegistry: null
-  property var failedSlotUrls: ({})
-  property int failedSlotRevision: 0
-  property string lastChromeLog: ""
 
   readonly property bool dialogVisible: polkitAgent.isActive || closing
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
@@ -48,60 +45,16 @@ Item {
   readonly property var slotSource: ({
     registry: root.pluginRegistry,
     revision: root.registryRevision,
-    failedUrls: root.failedSlotUrls,
-    failedRevision: root.failedSlotRevision
+    failedUrls: ({}),
+    failedRevision: 0
   })
   readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
   readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
-  readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
-  readonly property bool slotPainting: slotLoader.status === Loader.Ready && root.cardKind !== "password"
-  readonly property int slotExtra: Style.space(presentation && presentation.extraSpace ? presentation.extraSpace : 0)
-  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
+  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
-
-  readonly property QtObject chromeContext: QtObject {
-    readonly property bool active: root.slotPainting
-    readonly property string glyph: root.presentation && root.presentation.chromeGlyph ? root.presentation.chromeGlyph : ""
-    readonly property string hint: root.presentation && root.presentation.chromeHint ? root.presentation.chromeHint : ""
-    readonly property color accent: root.accent
-    readonly property color foreground: root.foreground
-    readonly property color errorColor: Color.polkit.textError
-    readonly property bool errorFlash: root.errorFlash
-    readonly property string fontFamily: root.fontFamily
-    readonly property int hintFontSize: Style.font.bodySmall
-    readonly property real lineWidth: Math.max(1, Style.space(2))
-    readonly property real gap: Style.space(10)
-  }
-
-  onRegistryRevisionChanged: {
-    if (failedSlotRevision === registryRevision) return
-    failedSlotUrls = ({})
-    failedSlotRevision = registryRevision
-  }
 
   function authorizationLabel(message) {
     return PolkitModel.authorizationLabel(message)
-  }
-
-  function noteSlotFailure(url) {
-    var key = String(url || "")
-    if (!key || (root.failedSlotUrls && root.failedSlotUrls[key])) return
-    var next = {}
-    var existing
-    for (existing in root.failedSlotUrls) next[existing] = root.failedSlotUrls[existing]
-    next[key] = true
-    root.failedSlotUrls = next
-    root.failedSlotRevision = root.registryRevision
-    console.warn("polkit chrome failed to load, keeping first-party card:", key)
-  }
-
-  onPresentationChanged: {
-    var line = PolkitModel.chromeSlotDiagnostic(presentation)
-    if (!line || !presentation || !presentation.slot) return
-    var key = presentation.slot.pluginId + "@" + presentation.slot.revision
-    if (key === lastChromeLog) return
-    lastChromeLog = key
-    console.log(line)
   }
 
   function loadPamConfig(raw) {
@@ -316,37 +269,11 @@ Item {
         }
       }
 
-      Loader {
-        id: slotLoader
-        anchors.centerIn: parent
-        width: parent.width - card.contentLeftInset - card.contentRightInset
-        height: parent.height - card.contentTopInset - card.contentBottomInset
-        source: root.slotUrl
-        asynchronous: true
-        enabled: false
-        focus: false
-        clip: true
-        opacity: root.slotPainting ? 1 : 0
-        visible: opacity > 0
-
-        Behavior on opacity {
-          NumberAnimation { duration: 160 }
-        }
-
-        onLoaded: {
-          if (item && "chrome" in item) item.chrome = root.chromeContext
-        }
-
-        onStatusChanged: {
-          if (status === Loader.Error) root.noteSlotFailure(String(source))
-        }
-      }
-
       Row {
         id: defaultChrome
         anchors.centerIn: parent
         spacing: Style.space(10)
-        opacity: root.cardKind !== "password" && !root.slotPainting ? 1 : 0
+        opacity: root.cardKind !== "password" ? 1 : 0
         visible: opacity > 0
         enabled: visible
 

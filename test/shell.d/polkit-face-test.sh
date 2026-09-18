@@ -257,20 +257,16 @@ assert(
   'polkit agent does not declare shell'
 )
 assert(
-  /Loader/.test(agentQml) && !/FaceScanRing/.test(agentQml),
-  'polkit agent loads sibling chrome and has no FaceScanRing type'
+  !/Loader/.test(agentQml) && !/FaceScanRing/.test(agentQml),
+  'polkit agent does not load sibling QML into the card'
 )
 assert(
   /Look at the camera/.test(agentQml) === false,
   'polkit agent still reads the face hint from the model'
 )
 assert(
-  /item\.chrome = root\.chromeContext/.test(agentQml) && !/item\.flow/.test(agentQml),
-  'polkit agent hands the loaded item chrome and never flow'
-)
-assert(
-  /enabled:\s*false/.test(agentQml) && /focus:\s*false/.test(agentQml) && /clip:\s*true/.test(agentQml),
-  'slot Loader cannot take focus or expand the card'
+  !/chromeContext/.test(agentQml) && !/item\.flow/.test(agentQml) && !/item\.chrome/.test(agentQml),
+  'polkit agent does not hand chrome or flow to a plugin item'
 )
 assert(
   !/readonly property string kind:/.test(agentQml),

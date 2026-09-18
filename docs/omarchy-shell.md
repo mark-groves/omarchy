@@ -35,7 +35,7 @@ wait).
 | `menu`       | Summoned menu surface                          |
 | `service`    | Headless singleton, no UI                      |
 
-A third-party plugin may also declare the unrecognized kind `polkit-chrome` plus an extra `entryPoints.polkitFace` (or `polkitFingerprint`) key. The host creates no instance of that plugin; first-party `omarchy.polkit` loads the entry point into the authentication card. See [polkit chrome slot](polkit-chrome-slot.md).
+A third-party plugin may also declare the unrecognized kind `polkit-chrome` plus an extra `entryPoints.polkitFace` (or `polkitFingerprint`) key. The host creates no instance of that plugin and does not load the entry point into the authentication card. See [polkit chrome slot](polkit-chrome-slot.md).
 
 Only one full bar option is active at a time. The built-in `omarchy.bar` is
 used when `bar.id` is omitted or when a selected third-party bar cannot load.
