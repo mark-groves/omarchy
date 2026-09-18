@@ -178,6 +178,96 @@ else
   pass "unprivileged face remove asks polkit"
 fi
 
+write_helper_stub() {
+  local path=$1
+  local log=$2
+
+  cat >"$path" <<STUB
+#!/bin/bash
+printf '%s %s\n' "\$(basename "\$0")" "\$*" >>"$log"
+exit 0
+STUB
+  chmod +x "$path"
+}
+
+run_isolated_privileged_tree() {
+  local script=$1
+  local label=$2
+  shift 2
+  local test_tmp bin pam_overlay status helper
+
+  test_tmp=$(mktemp -d)
+  bin="$test_tmp/bin"
+  pam_overlay="$test_tmp/pam.d"
+  mkdir -p "$bin" "$pam_overlay" "$test_tmp/lock"
+  cp -a /etc/pam.d/. "$pam_overlay/"
+  if [[ ! -f $pam_overlay/polkit-1 ]]; then
+    printf '%s\n' '#%PAM-1.0' 'auth      include    system-auth' >"$pam_overlay/polkit-1"
+  fi
+  if ! grep -q pam_howdy.so "$pam_overlay/sudo" 2>/dev/null; then
+    printf '%s\n' '#%PAM-1.0' 'auth      sufficient pam_howdy.so' 'auth      include    system-auth' >"$pam_overlay/sudo"
+  fi
+  cp "$script" "$bin/$(basename "$script")"
+  for helper in "$@"; do
+    write_helper_stub "$bin/$helper" "$test_tmp/helpers.out"
+  done
+
+  status=0
+  if command -v bwrap >/dev/null &&
+    bwrap --ro-bind / / --dev /dev --proc /proc \
+      --bind "$test_tmp" "$test_tmp" \
+      --bind "$pam_overlay" /etc/pam.d \
+      --bind "$test_tmp/lock" /run/lock \
+      --uid 0 --gid 0 \
+      true 2>/dev/null; then
+    bwrap --ro-bind / / --dev /dev --proc /proc \
+      --bind "$test_tmp" "$test_tmp" \
+      --bind "$pam_overlay" /etc/pam.d \
+      --bind "$test_tmp/lock" /run/lock \
+      --uid 0 --gid 0 \
+      -- "$bin/$(basename "$script")" >"$test_tmp/out" 2>&1 || status=$?
+  elif command -v unshare >/dev/null && unshare --user --map-root-user true 2>/dev/null; then
+    unshare --user --map-root-user --mount bash -c '
+      set -euo pipefail
+      mount --bind "$1" /etc/pam.d
+      mkdir -p /run/lock
+      mount --bind "$2" /run/lock
+      status=0
+      "$3" >"$4" 2>&1 || status=$?
+      exit "$status"
+    ' bash "$pam_overlay" "$test_tmp/lock" "$bin/$(basename "$script")" "$test_tmp/out" || status=$?
+  else
+    rm -rf "$test_tmp"
+    pass "user namespaces unavailable; skipping isolated privileged $label"
+    return 0
+  fi
+
+  if grep -q 'command not found' "$test_tmp/out"; then
+    fail "privileged $label runs helpers from the authorized tree" "$(cat "$test_tmp/out")"
+  fi
+  [[ -f $test_tmp/helpers.out ]] ||
+    fail "privileged $label runs helpers from the authorized tree" "$(cat "$test_tmp/out")"
+  for helper in "$@"; do
+    grep -q "^$helper " "$test_tmp/helpers.out" ||
+      fail "privileged $label runs $helper from the authorized tree" "$(cat "$test_tmp/out"; echo '---'; cat "$test_tmp/helpers.out")"
+  done
+  (( status == 0 )) ||
+    fail "privileged $label completes from a checkout tree" "$(cat "$test_tmp/out")"
+  rm -rf "$test_tmp"
+}
+
+if (( EUID != 0 )) && (( howdy_present == 1 )); then
+  run_isolated_privileged_tree "$setup" "face setup" \
+    omarchy-pam-pair-add omarchy-apply-polkit-pam
+  pass "privileged face setup runs checkout pair-add and the polkit compiler"
+fi
+
+if (( EUID != 0 )); then
+  run_isolated_privileged_tree "$remove" "face remove" \
+    omarchy-pam-pair-drop omarchy-apply-polkit-pam
+  pass "privileged face remove runs checkout pair-drop and the polkit compiler"
+fi
+
 grep -F 'omarchy-pam-pair-add /etc/pam.d/sudo pam_fprintd.so' "$fingerprint_setup" >/dev/null ||
   fail "fingerprint setup pair-adds sudo fprintd"
 if grep -E "sed[[:space:]].*pam_fprintd" "$fingerprint_setup" >/dev/null; then

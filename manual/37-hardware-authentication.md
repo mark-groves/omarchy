@@ -14,7 +14,7 @@ You can remove the fingerprint authentication under _Remove > Security > Fingerp
 
 If Howdy is installed, _Setup > Security > Face_ in the Omarchy menu (`Super + Space`) puts the lid camera in front of the password on the lock screen (`Super + Ctrl + L`), `sudo`, and system prompts (`pkexec`, the 1Password system unlock, and other polkit dialogs).
 
-Setup Face asks for authorization through the system prompt, then writes those PAM files as root. The write does not go through `sudo`, so it cannot start a face compare that cannot read the Howdy config.
+Setup Face asks for authorization through the system prompt, then writes those PAM files as root. The write does not go through `sudo`, so it cannot start a face compare that cannot read the Howdy config. The privileged step uses the Omarchy tree that launched the command, so a linked checkout can finish `sudo` and system prompts, not only the lock file.
 
 It does not enroll a face. Enroll or change the model with `howdy add`. Every prompt uses that one model. It does not change LUKS or login. When the lid is closed, the camera is skipped and you type the password. If face misses, the password field is still there.
 

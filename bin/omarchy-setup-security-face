@@ -22,7 +22,8 @@ if (( EUID != 0 )); then
   exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
 fi
 
-export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+script_bin=$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")
+export PATH="$script_bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin"
 
 echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
