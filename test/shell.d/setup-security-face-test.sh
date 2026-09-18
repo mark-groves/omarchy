@@ -21,6 +21,8 @@ grep -F '/etc/pam.d/omarchy-lock-face' "$setup" >/dev/null ||
   fail "face setup writes omarchy-lock-face"
 grep -F 'auth       required                    pam_howdy.so' "$setup" >/dev/null ||
   fail "lock face is a required howdy conversation"
+grep -F 'chmod 644' "$setup" >/dev/null ||
+  fail "lock face is mode 0644"
 
 if grep -E 'howdy[[:space:]]+(enroll|add)' "$setup" >/dev/null; then
   fail "face setup does not enroll"

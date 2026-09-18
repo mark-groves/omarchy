@@ -29,11 +29,15 @@ echo "Howdy is installed. Enroll a face model with howdy if you have not already
 echo
 
 echo "Configuring lock screen for face authentication..."
-tee /etc/pam.d/omarchy-lock-face >/dev/null <<'EOF'
+lock_pam=/etc/pam.d/omarchy-lock-face
+lock_tmp=$(mktemp "$lock_pam.new.XXXXXX")
+tee "$lock_tmp" >/dev/null <<'EOF'
 #%PAM-1.0
 auth       required                    pam_howdy.so
 account    include                     system-local-login
 EOF
+chmod 644 "$lock_tmp"
+mv -Tf "$lock_tmp" "$lock_pam"
 
 echo "Configuring sudo for face authentication..."
 omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so
