@@ -156,6 +156,18 @@ run_migration
 [[ ! -e $config ]] || fail "migration writes no shell.json where the defaults apply" "$(cat "$config")"
 pass "migration writes no shell.json where the defaults apply"
 
+for partial in \
+  '{"version":1,"idle":{"lock":600}}' \
+  '{"version":1,"bar":null,"idle":{"lock":600}}' \
+  '{"version":1,"bar":{"position":"bottom"}}' \
+  '{"bar":{"layout":{"center":["omarchy.clock"]}}}'; do
+  printf '%s\n' "$partial" >"$config"
+  before=$(sha256sum "$config")
+  run_migration
+  [[ $before == $(sha256sum "$config") ]] || fail "migration preserves fallback configuration" "$(cat "$config")"
+  pass "migration preserves fallback configuration: $partial"
+done
+
 printf '{ not json' >"$config"
 run_migration
 [[ $(cat "$config") == '{ not json' ]] || fail "migration leaves an unparsable config untouched" "$(cat "$config")"
@@ -201,6 +213,7 @@ make_checkout() {
   printf 'import QtQuick\nItem {}\n' >"$checkout/Panel.qml"
   git -C "$checkout" add -A
   git -C "$checkout" commit -q -m "Elsewhen"
+  git -C "$checkout" update-ref refs/remotes/origin/main HEAD
 }
 
 reset_layout() {
@@ -256,6 +269,62 @@ printf 'notes\n' >"$checkout/NOTES.md"
 reset_layout
 run_migration
 assert_kept "a clone with an untracked file"
+
+make_checkout https://github.com/omacom/elsewhen.git
+printf 'import QtQuick\nItem { id: mine }\n' >"$checkout/Panel.qml"
+git -C "$checkout" add Panel.qml
+git -C "$checkout" commit -q -m "Local customization"
+local_commit=$(git -C "$checkout" rev-parse HEAD)
+reset_layout
+run_migration
+assert_kept "a clean clone with an unpublished commit"
+[[ $(git -C "$checkout" rev-parse HEAD) == "$local_commit" ]] || fail "local commit survives"
+
+make_checkout https://github.com/omacom/elsewhen.git
+git -C "$checkout" checkout -qb local-work
+printf 'local branch\n' >"$checkout/Panel.qml"
+git -C "$checkout" commit -qam "Unpublished branch"
+git -C "$checkout" checkout -q --detach refs/remotes/origin/main
+reset_layout
+run_migration
+assert_kept "an unpublished commit on another branch"
+
+make_checkout https://github.com/omacom/elsewhen.git
+printf 'stashed work\n' >"$checkout/Panel.qml"
+git -C "$checkout" stash push -q
+reset_layout
+run_migration
+assert_kept "a clean clone with stashed work"
+
+make_checkout https://github.com/omacom/elsewhen.git
+git -C "$checkout" config status.showUntrackedFiles no
+printf 'private-notes\n' >"$checkout/.git/info/exclude"
+printf 'ignored work\n' >"$checkout/private-notes"
+reset_layout
+run_migration
+assert_kept "a clone with an ignored file"
+[[ $(cat "$checkout/private-notes") == "ignored work" ]] || fail "ignored file survives"
+
+make_checkout https://github.com/omacom/elsewhen.git
+printf 'recoverable work\n' >"$checkout/Panel.qml"
+git -C "$checkout" commit -qam "Recoverable local commit"
+git -C "$checkout" reset -q --hard refs/remotes/origin/main
+reset_layout
+run_migration
+assert_kept "a local commit retained only by the reflog"
+
+make_checkout https://github.com/omacom/elsewhen.git
+git -C "$checkout" update-ref -d refs/remotes/origin/main
+reset_layout
+run_migration
+assert_kept "a clone without recorded upstream history"
+
+make_checkout https://github.com/omacom/elsewhen.git
+git -C "$checkout" config status.showUntrackedFiles no
+printf 'untracked work\n' >"$checkout/NOTES.md"
+reset_layout
+run_migration
+assert_kept "untracked files hidden by the user Git configuration"
 
 make_checkout https://github.com/someone/elsewhen-fork.git
 reset_layout

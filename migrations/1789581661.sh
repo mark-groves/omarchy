@@ -29,15 +29,18 @@ omarchy-shell -q shell rescanPlugins || true
 # one that finds the package. A one-time gap of a few minutes, during the
 # update itself.
 upstream_checkout() {
-  local dir="$1" origin status
+  local dir="$1" origin status unpublished
   [[ -d $dir && ! -L $dir && -d $dir/.git ]] || return 1
   origin=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 1
   origin=${origin,,}
   origin=${origin%/}
   origin=${origin%.git}
   [[ $origin =~ ^([a-z+]+://)?([^/@]+@)?github\.com[/:]omacom/elsewhen$ ]] || return 1
-  status=$(git -C "$dir" status --porcelain 2>/dev/null) || return 1
-  [[ -z $status ]]
+  status=$(git -C "$dir" status --porcelain --untracked-files=all --ignored 2>/dev/null) || return 1
+  [[ -z $status ]] || return 1
+  # Local branches, stashes, and reflogs may hold work absent from a clean tree.
+  unpublished=$(git -C "$dir" rev-list HEAD --all --reflog --not --remotes=origin 2>/dev/null) || return 1
+  [[ -z $unpublished ]]
 }
 
 checkout="$HOME/.config/omarchy/plugins/omacom.elsewhen"
@@ -60,8 +63,8 @@ fi
 source omarchy-shell-config
 
 [[ -s $CONFIG_FILE ]] || exit 0
-# A file the shell cannot read is left for its owner to repair.
-jq empty "$CONFIG_FILE" 2>/dev/null || exit 0
+# Preserve configs whose bar comes from the shell fallback instead of an explicit layout.
+jq -e 'type == "object" and .version == 1 and (.bar | type == "object") and (.bar.layout | type == "object")' "$CONFIG_FILE" >/dev/null 2>&1 || exit 0
 
 entry_id='def entry_id: if type == "object" then (.id // "" | tostring) else tostring end;'
 
