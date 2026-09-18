@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# omarchy:summary=Remove face authentication from system prompts
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+
+echo -e "\e[32mRemoving face authentication from system prompts.\n\e[0m"
+
+if [[ -f /etc/pam.d/polkit-1 ]]; then
+  omarchy-apply-polkit-pam remove face
+fi
+
+echo "Lock screen face and sudo are unchanged."

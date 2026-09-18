@@ -9,6 +9,10 @@ Item {
   property string backgroundPath: ""
   property int backgroundVersion: 0
   property bool fingerprintConfigured: false
+  property bool faceConfigured: false
+  // "scanning" | "recognized" | "notRecognized", driven by the lock service.
+  property string faceState: "scanning"
+  property bool faceScanning: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
@@ -31,7 +35,10 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: fingerprintConfigured ? Math.round(fingerprintIcon.implicitWidth + 12) : 0
+  readonly property real fingerprintReserve: (fingerprintConfigured || faceConfigured) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
+  // The card replaces the static face glyph in the same slot, so the field
+  // keeps its geometry whether or not chrome is installed.
+  readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -215,6 +222,39 @@ Item {
         font.pixelSize: Math.round(root.fieldFontSize * 1.1)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
+      }
+
+      Text {
+        id: faceIcon
+        objectName: "faceIndicator"
+        anchors.right: parent.right
+        anchors.rightMargin: inputField.borderRight + 18
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.faceConfigured && !root.fingerprintConfigured && !root.faceCardPainting
+        text: "󰈈"
+        color: Color.lock.placeholder
+        font.family: Style.font.family
+        font.pixelSize: Math.round(root.fieldFontSize * 1.1)
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+      }
+
+      // Host-owned. The chrome plugin supplies numbers and never sees this
+      // item or the field it sits inside.
+      FaceChromeCanvas {
+        objectName: "faceCardIndicator"
+        anchors.right: parent.right
+        anchors.rightMargin: inputField.borderRight + 18
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.round(root.fieldFontSize * 1.45)
+        height: width
+        visible: root.faceCardPainting
+        enabled: false
+        cardState: root.faceState
+        active: root.inputEnabled || root.faceScanning
+        accent: Color.lock.borderActive
+        foreground: Color.lock.text
+        errorColor: Color.lock.textError
       }
     }
   }

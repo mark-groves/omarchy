@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# omarchy:summary=Drop a PAM module and only its adjacent lid gate
+# omarchy:group=apply
+# omarchy:args=[--from FILE --print] FILE MODULE
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+set -euo pipefail
+
+if (( EUID == 0 )); then
+  export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+fi
+
+readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
+
+is_gate_line() {
+  [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]
+}
+
+emit_pair_drop() {
+  local source=$1 module=$2
+  local -a kept=()
+  local line
+
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == *"$module"* ]]; then
+      if (( ${#kept[@]} > 0 )) && is_gate_line "${kept[-1]}"; then
+        unset "kept[-1]"
+      fi
+      continue
+    fi
+    kept+=("$line")
+  done < "$source"
+
+  if (( ${#kept[@]} > 0 )); then
+    printf '%s\n' "${kept[@]}"
+  fi
+}
+
+usage() {
+  cat <<USAGE
+Usage: omarchy-pam-pair-drop FILE MODULE
+       omarchy-pam-pair-drop --from FILE --print MODULE
+
+Drops MODULE and only the lid-gate line immediately above it.
+USAGE
+}
+
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+main() {
+  local from="" print=0 file="" module=""
+
+  while (( $# > 0 )); do
+    case $1 in
+      --from)
+        [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+        from=$2
+        shift 2
+        ;;
+      --print)
+        print=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        if [[ -z $file && -z $from ]]; then
+          file=$1
+        elif [[ -z $module ]]; then
+          module=$1
+        else
+          usage >&2
+          exit 64
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -n $from ]]; then
+    file=$from
+    if (( print == 0 )); then
+      echo "omarchy-pam-pair-drop: --from requires --print" >&2
+      exit 64
+    fi
+  fi
+
+  if [[ -z $file || -z $module ]]; then
+    usage >&2
+    exit 64
+  fi
+
+  if [[ ! -f $file || -L $file ]]; then
+    echo "omarchy-pam-pair-drop: FILE must be a regular file" >&2
+    exit 64
+  fi
+
+  if (( print )); then
+    emit_pair_drop "$file" "$module"
+    exit 0
+  fi
+
+  local tmp
+  tmp=$(as_root mktemp "$file.new.XXXXXX")
+  emit_pair_drop "$file" "$module" | as_root tee "$tmp" >/dev/null
+  as_root chmod 644 "$tmp"
+  as_root mv -Tf "$tmp" "$file"
+}
+
+main "$@"

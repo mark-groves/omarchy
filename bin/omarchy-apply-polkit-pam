@@ -1,0 +1,432 @@
+#!/bin/bash
+
+# omarchy:summary=Compile the biometric prefix of /etc/pam.d/polkit-1
+# omarchy:group=apply
+# omarchy:args=[add METHOD]... [remove METHOD]... [--from FILE] [--print] [--list]
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+set -euo pipefail
+
+if (( EUID == 0 )); then
+  export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+fi
+
+readonly PAM_FILE=/etc/pam.d/polkit-1
+readonly LOCK_FILE=/run/lock/omarchy-polkit-pam.lock
+readonly MODULE_DIR=/usr/lib/security
+readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
+readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
+readonly HEADER='#%PAM-1.0'
+readonly CANONICAL_BODY='auth      include    system-auth
+account   include    system-auth
+password  include    system-auth
+session   include    system-auth'
+
+readonly -a CANONICAL_ORDER=(face fingerprint fido2)
+
+declare -A PRESENT_ARGS=()
+declare -a BODY=()
+HAD_LEADING_FOREIGN_AUTH=0
+
+method_module() {
+  case $1 in
+    face) printf '%s\n' pam_howdy.so ;;
+    fingerprint) printf '%s\n' pam_fprintd.so ;;
+    fido2) printf '%s\n' pam_u2f.so ;;
+    *) return 1 ;;
+  esac
+}
+
+method_lid_gated() {
+  [[ $1 == "face" || $1 == "fingerprint" ]]
+}
+
+method_default_args() {
+  case $1 in
+    fido2) printf '%s\n' 'cue authfile=/etc/fido2/fido2' ;;
+    *) printf '%s\n' '' ;;
+  esac
+}
+
+module_method() {
+  case $1 in
+    pam_howdy.so) printf '%s\n' face ;;
+    pam_fprintd.so) printf '%s\n' fingerprint ;;
+    pam_u2f.so) printf '%s\n' fido2 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_auth_line() {
+  [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]]
+}
+
+is_gate_line() {
+  is_auth_line "$1" && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]
+}
+
+is_header_line() {
+  [[ $1 == "$HEADER" || $1 =~ ^#%PAM ]]
+}
+
+line_module() {
+  local line=$1
+  local module
+
+  for module in pam_howdy.so pam_fprintd.so pam_u2f.so; do
+    if [[ $line == *"$module"* ]]; then
+      printf '%s\n' "$module"
+      return 0
+    fi
+  done
+  return 1
+}
+
+line_args_after_module() {
+  local line=$1
+  local module=$2
+  local rest
+
+  rest=${line#*"$module"}
+  rest=${rest#"${rest%%[![:space:]]*}"}
+  printf '%s\n' "$rest"
+}
+
+has_recovery_auth() {
+  local line
+
+  for line in "$@"; do
+    is_auth_line "$line" || continue
+    if [[ $line == *include*system-auth* || $line == *pam_unix.so* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_method_name() {
+  method_module "$1" >/dev/null || {
+    echo "omarchy-apply-polkit-pam: METHOD must be face, fingerprint, or fido2" >&2
+    usage >&2
+    exit 64
+  }
+}
+
+require_module_installed() {
+  local method=$1
+  local module
+  module=$(method_module "$method")
+  if [[ ! -f $MODULE_DIR/$module ]]; then
+    echo "omarchy-apply-polkit-pam: $module is not installed under $MODULE_DIR" >&2
+    exit 1
+  fi
+}
+
+require_howdy_helper() {
+  if [[ ! -f $HOWDY_HELPER_DROPIN ]]; then
+    echo "omarchy-apply-polkit-pam: missing $HOWDY_HELPER_DROPIN (howdy-next polkit camera drop-in)" >&2
+    exit 1
+  fi
+}
+
+parse_pam() {
+  local source=${1:-}
+  local line module method seen_method=0
+
+  PRESENT_ARGS=()
+  BODY=()
+  HAD_LEADING_FOREIGN_AUTH=0
+
+  [[ -n $source && -f $source && ! -L $source ]] || return 0
+
+  while IFS= read -r line || [[ -n $line ]]; do
+    if is_header_line "$line"; then
+      continue
+    fi
+    if is_gate_line "$line"; then
+      continue
+    fi
+    if is_auth_line "$line" && module=$(line_module "$line"); then
+      method=$(module_method "$module")
+      PRESENT_ARGS[$method]=$(line_args_after_module "$line" "$module")
+      seen_method=1
+      continue
+    fi
+    if is_auth_line "$line" && (( ! seen_method )); then
+      if [[ $line != *include*system-auth* && $line != *pam_unix.so* ]]; then
+        HAD_LEADING_FOREIGN_AUTH=1
+      fi
+    fi
+    BODY+=("$line")
+  done < "$source"
+}
+
+apply_verbs() {
+  local verb method
+
+  while (( $# >= 2 )); do
+    verb=$1
+    method=$2
+    shift 2
+    case $verb in
+      add)
+        if [[ ! -v PRESENT_ARGS[$method] ]]; then
+          PRESENT_ARGS[$method]=$(method_default_args "$method")
+        fi
+        ;;
+      remove)
+        unset "PRESENT_ARGS[$method]"
+        ;;
+      *)
+        echo "omarchy-apply-polkit-pam: unknown verb $verb" >&2
+        exit 64
+        ;;
+    esac
+  done
+}
+
+gated_count() {
+  local method count=0
+  for method in "${CANONICAL_ORDER[@]}"; do
+    if [[ -v PRESENT_ARGS[$method] ]] && method_lid_gated "$method"; then
+      (( ++count ))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+method_line() {
+  local method=$1
+  local module args
+  module=$(method_module "$method")
+  args=${PRESENT_ARGS[$method]}
+  if [[ -n $args ]]; then
+    printf 'auth      sufficient %s %s\n' "$module" "$args"
+  else
+    printf 'auth      sufficient %s\n' "$module"
+  fi
+}
+
+join_body() {
+  if (( ${#BODY[@]} == 0 )); then
+    printf '%s\n' ""
+    return
+  fi
+  printf '%s\n' "${BODY[@]}"
+}
+
+emit_pam() {
+  local method n
+  local -a emitted=()
+
+  n=$(gated_count)
+
+  if (( ${#PRESENT_ARGS[@]} == 0 )); then
+    local joined
+    joined=$(join_body)
+    joined=${joined%$'\n'}
+    if [[ -z $joined || $joined == "$CANONICAL_BODY" ]]; then
+      return 3
+    fi
+  fi
+
+  emitted+=("$HEADER")
+  if (( n > 0 )); then
+    emitted+=("auth      [success=$n default=ignore] pam_exec.so quiet $GATE_HELPER")
+  fi
+  for method in "${CANONICAL_ORDER[@]}"; do
+    if [[ -v PRESENT_ARGS[$method] ]] && method_lid_gated "$method"; then
+      emitted+=("$(method_line "$method" | tr -d '\n')")
+    fi
+  done
+  for method in "${CANONICAL_ORDER[@]}"; do
+    if [[ -v PRESENT_ARGS[$method] ]] && ! method_lid_gated "$method"; then
+      emitted+=("$(method_line "$method" | tr -d '\n')")
+    fi
+  done
+  if (( ${#BODY[@]} == 0 )); then
+    while IFS= read -r method; do
+      emitted+=("$method")
+    done <<< "$CANONICAL_BODY"
+  else
+    emitted+=("${BODY[@]}")
+  fi
+
+  if ! has_recovery_auth "${emitted[@]}"; then
+    echo "omarchy-apply-polkit-pam: refusing a polkit stack with no password recovery" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${emitted[@]}"
+}
+
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+write_atomically() {
+  local verbs_file=$1
+  local -a verbs=()
+
+  if [[ -s $verbs_file ]]; then
+    mapfile -t verbs < "$verbs_file"
+  fi
+
+  # Open the lock after becoming root. /run/lock is root-owned, and sudo closefrom drops inherited fd 9.
+  as_root bash -c '
+    set -euo pipefail
+    source "$1"
+    shift
+    exec 9>"$LOCK_FILE"
+    flock 9
+    parse_pam "$PAM_FILE"
+    if (( $# > 0 )); then
+      apply_verbs "$@"
+    fi
+    tmp=$(mktemp "$PAM_FILE.new.XXXXXX")
+    if emit_pam > "$tmp"; then
+      chmod 644 "$tmp"
+      mv -Tf "$tmp" "$PAM_FILE"
+    else
+      status=$?
+      rm -f "$tmp"
+      if (( status == 3 )); then
+        rm -f "$PAM_FILE"
+        exit 0
+      fi
+      exit "$status"
+    fi
+  ' bash "$0" "${verbs[@]}"
+}
+
+list_methods() {
+  local method
+  parse_pam "$PAM_FILE"
+  for method in "${CANONICAL_ORDER[@]}"; do
+    if [[ -v PRESENT_ARGS[$method] ]]; then
+      printf '%s\n' "$method"
+    fi
+  done
+}
+
+usage() {
+  cat <<USAGE
+Usage: omarchy-apply-polkit-pam [add METHOD]... [remove METHOD]...
+       omarchy-apply-polkit-pam --from FILE --print [add METHOD]... [remove METHOD]...
+       omarchy-apply-polkit-pam --list
+
+METHOD is face, fingerprint, or fido2.
+No verbs re-derives the prefix from the existing file.
+--print writes the result to stdout and touches nothing. Exit 3 means delete.
+--list prints the methods present in /etc/pam.d/polkit-1, one per line.
+USAGE
+}
+
+main() {
+  local from="" print=0 list=0
+  local -a verbs=()
+
+  while (( $# > 0 )); do
+    case $1 in
+      --from)
+        [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+        from=$2
+        shift 2
+        ;;
+      --print)
+        print=1
+        shift
+        ;;
+      --list)
+        list=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      add|remove)
+        [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+        require_method_name "$2"
+        verbs+=("$1" "$2")
+        shift 2
+        ;;
+      *)
+        usage >&2
+        exit 64
+        ;;
+    esac
+  done
+
+  if (( list )); then
+    if (( print || ${#verbs[@]} > 0 )) || [[ -n $from ]]; then
+      echo "omarchy-apply-polkit-pam: --list cannot be combined with other options" >&2
+      exit 64
+    fi
+    list_methods
+    exit 0
+  fi
+
+  if [[ -n $from && $print -eq 0 ]]; then
+    echo "omarchy-apply-polkit-pam: --from requires --print" >&2
+    exit 64
+  fi
+
+  local i
+  if (( print == 0 )); then
+    for (( i = 0; i < ${#verbs[@]}; i += 2 )); do
+      if [[ ${verbs[i]} == "add" ]]; then
+        require_module_installed "${verbs[i + 1]}"
+        if [[ ${verbs[i + 1]} == "face" ]]; then
+          require_howdy_helper
+        fi
+      fi
+    done
+  fi
+
+  local source=$PAM_FILE
+  if [[ -n $from ]]; then
+    if [[ ! -e $from ]]; then
+      source=""
+    elif [[ ! -f $from || -L $from ]]; then
+      echo "omarchy-apply-polkit-pam: --from must be a regular file" >&2
+      exit 64
+    else
+      source=$from
+    fi
+  fi
+
+  parse_pam "$source"
+
+  if (( ${#verbs[@]} == 0 && HAD_LEADING_FOREIGN_AUTH )); then
+    echo "omarchy-apply-polkit-pam: refusing to rewrite a file with unowned auth lines above the first method" >&2
+    exit 1
+  fi
+
+  if (( ${#verbs[@]} > 0 )); then
+    apply_verbs "${verbs[@]}"
+  fi
+
+  if (( print )); then
+    emit_pam
+    exit $?
+  fi
+
+  local verbs_file
+  verbs_file=$(mktemp)
+  if (( ${#verbs[@]} > 0 )); then
+    printf '%s\n' "${verbs[@]}" > "$verbs_file"
+  fi
+  write_atomically "$verbs_file"
+  rm -f "$verbs_file"
+}
+
+# write_atomically sources this file in a privileged bash. Do not run main there.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

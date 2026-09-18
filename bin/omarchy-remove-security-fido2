@@ -13,10 +13,9 @@ remove_pam_config() {
     sudo sed -i '/pam_u2f\.so/d' /etc/pam.d/sudo
   fi
 
-  # Remove from polkit
-  if [[ -f /etc/pam.d/polkit-1 ]] && grep -Fq 'pam_u2f.so' /etc/pam.d/polkit-1; then
+  if [[ -f /etc/pam.d/polkit-1 ]]; then
     echo "Removing FIDO2 authentication from polkit..."
-    sudo sed -i '/pam_u2f\.so/d' /etc/pam.d/polkit-1
+    omarchy-apply-polkit-pam remove fido2
   fi
 }
 

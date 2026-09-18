@@ -78,10 +78,10 @@ between summons within a single shell session.
 
 ## Lock screen
 
-Session-lock surface using Quickshell's native `WlSessionLock` and two
-separate PAM services: `omarchy-lock-password` for password auth and,
-only when fingerprints are enrolled, `omarchy-lock-fingerprint` for
-fingerprint auth. It mirrors the previous lock screen field dimensions,
+Session-lock surface using Quickshell's native `WlSessionLock` and
+separate PAM services: `omarchy-lock-password` for password auth,
+`omarchy-lock-fingerprint` when fingerprints are enrolled, and
+`omarchy-lock-face` when Howdy has written that file. It mirrors the previous lock screen field dimensions,
 colors, blurred wallpaper, placeholder, and Hyprland-driven corners.
 The plugin sets `keepLoaded: true` so a plugin hot-reload (for example
 an installed bar widget changing on disk) does not destroy the lock
@@ -93,6 +93,8 @@ Theme-aware authentication dialog for privileged actions. It uses
 Quickshell's native `Quickshell.Services.Polkit.PolkitAgent` backend and
 runs inside the long-lived `omarchy-shell` process, replacing the old
 `polkit-gnome-authentication-agent-1` autostart.
+
+The password field and PAM detection stay first-party. The card does not load third-party QML next to the password field. It shows the first-party face glyph and hint at password size. See [`docs/polkit-chrome-slot.md`](../../docs/polkit-chrome-slot.md).
 
 ## Omarchy menu
 
