@@ -22,13 +22,16 @@ copy="$test_tmp/migration.sh"
 mkdir -p "$etc" "$howdy" "$hooks" "$test_tmp/bin"
 : >"$calls"
 
-for literal in /etc/pam.d/sudo /usr/lib/howdy/howdy-compare /etc/pacman.d/hooks/omarchy-howdy-compare.hook; do
-  count=$(grep -Fo "$literal" "$migration" | wc -l)
-  (( count == 1 )) || fail "migration names $literal exactly once" "found $count"
+for assignment in 'sudo_pam=/etc/pam.d/sudo' 'lock_pam=/etc/pam.d/omarchy-lock-face' \
+  'polkit_pam=/etc/pam.d/polkit-1' 'compare=/usr/lib/howdy/howdy-compare' \
+  'hook=/etc/pacman.d/hooks/omarchy-howdy-compare.hook'; do
+  count=$(grep -Fxc "$assignment" "$migration")
+  (( count == 1 )) || fail "migration assigns $assignment exactly once" "found $count"
 done
-sed -e "s|=/etc/pam.d/|=$etc/|" \
-  -e "s|=/usr/lib/howdy/|=$howdy/|" \
-  -e "s|=/etc/pacman.d/hooks/|=$hooks/|" "$migration" >"$copy"
+sed -e "s#^\(sudo_pam\|lock_pam\|polkit_pam\)=/etc/pam.d/#\1=$etc/#" \
+  -e "s#^compare=/usr/lib/howdy/#compare=$howdy/#" \
+  -e "s#^hook=/etc/pacman.d/hooks/#hook=$hooks/#" "$migration" >"$copy"
+grep -q '=/etc/\|=/usr/lib/howdy/' "$copy" && fail "retargeted copy still names a system path"
 pass "migration names its system paths once and the test drives a retargeted copy"
 
 cat >"$test_tmp/bin/sudo" <<SH
@@ -47,7 +50,8 @@ run_migration
 [[ ! -s $calls ]] || fail "a host without face never escalates" "$(cat "$calls")"
 pass "a host without face exits without a password prompt"
 
-cp "$ROOT/test/shell.d/fixtures/polkit-pam/sudo-howdy-only.pam" "$etc/sudo"
+printf '%s\n' '#%PAM-1.0' 'auth       required                    pam_howdy.so' \
+  'account    include                     system-local-login' >"$etc/omarchy-lock-face"
 run_migration
 [[ ! -s $calls ]] || fail "face without howdy-compare on disk never escalates" "$(cat "$calls")"
 pass "a face stack with no howdy-compare is left alone"
