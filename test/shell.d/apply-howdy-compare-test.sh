@@ -63,7 +63,7 @@ assert_wrapper_text "$compare"
   fail "hook is mode 644" "$(file_mode "$hook")"
 grep -F 'Target = usr/lib/howdy/howdy-compare' "$hook" >/dev/null ||
   fail "hook targets howdy-compare" "$(cat "$hook")"
-grep -F 'Exec = /usr/bin/omarchy-apply-howdy-compare install' "$hook" >/dev/null ||
+grep -F 'Exec = /bin/bash -c '"'"'. /etc/omarchy.conf 2>/dev/null; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'"'"'' "$hook" >/dev/null ||
   fail "hook re-runs apply install" "$(cat "$hook")"
 pass "install pins a vendor ELF and writes the upgrade hook"
 
@@ -91,6 +91,14 @@ status=$(run_apply install --root "$root")
 cmp -s -- "$real" <(printf '\x7fELF-fake-v2') ||
   fail "pinned install keeps the v2 ELF in .real"
 pass "install on a pinned slot leaves .real at v2"
+
+printf '#!/bin/bash\nexec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"\n' >"$compare"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install over a hand-written wrapper exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ $(checksum "$real") == "$real_sum" ]] ||
+  fail "install over a hand-written wrapper leaves .real alone"
+assert_wrapper_text "$compare"
+pass "install replaces an earlier wrapper that lacks -p and keeps the ELF"
 
 unknown_root=$(mktemp -d)
 unknown_compare=$unknown_root/usr/lib/howdy/howdy-compare

@@ -40,7 +40,7 @@ Target = usr/lib/howdy/howdy-compare
 [Action]
 Description = Pinning howdy-compare to one CPU...
 When = PostTransaction
-Exec = /usr/bin/omarchy-apply-howdy-compare install
+Exec = /bin/bash -c '. /etc/omarchy.conf 2>/dev/null; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'
 EOF
 }
 
@@ -64,7 +64,7 @@ is_wrapper() {
   is_regular_file "$path" || return 1
   first=""
   IFS= read -r first <"$path" || true
-  [[ $first == "#!/bin/bash -p" ]]
+  [[ $first == "#!"* ]]
 }
 
 slot_state() {
