@@ -52,9 +52,9 @@ jq -e '
   (.bar.layout.right | ids) as $ids |
   ($ids | index("omarchy.tray")) as $tray |
   ($ids | index("omarchy.agents")) as $agents |
-  $tray == 0 and $agents == $tray + 1
+  $tray != null and $agents == $tray + 1
 ' "$ROOT/config/omarchy/shell.json" >/dev/null
-pass "default right layout opens with the tray, then agents"
+pass "default right layout keeps agents next to the tray"
 
 ROOT="$ROOT" python3 <<'PY'
 import json

@@ -9,11 +9,8 @@ inside a single long-running Quickshell process (`omarchy-shell`).
 ```
 ~/.config/omarchy/shell.json             # User overrides: bar, plugins, idle
 ~/.config/omarchy/plugins/<plugin-id>/   # User-owned shell plugins
-/usr/share/omarchy/plugins/<plugin-id>/  # Packaged plugins (pacman), e.g. omacom.elsewhen
 $OMARCHY_PATH/config/omarchy/shell.json  # Canonical defaults
 ```
-
-Packaged plugins such as Elsewhen (`elsewhen` package) update with `omarchy update` and are removed with pacman; `omarchy plugin update` and `omarchy plugin remove` refuse them and name the package.
 
 The shell hot-reloads `shell.json` on save — no restart needed for layout
 changes. `idle.screensaver` and `idle.lock` are seconds since user idle began.
