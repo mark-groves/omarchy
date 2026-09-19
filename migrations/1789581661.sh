@@ -10,4 +10,3 @@ fi
 
 omarchy-shell shell rescanPlugins
 omarchy-bar put omacom.elsewhen --before omarchy.clock
-omarchy-restart-shell

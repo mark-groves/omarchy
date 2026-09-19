@@ -23,7 +23,8 @@ printf '%s\n' "${TEST_PUT_RESULT:-ok}"
 SH
 cat >"$test_dir/bin/omarchy-restart-shell" <<'SH'
 #!/bin/bash
-printf 'restart\n' >>"$CALL_LOG"
+echo 'migration must leave the restart to omarchy update' >&2
+exit 1
 SH
 chmod +x "$test_dir/bin/"*
 
@@ -46,9 +47,9 @@ run_migration
 [[ $(readlink "$ROOT/config/omarchy/plugins/omacom.elsewhen") == "$(readlink "$plugin")" ]] || fail "fresh installs use the same package link"
 pass "migration and fresh installs link to the package"
 
-expected=$'package elsewhen\nshell rescanPlugins\nshell putBarWidget omacom.elsewhen {"before":"omarchy.clock"}\nrestart'
-[[ $(cat "$CALL_LOG") == "$expected" ]] || fail "install, scan, placement and restart run in order" "$(cat "$CALL_LOG")"
-pass "real bar helper enables and places before the clock, then restarts"
+expected=$'package elsewhen\nshell rescanPlugins\nshell putBarWidget omacom.elsewhen {"before":"omarchy.clock"}'
+[[ $(cat "$CALL_LOG") == "$expected" ]] || fail "install, scan and placement run in order" "$(cat "$CALL_LOG")"
+pass "real bar helper enables and places before the clock without restarting during reload"
 
 run_migration
 [[ $(cat "$CALL_LOG") == "$expected" ]] || fail "migration can be rerun"
