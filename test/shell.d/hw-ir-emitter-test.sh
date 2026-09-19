@@ -10,21 +10,27 @@ emitter="$ROOT/bin/omarchy-hw-ir-emitter"
 
 sysfs=$(mktemp -d)
 mkdir -p \
-  "$sysfs/class/video4linux/video2" \
   "$sysfs/class/video4linux/video0" \
+  "$sysfs/class/video4linux/video2" \
+  "$sysfs/class/video4linux/video4" \
+  "$sysfs/devices/usb/3-8/3-8:1.0" \
   "$sysfs/devices/usb/3-8/3-8:1.2" \
   "$sysfs/devices/usb/other/other:1.0"
+ln -s ../../../devices/usb/3-8/3-8:1.0 "$sysfs/class/video4linux/video0/device"
 ln -s ../../../devices/usb/3-8/3-8:1.2 "$sysfs/class/video4linux/video2/device"
-ln -s ../../../devices/usb/other/other:1.0 "$sysfs/class/video4linux/video0/device"
+ln -s ../../../devices/usb/other/other:1.0 "$sysfs/class/video4linux/video4/device"
 printf '5986\n' >"$sysfs/devices/usb/3-8/idVendor"
 printf '1195\n' >"$sysfs/devices/usb/3-8/idProduct"
+printf '00\n' >"$sysfs/devices/usb/3-8/3-8:1.0/bInterfaceNumber"
+printf '02\n' >"$sysfs/devices/usb/3-8/3-8:1.2/bInterfaceNumber"
 printf '04f2\n' >"$sysfs/devices/usb/other/idVendor"
 printf 'b7c1\n' >"$sysfs/devices/usb/other/idProduct"
+printf '00\n' >"$sysfs/devices/usb/other/other:1.0/bInterfaceNumber"
 
 got=$("$emitter" --sysfs "$sysfs" --print)
 [[ $got == "video2 unit=14 selector=6 value=1,3,2,0,0,0,0,0,0" ]] ||
-  fail "--sysfs --print prints the one video2 line" "$got"
-pass "--sysfs --print prints the one video2 line"
+  fail "--sysfs --print prints only the IR interface of the Bison camera" "$got"
+pass "--sysfs --print prints only the IR interface of the Bison camera"
 
 empty=$(mktemp -d)
 got=$("$emitter" --sysfs "$empty" --print)
