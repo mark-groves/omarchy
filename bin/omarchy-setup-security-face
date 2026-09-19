@@ -34,6 +34,7 @@ lock_pam=/etc/pam.d/omarchy-lock-face
 lock_tmp=$(mktemp "$lock_pam.new.XXXXXX")
 tee "$lock_tmp" >/dev/null <<'EOF'
 #%PAM-1.0
+auth       optional                    pam_exec.so quiet /usr/bin/omarchy-hw-ir-emitter
 auth       required                    pam_howdy.so
 account    include                     system-local-login
 EOF
