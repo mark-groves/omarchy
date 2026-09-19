@@ -1,0 +1,242 @@
+#!/bin/bash
+
+# omarchy:summary=Pin howdy-compare to one CPU and keep the pin across howdy-next upgrades
+# omarchy:group=apply
+# omarchy:args=install|remove [--root DIR]
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+set -euo pipefail
+
+if (( EUID == 0 )); then
+  export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+fi
+
+usage() {
+  echo "Usage: omarchy-apply-howdy-compare install|remove [--root DIR]" >&2
+}
+
+print_wrapper() {
+  cat <<'EOF'
+#!/bin/bash -p
+# pam_howdy spawns this with an empty environment, and howdy-compare's sandbox
+# caps CPU time at 15 s while OpenCV uses every core. One CPU keeps CPU time
+# equal to wall time. -p keeps euid 0 under sudo, which bash would otherwise
+# drop to the caller and leave compare unable to read the Howdy config.
+export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1
+exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
+EOF
+}
+
+print_hook() {
+  cat <<'EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/howdy/howdy-compare
+
+[Action]
+Description = Pinning howdy-compare to one CPU...
+When = PostTransaction
+Exec = /usr/bin/omarchy-apply-howdy-compare install
+EOF
+}
+
+is_regular_file() {
+  [[ -f $1 && ! -L $1 ]]
+}
+
+is_elf() {
+  local path=$1
+  local magic
+
+  is_regular_file "$path" || return 1
+  magic=$(head -c 4 -- "$path")
+  [[ $magic == $'\x7fELF' ]]
+}
+
+is_wrapper() {
+  local path=$1
+  local first
+
+  is_regular_file "$path" || return 1
+  first=""
+  IFS= read -r first <"$path" || true
+  [[ $first == "#!/bin/bash -p" ]]
+}
+
+slot_state() {
+  if [[ ! -e $compare ]]; then
+    printf '%s\n' absent
+    return
+  fi
+  if is_elf "$compare"; then
+    printf '%s\n' vendor
+    return
+  fi
+  if is_wrapper "$compare"; then
+    if is_elf "$real"; then
+      printf '%s\n' pinned
+      return
+    fi
+  fi
+  printf '%s\n' unknown
+}
+
+refuse_unknown() {
+  echo "howdy-compare is in an unknown state" >&2
+  exit 1
+}
+
+stage_write() {
+  local dest=$1
+  local mode=$2
+  local tmp
+
+  tmp=$(mktemp "$dest.new.XXXXXX")
+  cat >"$tmp"
+  chmod "$mode" "$tmp"
+  mv -Tf "$tmp" "$dest"
+}
+
+stage_copy() {
+  local src=$1
+  local dest=$2
+  local mode=$3
+  local tmp
+
+  tmp=$(mktemp "$dest.new.XXXXXX")
+  cat -- "$src" >"$tmp"
+  chmod "$mode" "$tmp"
+  mv -Tf "$tmp" "$dest"
+}
+
+write_wrapper() {
+  print_wrapper | stage_write "$compare" 755
+}
+
+write_hook() {
+  mkdir -p "$(dirname -- "$hook")"
+  if [[ -f $hook ]] && cmp -s -- "$hook" <(print_hook); then
+    return 0
+  fi
+  print_hook | stage_write "$hook" 644
+  echo "Installing howdy-compare upgrade hook..."
+}
+
+install_pin() {
+  local state
+  state=$(slot_state)
+
+  case $state in
+    vendor)
+      stage_copy "$compare" "$real" 755
+      write_wrapper
+      echo "Pinning howdy-compare to one CPU..."
+      write_hook
+      ;;
+    pinned)
+      if [[ -f $compare ]] && cmp -s -- "$compare" <(print_wrapper); then
+        echo "howdy-compare pin already in place"
+      else
+        write_wrapper
+        echo "Updating howdy-compare pin..."
+      fi
+      write_hook
+      ;;
+    absent)
+      if [[ -e $real ]]; then
+        rm -f -- "$real"
+        echo "Removing leftover howdy-compare.real"
+      fi
+      ;;
+    unknown)
+      refuse_unknown
+      ;;
+  esac
+}
+
+remove_pin() {
+  local state
+  state=$(slot_state)
+
+  case $state in
+    pinned)
+      stage_copy "$real" "$compare" 755
+      rm -f -- "$real"
+      echo "Restoring vendor howdy-compare..."
+      ;;
+    vendor)
+      ;;
+    absent)
+      if [[ -e $real ]]; then
+        rm -f -- "$real"
+        echo "Removing leftover howdy-compare.real"
+      fi
+      ;;
+    unknown)
+      refuse_unknown
+      ;;
+  esac
+
+  if [[ -e $hook ]]; then
+    rm -f -- "$hook"
+    echo "Removing howdy-compare upgrade hook..."
+  fi
+}
+
+action=""
+root=""
+have_root=0
+
+while (( $# > 0 )); do
+  case $1 in
+    install|remove)
+      if [[ -n $action ]]; then
+        usage
+        exit 1
+      fi
+      action=$1
+      shift
+      ;;
+    --root)
+      if (( $# < 2 )); then
+        usage
+        exit 1
+      fi
+      root=$2
+      have_root=1
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z $action ]]; then
+  usage
+  exit 1
+fi
+
+if (( have_root == 0 )) && (( EUID != 0 )); then
+  echo "run as root" >&2
+  exit 1
+fi
+
+compare="$root/usr/lib/howdy/howdy-compare"
+real="$root/usr/lib/howdy/howdy-compare.real"
+hook="$root/etc/pacman.d/hooks/omarchy-howdy-compare.hook"
+
+if [[ $action == "install" ]]; then
+  install_pin
+else
+  remove_pin
+fi
