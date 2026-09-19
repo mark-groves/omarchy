@@ -48,6 +48,7 @@ trap 'rm -rf "$root"' EXIT
 
 mkdir -p "$root/usr/lib/howdy"
 printf '\x7fELF-fake-v1' >"$compare"
+chmod 750 "$compare"
 
 status=$(run_apply install --root "$root")
 (( status == 0 )) || fail "install on vendor exits 0" "$(cat "$err"; echo '---'; cat "$out")"
@@ -56,16 +57,63 @@ cmp -s -- "$real" <(printf '\x7fELF-fake-v1') ||
 assert_wrapper_text "$compare"
 [[ $(file_mode "$compare") == "755" ]] ||
   fail "howdy-compare is mode 755" "$(file_mode "$compare")"
-[[ $(file_mode "$real") == "755" ]] ||
-  fail "howdy-compare.real is mode 755" "$(file_mode "$real")"
+[[ $(file_mode "$real") == "750" ]] ||
+  fail "howdy-compare.real keeps the vendor mode" "$(file_mode "$real")"
 [[ -f $hook ]] || fail "install writes the pacman hook"
 [[ $(file_mode "$hook") == "644" ]] ||
   fail "hook is mode 644" "$(file_mode "$hook")"
 grep -F 'Target = usr/lib/howdy/howdy-compare' "$hook" >/dev/null ||
   fail "hook targets howdy-compare" "$(cat "$hook")"
-grep -F 'Exec = /bin/bash -c '"'"'. /etc/omarchy.conf 2>/dev/null; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'"'"'' "$hook" >/dev/null ||
+grep -F 'omarchy-apply-howdy-compare" install' "$hook" >/dev/null ||
   fail "hook re-runs apply install" "$(cat "$hook")"
+grep -F 'conf=/etc/omarchy.conf' "$hook" >/dev/null ||
+  fail "hook resolves the tree through /etc/omarchy.conf" "$(cat "$hook")"
+grep -F '^0:[0-7][0145][0145]$' "$hook" >/dev/null ||
+  fail "hook only trusts a root-owned conf that only root can write" "$(cat "$hook")"
+if grep -F '2>/dev/null' "$hook" >/dev/null; then
+  fail "hook does not hide conf failures" "$(cat "$hook")"
+fi
 pass "install pins a vendor ELF and writes the upgrade hook"
+
+# Run the hook's Exec script against a scratch conf and a stub tree. Only the
+# fail-closed branches and the no-conf default are reachable without root.
+hook_exec=$(sed -n "s/^Exec = \/usr\/bin\/bash -c '\(.*\)'$/\1/p" "$hook")
+[[ -n $hook_exec ]] || fail "hook Exec is a single bash -c script" "$(cat "$hook")"
+tree=$(mktemp -d)
+mkdir -p "$tree/bin"
+printf '#!/bin/bash\nprintf %%s "$*" >"%s/ran"\n' "$tree" >"$tree/bin/omarchy-apply-howdy-compare"
+chmod 755 "$tree/bin/omarchy-apply-howdy-compare"
+scratch_conf=$tree/omarchy.conf
+hook_exec=${hook_exec/conf=\/etc\/omarchy.conf/conf=$scratch_conf}
+
+set +e
+OMARCHY_PATH=$tree bash -c "$hook_exec" >/dev/null 2>"$err"
+status=$?
+set -e
+(( status == 0 )) && [[ $(cat "$tree/ran") == "install" ]] ||
+  fail "hook Exec without a conf runs the resolved command" "exit $status $(cat "$err")"
+rm -f "$tree/ran"
+
+printf 'export OMARCHY_PATH=%s\n' "$tree" >"$scratch_conf"
+chmod 644 "$scratch_conf"
+set +e
+bash -c "$hook_exec" >/dev/null 2>"$err"
+status=$?
+set -e
+(( status == 1 )) && [[ ! -e $tree/ran ]] ||
+  fail "hook Exec refuses a conf that root does not own" "exit $status $(cat "$err")"
+grep -F 'only root can write' "$err" >/dev/null ||
+  fail "hook Exec names the refused conf" "$(cat "$err")"
+
+chmod 664 "$scratch_conf"
+set +e
+bash -c "$hook_exec" >/dev/null 2>"$err"
+status=$?
+set -e
+(( status == 1 )) && [[ ! -e $tree/ran ]] ||
+  fail "hook Exec refuses a group-writable conf" "exit $status $(cat "$err")"
+rm -rf "$tree"
+pass "hook Exec runs without a conf and fails closed on an untrusted one"
 
 real_sum=$(checksum "$real")
 wrapper_sum=$(checksum "$compare")
@@ -76,6 +124,7 @@ status=$(run_apply install --root "$root")
 pass "install is idempotent on an already pinned slot"
 
 printf '\x7fELF-fake-v2' >"$compare"
+chmod 750 "$compare"
 status=$(run_apply install --root "$root")
 (( status == 0 )) || fail "install after upgrade exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 cmp -s -- "$real" <(printf '\x7fELF-fake-v2') ||
@@ -121,6 +170,8 @@ status=$(run_apply remove --root "$root")
 (( status == 0 )) || fail "remove on pinned exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 cmp -s -- "$compare" <(printf '\x7fELF-fake-v2') ||
   fail "remove restores the v2 ELF to howdy-compare"
+[[ $(file_mode "$compare") == "750" ]] ||
+  fail "remove restores the vendor mode" "$(file_mode "$compare")"
 [[ ! -e $real ]] || fail "remove deletes .real"
 [[ ! -e $hook ]] || fail "remove deletes the hook"
 status=$(run_apply remove --root "$root")

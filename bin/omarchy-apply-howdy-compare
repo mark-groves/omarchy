@@ -40,7 +40,10 @@ Target = usr/lib/howdy/howdy-compare
 [Action]
 Description = Pinning howdy-compare to one CPU...
 When = PostTransaction
-Exec = /bin/bash -c '. /etc/omarchy.conf 2>/dev/null; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'
+# The command is resolved through the same file the rest of the system uses to
+# find the Omarchy tree, because a linked checkout does not ship it in /usr/bin.
+# Only a root-owned conf that nobody else can write may pick a root-run binary.
+Exec = /usr/bin/bash -c 'conf=/etc/omarchy.conf; if [[ -e $conf || -L $conf ]]; then [[ -f $conf && ! -L $conf && $(stat -c %u:%a -- "$conf") =~ ^0:[0-7][0145][0145]$ ]] || { echo "$conf must be a root-owned file that only root can write" >&2; exit 1; }; . "$conf"; fi; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'
 EOF
 }
 
@@ -101,15 +104,15 @@ stage_write() {
   mv -Tf "$tmp" "$dest"
 }
 
+# The vendor binary keeps its own mode, owner, and xattrs (file capabilities
+# live there) on the way to .real and back.
 stage_copy() {
   local src=$1
   local dest=$2
-  local mode=$3
   local tmp
 
   tmp=$(mktemp "$dest.new.XXXXXX")
-  cat -- "$src" >"$tmp"
-  chmod "$mode" "$tmp"
+  cp -a -- "$src" "$tmp"
   mv -Tf "$tmp" "$dest"
 }
 
@@ -132,7 +135,7 @@ install_pin() {
 
   case $state in
     vendor)
-      stage_copy "$compare" "$real" 755
+      stage_copy "$compare" "$real"
       write_wrapper
       echo "Pinning howdy-compare to one CPU..."
       write_hook
@@ -164,7 +167,7 @@ remove_pin() {
 
   case $state in
     pinned)
-      stage_copy "$real" "$compare" 755
+      stage_copy "$real" "$compare"
       rm -f -- "$real"
       echo "Restoring vendor howdy-compare..."
       ;;
