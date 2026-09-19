@@ -58,6 +58,9 @@ omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so
 echo "Configuring polkit for face authentication..."
 omarchy-apply-polkit-pam add face
 
+echo "Pinning howdy-compare to one CPU..."
+omarchy-apply-howdy-compare install
+
 echo -e "\e[32m\nFace authentication is now used for lock, sudo, and system prompts.\e[0m"
 echo "Password remains the fallback. Look at the lid camera when asked."
 echo "This command does not enroll. Change the face with howdy."
