@@ -51,4 +51,21 @@ set -e
 (( status == 0 )) || fail "no arguments exits 0" "exit $status"
 pass "no arguments exits 0"
 
+grep -F 'signal.alarm(WATCHDOG_SECONDS)' "$emitter" >/dev/null ||
+  fail "the device walk runs under a SIGALRM watchdog"
+grep -E 'WATCHDOG_SECONDS = [12]$' "$emitter" >/dev/null ||
+  fail "the watchdog is a second or two, not a login-length wait"
+grep -F 'os.O_RDWR | os.O_NONBLOCK' "$emitter" >/dev/null ||
+  fail "device nodes open non-blocking"
+# The same handler shape against a syscall that never returns: exit 0 on time.
+start=$SECONDS
+status=0
+python3 -c 'import os, signal, time
+signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
+signal.alarm(1)
+time.sleep(30)' || status=$?
+(( status == 0 )) || fail "watchdog exits 0 when the syscall never returns" "exit $status"
+(( SECONDS - start < 5 )) || fail "watchdog fires within its budget" "$(( SECONDS - start ))s"
+pass "a stalled ioctl is cut by the watchdog and still exits 0"
+
 rm -rf "$sysfs" "$empty"
