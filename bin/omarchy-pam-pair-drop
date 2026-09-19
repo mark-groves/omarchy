@@ -13,7 +13,7 @@ if (( EUID == 0 )); then
 fi
 
 readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
-readonly EMITTER_HELPER=/usr/bin/omarchy-hw-ir-emitter
+readonly EMITTER_HELPER=/usr/local/bin/omarchy-hw-ir-emitter
 
 is_gate_line() {
   [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]

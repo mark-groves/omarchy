@@ -29,5 +29,10 @@ if [[ -f /etc/pam.d/polkit-1 ]]; then
   omarchy-apply-polkit-pam remove face
 fi
 
+if [[ -e /usr/local/bin/omarchy-hw-ir-emitter ]]; then
+  echo "Removing the IR emitter helper..."
+  rm -f /usr/local/bin/omarchy-hw-ir-emitter
+fi
+
 echo -e "\e[32mFace authentication has been removed from lock, sudo, and system prompts.\e[0m"
 echo "Password is still the way in. Howdy models are unchanged."
