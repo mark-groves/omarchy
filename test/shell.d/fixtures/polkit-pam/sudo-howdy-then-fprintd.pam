@@ -1,5 +1,6 @@
 #%PAM-1.0
-auth      [success=1 default=ignore] pam_exec.so quiet /usr/bin/omarchy-hw-laptop-closed
+auth      [success=2 default=ignore] pam_exec.so quiet /usr/bin/omarchy-hw-laptop-closed
+auth      optional pam_exec.so quiet /usr/bin/omarchy-hw-ir-emitter
 auth      sufficient pam_howdy.so
 auth      [success=1 default=ignore] pam_exec.so quiet /usr/bin/omarchy-hw-laptop-closed
 auth      sufficient pam_fprintd.so

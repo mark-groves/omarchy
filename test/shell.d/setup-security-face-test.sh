@@ -21,6 +21,12 @@ grep -F '/etc/pam.d/omarchy-lock-face' "$setup" >/dev/null ||
   fail "face setup writes omarchy-lock-face"
 grep -F 'auth       required                    pam_howdy.so' "$setup" >/dev/null ||
   fail "lock face is a required howdy conversation"
+grep -F 'auth       optional                    pam_exec.so quiet /usr/bin/omarchy-hw-ir-emitter' "$setup" >/dev/null ||
+  fail "lock face fires the IR emitter"
+emitter_line=$(grep -nF 'omarchy-hw-ir-emitter' "$setup" | head -n1)
+howdy_line=$(grep -nF 'auth       required                    pam_howdy.so' "$setup" | head -n1)
+(( ${howdy_line%%:*} == ${emitter_line%%:*} + 1 )) ||
+  fail "lock face emitter sits on the line before pam_howdy.so"
 grep -F 'chmod 644' "$setup" >/dev/null ||
   fail "lock face is mode 0644"
 

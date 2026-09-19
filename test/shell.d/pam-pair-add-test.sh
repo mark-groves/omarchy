@@ -24,9 +24,11 @@ assert_print_matches() {
 assert_print_matches "$fixtures/sudo-vendor.pam" "$fixtures/sudo-vendor-plus-howdy.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-vendor-plus-howdy.pam" "$fixtures/sudo-vendor-plus-howdy.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-howdy-only.pam" "$fixtures/sudo-howdy-only.pam" pam_howdy.so
+assert_print_matches "$fixtures/sudo-howdy-pair-legacy.pam" "$fixtures/sudo-howdy-only.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-howdy-no-gate.pam" "$fixtures/sudo-howdy-only.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-fprintd-only.pam" "$fixtures/sudo-howdy-then-fprintd.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-howdy-only.pam" "$fixtures/sudo-fprintd-then-howdy.pam" pam_fprintd.so
+assert_print_matches "$fixtures/sudo-fprintd-only.pam" "$fixtures/sudo-fprintd-only.pam" pam_fprintd.so
 assert_print_matches "$fixtures/sudo-fprintd-plus-howdy.pam" "$fixtures/sudo-fprintd-plus-howdy.pam" pam_howdy.so
 
 roundtrip=$(mktemp)

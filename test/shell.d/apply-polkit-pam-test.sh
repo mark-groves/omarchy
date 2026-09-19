@@ -103,6 +103,16 @@ assert_print_matches "$fixtures/face-only.pam" "$fixtures/face-only.pam" add fac
 assert_print_matches "$fixtures/face-only.pam" "$fixtures/face-plus-fingerprint.pam" add fingerprint
 assert_print_matches "$fixtures/face-only.pam" "$fixtures/face-plus-fido2.pam" add fido2
 
+remove_face=$(mktemp)
+print_from "$fixtures/face-plus-fingerprint.pam" remove face >"$remove_face"
+if grep -q omarchy-hw-ir-emitter "$remove_face"; then
+  fail "remove face leaves no omarchy-hw-ir-emitter" "$(cat "$remove_face")"
+fi
+grep -q '\[success=1 default=ignore\]' "$remove_face" ||
+  fail "remove face leaves success=1" "$(cat "$remove_face")"
+rm -f "$remove_face"
+pass "remove face on face-plus-fingerprint leaves no emitter and success=1"
+
 missing="$fixtures/does-not-exist.pam"
 assert_print_matches "$missing" "$fixtures/face-only.pam" add face
 

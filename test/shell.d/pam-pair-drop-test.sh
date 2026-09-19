@@ -21,6 +21,7 @@ assert_print_matches() {
 }
 
 assert_print_matches "$fixtures/sudo-fprintd-plus-howdy.pam" "$fixtures/sudo-howdy-after-drop-fprintd.pam" pam_fprintd.so
+assert_print_matches "$fixtures/sudo-fprintd-plus-howdy.pam" "$fixtures/sudo-fprintd-only.pam" pam_howdy.so
 assert_print_matches "$fixtures/sudo-howdy-only.pam" "$fixtures/sudo-howdy-only.pam" pam_fprintd.so
 
 mutated=$(mktemp)
