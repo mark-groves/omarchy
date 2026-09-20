@@ -11,18 +11,29 @@ mkdir -p "$tmp_dir/bin" "$tmp_dir/state"
 
 cat >"$tmp_dir/bin/powerprofilesctl" <<'EOF'
 #!/bin/bash
-
-if [[ $1 == "list" ]]; then
-  printf '  power-saver:\n* balanced:\n  performance:\n'
-elif [[ $1 == "set" ]]; then
-  [[ ${POWERPROFILES_SET_FAIL:-0} == "0" ]] || exit 1
-  printf '%s\n' "$2" >>"$POWERPROFILES_LOG"
-fi
+echo "powerprofilesctl must not run: $*" >&2
+exit 1
 EOF
 chmod +x "$tmp_dir/bin/powerprofilesctl"
 
 cat >"$tmp_dir/bin/busctl" <<'EOF'
 #!/bin/bash
+
+if [[ $1 == --json=short && $2 == get-property && $6 == Profiles ]]; then
+  printf '%s\n' '{"type":"aa{sv}","data":[{"Profile":{"type":"s","data":"power-saver"}},{"Profile":{"type":"s","data":"balanced"}},{"Profile":{"type":"s","data":"performance"}}]}'
+  exit 0
+fi
+
+if [[ $1 == --json=short && $2 == get-property && $6 == ActiveProfile ]]; then
+  printf '%s\n' '{"type":"s","data":"balanced"}'
+  exit 0
+fi
+
+if [[ $1 == set-property && $5 == ActiveProfile ]]; then
+  [[ ${POWERPROFILES_SET_FAIL:-0} == "0" ]] || exit 1
+  printf '%s\n' "$7" >>"$POWERPROFILES_LOG"
+  exit 0
+fi
 
 if [[ ${ON_BATTERY:-0} == "1" ]]; then
   echo "b true"
@@ -77,6 +88,6 @@ rg -F '["omarchy-powerprofiles-set", pendingPowerSource]' "$ROOT/shell/plugins/s
   fail "battery service applies profiles through Omarchy command"
 pass "battery service applies profiles through Omarchy command"
 
-rg -F 'omarchy-powerprofiles-set autodetect' "$ROOT/shell/plugins/menu/Menu.qml" >/dev/null ||
-  fail "power profile menu persists selections through Omarchy command"
-pass "power profile menu persists selections through Omarchy command"
+rg -F '["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]' "$ROOT/shell/plugins/panels/power/Panel.qml" >/dev/null ||
+  fail "power panel applies profiles through Omarchy command"
+pass "power panel applies profiles through Omarchy command"
