@@ -50,7 +50,7 @@ QtObject {
 
   onPluginRegistryChanged: bindFromRegistry(pluginRegistry)
 
-  Connections {
+  property Connections registryConnections: Connections {
     target: root.pluginRegistry
     function onRegistryRevisionChanged() { root.bindFromRegistry(root.pluginRegistry) }
     function onPluginsChanged() { root.bindFromRegistry(root.pluginRegistry) }

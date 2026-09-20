@@ -325,6 +325,10 @@ assert(
   'FaceChrome discovers an enabled polkitFace module from the registry'
 )
 assert(
+  /property Connections registryConnections/.test(chrome),
+  'registry listeners are a property; QtObject has no default child slot'
+)
+assert(
   /entryPoints\.polkitFace/.test(chrome) && /polkit-chrome/.test(chrome),
   'chrome discovery uses the same kind and slot key as the polkit resolver'
 )
