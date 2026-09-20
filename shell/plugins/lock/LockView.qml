@@ -35,9 +35,9 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: (fingerprintConfigured || faceConfigured) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
-  // The card replaces the static face glyph in the same slot, so the field
-  // keeps its geometry whether or not chrome is installed.
+  readonly property real fingerprintReserve: (fingerprintConfigured || (faceConfigured && !faceCardPainting)) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
+  // The card sits above the field so the mesh scan is large enough to read.
+  // Without chrome the in-field glyph keeps the old 381×67 geometry.
   readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
@@ -126,6 +126,58 @@ Item {
       hoverEnabled: true
       onClicked: { root.wakeRequested(); root.forcePasswordFocus() }
       onPositionChanged: root.wakeRequested()
+    }
+
+    // Host-owned. The chrome plugin supplies numbers and never sees this
+    // item or the field it sits above. Sized like the polkit card so the
+    // mesh, sweep, and instrument arcs actually paint — the old 26 px
+    // in-field slot collapsed to a static-looking glyph.
+    Column {
+      id: faceCard
+      objectName: "faceCard"
+      visible: root.faceCardPainting
+      enabled: false
+      spacing: Style.space(10)
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.bottom: inputField.top
+      anchors.bottomMargin: Style.space(18)
+
+      FaceChromeCanvas {
+        objectName: "faceCardIndicator"
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Style.space(116)
+        height: width
+        visible: faceCard.visible
+        cardState: root.faceState
+        active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
+        accent: Color.lock.borderActive
+        foreground: Color.lock.text
+        errorColor: Color.lock.textError
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        anchors.horizontalCenter: parent.horizontalCenter
+        text: root.faceState === "notRecognized"
+          ? "Face not recognized"
+          : (root.faceState === "recognized" ? "Face recognized" : "Look at the camera")
+        color: root.faceState === "notRecognized" ? Color.lock.textError : Color.lock.text
+        opacity: 0.86
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        anchors.horizontalCenter: parent.horizontalCenter
+        text: root.faceState === "notRecognized" ? "Type your password"
+          : (root.faceState === "scanning" ? "or type your password" : "")
+        visible: text !== ""
+        color: Color.lock.text
+        opacity: 0.44
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+      }
     }
 
     BorderSurface {
@@ -239,23 +291,6 @@ Item {
         verticalAlignment: Text.AlignVCenter
       }
 
-      // Host-owned. The chrome plugin supplies numbers and never sees this
-      // item or the field it sits inside.
-      FaceChromeCanvas {
-        objectName: "faceCardIndicator"
-        anchors.right: parent.right
-        anchors.rightMargin: inputField.borderRight + 18
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.round(root.fieldFontSize * 1.45)
-        height: width
-        visible: root.faceCardPainting
-        enabled: false
-        cardState: root.faceState
-        active: root.inputEnabled || root.faceScanning
-        accent: Color.lock.borderActive
-        foreground: Color.lock.text
-        errorColor: Color.lock.textError
-      }
     }
   }
 }

@@ -157,6 +157,7 @@ ShellRoot {
     // case the user dir already existed at startup.
     pluginRegistry.rescan()
     shell._syncServices()
+    FaceChrome.pluginRegistry = pluginRegistry
   }
 
   function mutateShellConfig(mutator) {

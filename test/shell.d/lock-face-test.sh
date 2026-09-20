@@ -112,18 +112,43 @@ assert(
 )
 
 assert(
+  /property var pluginRegistry/.test(serviceQml),
+  'lock declares pluginRegistry so ensureService injects the real registry'
+)
+assert(
+  /FaceChrome\.pluginRegistry\s*=\s*pluginRegistry/.test(serviceQml),
+  'lock points the shared chrome loader at the registry, not at a polkit slot'
+)
+assert(
   /FaceChromeCanvas/.test(viewQml) && /objectName:\s*"faceCardIndicator"/.test(viewQml),
-  'the lock field paints the shared card in the face slot'
+  'lock paints the shared card above the password field'
+)
+assert(
+  /width:\s*Style\.space\(116\)/.test(viewQml),
+  'the lock card is the 116 px mesh size, not the 26 px in-field glyph slot'
+)
+assert(
+  /Look at the camera/.test(viewQml) && /or type your password/.test(viewQml),
+  'the lock card keeps the scan hint and the password fallback'
 )
 assert(
   /id: faceIcon[\s\S]*?visible:[^\n]*!root\.faceCardPainting/.test(viewQml),
   'the static glyph yields to the card rather than drawing under it'
 )
-const canvasBlock = viewQml.match(/FaceChromeCanvas\s*\{[\s\S]*?\n      \}/)
-assert(canvasBlock && /enabled:\s*false/.test(canvasBlock[0]),
-  'the card beside the password field cannot take focus')
+assert(
+  /id: faceCard[\s\S]*?enabled:\s*false/.test(viewQml),
+  'the card above the password field cannot take focus'
+)
+assert(
+  /objectName:\s*"faceCardIndicator"[\s\S]*?visible:\s*faceCard\.visible/.test(viewQml),
+  'the lock canvas follows the card so FrameAnimation stops when the card hides'
+)
 assert(
   !/chrome\s*=/.test(viewQml) && !/Loader/.test(viewQml),
   'lock never loads a plugin Item next to its password field'
+)
+assert(
+  /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
+  'lock preview keeps the scan animation running only while the preview is shown'
 )
 JS

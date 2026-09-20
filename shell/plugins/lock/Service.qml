@@ -10,6 +10,9 @@ Item {
 
   property var shell: null
   property string omarchyPath: ""
+  // First-party injection: the real registry, so lock can load face chrome
+  // without waiting for a polkit dialog to point FaceChrome at the plugin.
+  property var pluginRegistry: null
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
@@ -401,7 +404,7 @@ Item {
       fingerprintConfigured: root.fingerprintConfigured
       faceConfigured: root.faceConfigured
       faceState: "scanning"
-      faceScanning: false
+      faceScanning: root.previewVisible && root.faceConfigured
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0
@@ -727,7 +730,10 @@ Item {
     checkStrandedLock()
   }
 
+  onPluginRegistryChanged: FaceChrome.pluginRegistry = pluginRegistry
+
   Component.onCompleted: {
+    if (pluginRegistry) FaceChrome.pluginRegistry = pluginRegistry
     refreshBackground()
     refreshFingerprintStatus()
     refreshFaceStatus()

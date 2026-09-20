@@ -29,6 +29,12 @@ QtObject {
   // file:// URL of the plugin's entry point, resolved by the host registry.
   property string sourceUrl: ""
 
+  // The host registry. Lock and the shell bind this so the card loads even
+  // when polkit has never shown a face dialog. Discovery matches
+  // PolkitModel.resolveChromeSlot("face"): enabled third-party
+  // `polkit-chrome` with a `polkitFace` entry, lowest id wins.
+  property var pluginRegistry: null
+
   property var api: null
   property string failure: ""
   property int revision: 0
@@ -40,6 +46,48 @@ QtObject {
     failure = ""
     if (sourceUrl === "") pluginFile.path = ""
     else pluginFile.path = root.pathFor(sourceUrl)
+  }
+
+  onPluginRegistryChanged: bindFromRegistry(pluginRegistry)
+
+  property Connections registryConnections: Connections {
+    target: root.pluginRegistry
+    function onRegistryRevisionChanged() { root.bindFromRegistry(root.pluginRegistry) }
+    function onPluginsChanged() { root.bindFromRegistry(root.pluginRegistry) }
+  }
+
+  function urlFromRegistry(registry) {
+    if (!registry || !registry.installedPlugins) return ""
+    var plugins = registry.installedPlugins
+    var eligible = []
+    var id
+    for (id in plugins) {
+      var manifest = plugins[id]
+      if (!manifest || typeof manifest !== "object") continue
+      if (manifest.__isFirstParty) continue
+      if (!Array.isArray(manifest.kinds) || manifest.kinds.indexOf("polkit-chrome") === -1) continue
+      if (!manifest.entryPoints || typeof manifest.entryPoints.polkitFace !== "string") continue
+      if (!manifest.entryPoints.polkitFace) continue
+      if (typeof registry.isEnabled !== "function" || !registry.isEnabled(id)) continue
+      var url = typeof registry.entryPointUrl === "function" ? registry.entryPointUrl(manifest, "polkitFace") : ""
+      if (!url) continue
+      eligible.push({ id: id, url: url })
+    }
+    if (!eligible.length) return ""
+    eligible.sort(function(a, b) {
+      if (a.id < b.id) return -1
+      if (a.id > b.id) return 1
+      return 0
+    })
+    return eligible[0].url
+  }
+
+  // Point the shared loader at the installed face chrome plugin. Surfaces
+  // call this; they do not wait for a polkit prompt to have resolved a slot.
+  function bindFromRegistry(registry) {
+    var url = root.urlFromRegistry(registry)
+    if (url === root.sourceUrl) return
+    root.sourceUrl = url
   }
 
   function pathFor(url) {

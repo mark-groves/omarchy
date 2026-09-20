@@ -64,7 +64,15 @@ Item {
   readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
 
-  onSlotUrlChanged: FaceChrome.sourceUrl = root.slotUrl
+  onSlotUrlChanged: {
+    // FaceChrome is the face module. An empty slot is a missing dialog.
+    // A fingerprint slot is a different entry point. Either write would
+    // drop the shared face module out from under the lock screen.
+    if (root.slotUrl !== "" && presentation && presentation.slot
+        && presentation.slot.entryPointKey === "polkitFace") {
+      FaceChrome.sourceUrl = root.slotUrl
+    }
+  }
 
   onRegistryRevisionChanged: {
     if (failedSlotRevision === registryRevision) return
