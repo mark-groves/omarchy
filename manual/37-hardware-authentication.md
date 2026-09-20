@@ -16,7 +16,7 @@ If Howdy is installed, _Setup > Security > Face_ in the Omarchy menu (`Super + S
 
 Setup Face asks for authorization through the system prompt, then writes those PAM files as root. The write does not go through `sudo`, so it cannot start a face compare that cannot read the Howdy config. The privileged step uses the Omarchy tree that launched the command, so a linked checkout can finish `sudo` and system prompts, not only the lock file.
 
-It does not enroll a face. Enroll or change the model with `howdy add`. Every prompt uses that one model. It does not change LUKS or login. When the lid is closed, the camera is skipped and you type the password. On cameras whose infrared emitter needs a UVC control (the Bison IR camera in the Yoga Pro 9, for one), each scan switches the emitter on first, because that camera forgets the setting whenever it goes idle. If face misses, the password field is still there.
+It does not enroll a face. Enroll or change the model with `howdy add`. Every prompt uses that one model. It does not change LUKS or login. When the lid is closed, the camera is skipped and you type the password. On cameras whose infrared emitter needs a UVC control (the Bison IR camera in the Yoga Pro 9, for one), each scan switches the emitter on first, because that camera forgets the setting whenever it goes idle. Setup Face also pins Howdy's compare process to one CPU and keeps that pin across `howdy-next` upgrades, so a missed scan is not killed by the sandbox's CPU limit before the timeout. If face misses, the password field is still there.
 
 You can remove it under _Remove > Security > Face_. That takes face off the lock screen, `sudo`, and system prompts. The password still works. Howdy models stay until you remove them with howdy.
 

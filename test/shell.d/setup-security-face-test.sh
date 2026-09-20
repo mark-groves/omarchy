@@ -15,6 +15,8 @@ grep -F 'polkit-agent-helper@.service.d/10-howdy.conf' "$setup" >/dev/null ||
   fail "face setup requires the Howdy polkit helper drop-in"
 grep -F 'omarchy-apply-polkit-pam add face' "$setup" >/dev/null ||
   fail "face setup adds face through the polkit compiler"
+grep -F 'omarchy-apply-howdy-compare install' "$setup" >/dev/null ||
+  fail "face setup pins howdy-compare"
 grep -F 'omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so' "$setup" >/dev/null ||
   fail "face setup pair-adds sudo howdy"
 grep -F '/etc/pam.d/omarchy-lock-face' "$setup" >/dev/null ||
@@ -51,6 +53,8 @@ pass "face setup checks Howdy and writes lock, sudo, and polkit"
 
 grep -F 'omarchy-apply-polkit-pam remove face' "$remove" >/dev/null ||
   fail "face remove goes through the polkit compiler"
+grep -F 'omarchy-apply-howdy-compare remove' "$remove" >/dev/null ||
+  fail "face remove unpins howdy-compare"
 grep -F 'omarchy-pam-pair-drop /etc/pam.d/sudo pam_howdy.so' "$remove" >/dev/null ||
   fail "face remove pair-drops sudo howdy"
 grep -F '/etc/pam.d/omarchy-lock-face' "$remove" >/dev/null ||
@@ -274,13 +278,13 @@ run_isolated_privileged_tree() {
 
 if (( EUID != 0 )) && (( howdy_present == 1 )); then
   run_isolated_privileged_tree "$setup" "face setup" \
-    omarchy-pam-pair-add omarchy-apply-polkit-pam
+    omarchy-pam-pair-add omarchy-apply-polkit-pam omarchy-apply-howdy-compare
   pass "privileged face setup runs checkout pair-add and the polkit compiler"
 fi
 
 if (( EUID != 0 )); then
   run_isolated_privileged_tree "$remove" "face remove" \
-    omarchy-pam-pair-drop omarchy-apply-polkit-pam
+    omarchy-pam-pair-drop omarchy-apply-polkit-pam omarchy-apply-howdy-compare
   pass "privileged face remove runs checkout pair-drop and the polkit compiler"
 fi
 
