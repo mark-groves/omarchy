@@ -35,6 +35,8 @@ wait).
 | `menu`       | Summoned menu surface                          |
 | `service`    | Headless singleton, no UI                      |
 
+A third-party plugin may also declare the unrecognized kind `polkit-chrome` plus an extra `entryPoints.polkitFace` (or `polkitFingerprint`) key. The host creates no instance of that plugin and does not load the entry point into the authentication card. See [polkit chrome slot](polkit-chrome-slot.md).
+
 Only one full bar option is active at a time. The built-in `omarchy.bar` is
 used when `bar.id` is omitted or when a selected third-party bar cannot load.
 Panels, overlays, and menus are loaded when summoned. Plugins can set the top-level manifest key `keepLoaded: true` to survive between summons, and to keep a service mounted across plugin hot-reload (so `omarchy.lock` is not destroyed while Hyprland still holds the session lock). First-party services are loaded at startup.
@@ -87,6 +89,10 @@ section; enabling a full bar replaces the one in use. `omarchy bar` drives the
 bar from the CLI — `use | reset | defaults | position | transparent | put |
 move | set`, with placement flags such as `--section` and `--index`.
 The lower-level IPC methods remain available through `omarchy-shell shell ...`.
+
+## Elsewhen
+
+Elsewhen (`omacom.elsewhen`) ships in the `elsewhen` package at `/usr/share/omarchy/plugins/omacom.elsewhen`. A symlink in `~/.config/omarchy/plugins/` makes it available to the shell. New installs place it immediately before the clock; the migration uses `omarchy bar put omacom.elsewhen --before omarchy.clock`, which preserves an existing placement and uses Elsewhen's normal right-side placement if the clock is absent. Existing plugin directories and symlinks are left intact. The normal update flow restarts the shell after migrations; the migration does not interrupt plugin loading with an immediate restart.
 
 ## IPC
 

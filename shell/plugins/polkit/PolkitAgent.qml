@@ -32,34 +32,90 @@ Item {
   property bool responseVisible: false
   property bool failed: false
   property bool errorFlash: false
-  // pam_fprintd appears in the polkit PAM stack (a sensor is enrolled).
-  property bool fingerprintConfigured: false
-  // Lid shut right now — the reader is physically unreachable, so we fall back
-  // to the password even when a sensor is enrolled. Refreshed per request.
+  property string pamRaw: ""
   property bool laptopClosed: false
   property int shakeOffset: 0
 
+  property var pluginRegistry: null
+  property var failedSlotUrls: ({})
+  property int failedSlotRevision: 0
+  property string lastChromeLog: ""
+
   readonly property bool dialogVisible: polkitAgent.isActive || closing
-  // We show one method at a time. Fingerprint owns the dialog while PAM is
-  // waiting on the reader (lid open, sensor enrolled); the moment PAM asks for
-  // a password — including immediately when the lid is shut and the clamshell
-  // gate skips pam_fprintd — we switch to the password field instead.
-  readonly property bool fingerprintMode: fingerprintConfigured && !laptopClosed && dialogVisible && !responseRequired && !submitted && !errorFlash
-  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2
-  // Password mode is a wide field; fingerprint mode collapses to a square that
-  // just frames the centered sensor icon.
-  readonly property int cardWidth: fingerprintMode ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+  readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
+  readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
+  readonly property int registryRevision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0
+  readonly property var slotSource: ({
+    registry: root.pluginRegistry,
+    revision: root.registryRevision,
+    failedUrls: root.failedSlotUrls,
+    failedRevision: root.failedSlotRevision
+  })
+  readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
+  readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
+  readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
+  readonly property bool slotPainting: FaceChrome.ready && root.slotUrl !== ""
+  // A miss holds the not-recognized frame before the password row replaces it.
+  property bool missHold: false
+  property string faceState: "scanning"
+  readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold)
+  readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold
+  readonly property int slotExtra: root.showFaceChrome && presentation && presentation.extraSpace ? Style.space(presentation.extraSpace) : 0
+  readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
+  readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
+
+  onSlotUrlChanged: FaceChrome.sourceUrl = root.slotUrl
+
+  onRegistryRevisionChanged: {
+    if (failedSlotRevision === registryRevision) return
+    failedSlotUrls = ({})
+    failedSlotRevision = registryRevision
+  }
 
   function authorizationLabel(message) {
     return PolkitModel.authorizationLabel(message)
   }
 
+  function noteSlotFailure(url) {
+    var key = String(url || "")
+    if (!key || (root.failedSlotUrls && root.failedSlotUrls[key])) return
+    var next = {}
+    var existing
+    for (existing in root.failedSlotUrls) next[existing] = root.failedSlotUrls[existing]
+    next[key] = true
+    root.failedSlotUrls = next
+    root.failedSlotRevision = root.registryRevision
+    console.warn("polkit chrome failed to load, keeping first-party card:", key)
+  }
+
+  onPresentationChanged: {
+    var line = PolkitModel.chromeSlotDiagnostic(presentation)
+    if (!line || !presentation || !presentation.slot) return
+    var key = presentation.slot.pluginId + "@" + presentation.slot.revision
+    if (key === lastChromeLog) return
+    lastChromeLog = key
+    console.log(line)
+  }
+
   function loadPamConfig(raw) {
-    fingerprintConfigured = PolkitModel.fingerprintConfiguredFromPamConfig(raw)
+    pamRaw = String(raw || "")
   }
 
   function refreshLidState() {
     if (!laptopClosedProc.running) laptopClosedProc.running = true
+  }
+
+  // Howdy has no "not recognized" exit; PAM simply falls through to asking for
+  // a password. That fall-through is the miss, so the card holds the
+  // not-recognized frame before the password row takes over.
+  function noteFaceMiss() {
+    if (!slotPainting || faceState !== "scanning") return
+    var hold = FaceChrome.holdMs("notRecognized")
+    if (hold <= 0) return
+    faceState = "notRecognized"
+    missHold = true
+    missTimer.interval = hold
+    missTimer.restart()
   }
 
   function resetSnapshot() {
@@ -90,6 +146,10 @@ Item {
 
   function beginFlow() {
     closeTimer.stop()
+    successTimer.stop()
+    missTimer.stop()
+    missHold = false
+    faceState = "scanning"
     closing = false
     submitted = false
     passwordInput.text = ""
@@ -100,10 +160,8 @@ Item {
 
   function refocus() {
     if (!dialogVisible) return
-    // In fingerprint mode there is no field to type into — park focus on the
-    // key catcher so Escape still cancels; otherwise focus the password field.
-    if (fingerprintMode) keyCatcher.forceActiveFocus()
-    else passwordInput.forceActiveFocus()
+    if (root.showPasswordRow) passwordInput.forceActiveFocus()
+    else keyCatcher.forceActiveFocus()
   }
 
   function submitResponse() {
@@ -144,6 +202,28 @@ Item {
     }
   }
 
+  // A successful face match closes the dialog. Hold it open just long enough
+  // for the card to finish, then close exactly as before. PAM has already
+  // succeeded by this point, so this delays pixels, not authorization.
+  Timer {
+    id: successTimer
+    repeat: false
+    onTriggered: {
+      root.closing = true
+      closeTimer.restart()
+    }
+  }
+
+  Timer {
+    id: missTimer
+    repeat: false
+    onTriggered: {
+      root.missHold = false
+      root.faceState = "scanning"
+      Qt.callLater(root.refocus)
+    }
+  }
+
   Timer {
     id: errorTimer
     interval: 1200
@@ -162,7 +242,7 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: root.loadPamConfig(text())
-    onLoadFailed: root.fingerprintConfigured = false
+    onLoadFailed: root.pamRaw = ""
     onFileChanged: reload()
   }
 
@@ -192,6 +272,7 @@ Item {
     target: polkitAgent.flow
 
     function onIsResponseRequiredChanged() {
+      if (polkitAgent.flow && polkitAgent.flow.isResponseRequired) root.noteFaceMiss()
       root.syncFromFlow()
       if (!polkitAgent.flow || !polkitAgent.flow.isResponseRequired) passwordInput.text = ""
       Qt.callLater(root.refocus)
@@ -208,6 +289,17 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
+      if (root.showFaceChrome) {
+        var hold = FaceChrome.holdMs("recognized")
+        if (hold > 0) {
+          root.faceState = "recognized"
+          root.missHold = false
+          missTimer.stop()
+          successTimer.interval = hold
+          successTimer.restart()
+          return
+        }
+      }
       root.closing = true
       closeTimer.restart()
     }
@@ -268,22 +360,98 @@ Item {
         }
       }
 
-      // Fingerprint mode shows just the sensor icon, centered and alone \u2014 no
-      // padlock, no field, no prompt text.
-      OpticalGlyph {
+      // Host-owned. The chrome plugin supplies numbers and never sees this
+      // item, this window, or the field beside it.
+      Column {
+        id: faceChrome
         anchors.centerIn: parent
-        width: Math.round(root.fieldHeight * 0.7)
-        height: width
-        visible: root.fingerprintMode
-        text: "\udb80\ude37"
-        fontFamily: root.fontFamily
-        fontSize: Math.round(root.fieldHeight * 0.7)
-        color: root.errorFlash ? Color.polkit.textError : root.accent
+        spacing: Style.space(10)
+        width: parent.width - card.contentLeftInset - card.contentRightInset
+        opacity: root.showFaceChrome ? 1 : 0
+        visible: opacity > 0
+        enabled: false
+
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
+        FaceChromeCanvas {
+          id: faceCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Math.min(parent.width, Style.space(116))
+          height: width
+          cardState: root.faceState
+          active: root.dialogVisible
+          accent: root.accent
+          foreground: root.foreground
+          errorColor: Color.polkit.textError
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.faceState === "notRecognized"
+            ? "Face not recognized"
+            : (root.faceState === "recognized" ? "Face recognized" : root.presentation.chromeHint)
+          color: root.faceState === "notRecognized" ? Color.polkit.textError : root.foreground
+          opacity: 0.86
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.faceState === "notRecognized" ? "Type your password"
+            : (root.faceState === "scanning" ? "Esc cancels" : "")
+          visible: text !== ""
+          color: root.foreground
+          opacity: 0.44
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+
+      Row {
+        id: defaultChrome
+        anchors.centerIn: parent
+        spacing: Style.space(10)
+        opacity: root.cardKind !== "password" && !root.showFaceChrome ? 1 : 0
+        visible: opacity > 0
+        enabled: visible
+
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
+        OpticalGlyph {
+          width: Math.round(root.fieldHeight * 0.7)
+          height: width
+          text: root.presentation.glyph
+          fontFamily: root.fontFamily
+          fontSize: Math.round(root.fieldHeight * 0.7)
+          color: root.errorFlash ? Color.polkit.textError : root.accent
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          text: root.presentation.hint
+          visible: text !== ""
+          color: root.errorFlash ? Color.polkit.textError : root.foreground
+          opacity: 0.72
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          verticalAlignment: Text.AlignVCenter
+          elide: Text.ElideRight
+        }
       }
 
       Row {
         id: cardRow
-        visible: !root.fingerprintMode
+        opacity: root.showPasswordRow ? 1 : 0
+        visible: opacity > 0
+        enabled: root.showPasswordRow
         anchors.fill: parent
         anchors.topMargin: card.contentTopInset
         anchors.rightMargin: card.contentRightInset
@@ -291,8 +459,13 @@ Item {
         anchors.leftMargin: card.contentLeftInset
         spacing: Style.space(14)
 
+        Behavior on opacity {
+          NumberAnimation { duration: 160 }
+        }
+
         Text {
-          text: "\uf023"
+          textFormat: Text.PlainText
+          text: root.presentation.glyph
           color: root.errorFlash ? Color.polkit.textError : root.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.iconLarge
@@ -336,7 +509,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : "Enter password")
+            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : root.presentation.hint)
             color: root.errorFlash ? Color.polkit.textError : root.foreground
             opacity: root.errorFlash ? 1 : 0.36
             font.family: root.fontFamily

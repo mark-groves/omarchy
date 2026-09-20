@@ -29,6 +29,13 @@ if grep -F 'omarchy-cmd-present fprintd-list' "$apply_lock" >/dev/null ||
 fi
 pass "the lock helper pins fprintd-list to its packaged system path"
 
+grep -F '/etc/pam.d/omarchy-lock-face' "$apply_lock" >/dev/null ||
+  fail "the lock helper names the face PAM file so fingerprint absence cannot drop it"
+if grep -E 'rm[[:space:]].*omarchy-lock-face' "$apply_lock" >/dev/null; then
+  fail "the lock helper must not delete omarchy-lock-face"
+fi
+pass "the lock helper keeps omarchy-lock-face"
+
 # Exercise the helper as real root when the suite already has it, or as root in
 # an unprivileged user namespace otherwise. A hardened kernel can disable user
 # namespaces, so preserve the static coverage above and skip only this probe.
@@ -58,6 +65,7 @@ trusted_root_bin="$test_tmp/trusted-root-bin"
 trusted_fprintd="$test_tmp/trusted-fprintd-list"
 password_pam="$test_tmp/omarchy-lock-password"
 fingerprint_pam="$test_tmp/omarchy-lock-fingerprint"
+face_pam="$test_tmp/omarchy-lock-face"
 attack_marker="$test_tmp/user-fprintd-list-ran"
 trusted_uid="$test_tmp/trusted-fprintd-list.uid"
 trusted_args="$test_tmp/trusted-fprintd-list.args"
@@ -104,6 +112,7 @@ prepare_helper() {
   awk \
     -v password_pam="$password_pam" \
     -v fingerprint_pam="$fingerprint_pam" \
+    -v face_pam="$face_pam" \
     -v trusted_root_bin="$trusted_root_bin" \
     -v trusted_fprintd="$trusted_fprintd" \
     -v keep_root_path="$keep_root_path" \
@@ -112,6 +121,7 @@ prepare_helper() {
       line = $0
       gsub("/etc/pam\\.d/omarchy-lock-password", "\"" password_pam "\"", line)
       gsub("/etc/pam\\.d/omarchy-lock-fingerprint", "\"" fingerprint_pam "\"", line)
+      gsub("/etc/pam\\.d/omarchy-lock-face", "\"" face_pam "\"", line)
 
       if (line == "if (( EUID == 0 )); then" && keep_root_path == 0) {
         print "if (( 0 )); then"
@@ -162,7 +172,7 @@ for helper in "$patched_helper" "$absolute_only_helper" "$root_path_only_helper"
 done
 
 reset_runtime_files() {
-  rm -f "$password_pam" "$fingerprint_pam" "$trusted_uid" "$trusted_args" "$attack_marker" "$attack_args"
+  rm -f "$password_pam" "$fingerprint_pam" "$face_pam" "$trusted_uid" "$trusted_args" "$attack_marker" "$attack_args"
 }
 
 run_as_root() {
@@ -175,12 +185,14 @@ run_as_root() {
 }
 
 reset_runtime_files
+printf 'keep-face\n' >"$face_pam"
 run_as_root "$patched_helper" "the fully hardened lock helper runs in an isolated root context"
 [[ ! -e $attack_marker ]] || fail "the hardened root lock helper executes the user-planted fprintd-list"
 grep -Fx '0' "$trusted_uid" >/dev/null || fail "the trusted fprintd-list probe runs with EUID 0"
 grep -Fx "$target_user" "$trusted_args" >/dev/null || fail "the trusted fprintd-list probe receives the target user"
 [[ -s $password_pam && -s $fingerprint_pam ]] ||
   fail "the isolated root lock-helper run writes both scratch PAM fixtures"
+grep -Fx 'keep-face' "$face_pam" >/dev/null || fail "the lock helper leaves an existing face PAM file untouched"
 pass "the hardened root lock helper uses the trusted fingerprint probe"
 
 reset_runtime_files

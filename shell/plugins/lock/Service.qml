@@ -20,8 +20,14 @@ Item {
   property bool pendingSessionLock: false
   property bool authenticatingPassword: false
   property bool fingerprintAuthenticating: false
+  property bool faceAuthenticating: false
+  // What the shared face card should be showing. Lock previously bound nothing
+  // face-related into the view, so a scan and a miss were both silent.
+  property string faceState: "scanning"
   property bool passwordPamConfigured: false
   property bool fingerprintConfigured: false
+  property bool faceConfigured: false
+  property bool laptopClosed: false
   property bool previewVisible: false
   property string enteredPassword: ""
   property string pendingPassword: ""
@@ -43,7 +49,7 @@ Item {
   property bool strandedLockResolved: false
 
   readonly property bool locked: lockRequested || sessionLock.locked || sessionLock.secure
-  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating
+  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating
   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
   readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
 
@@ -117,6 +123,11 @@ Item {
     if (!fingerprintCheckProc.running) fingerprintCheckProc.running = true
   }
 
+  function refreshFaceStatus() {
+    if (!faceCheckProc.running) faceCheckProc.running = true
+    if (!laptopClosedProc.running) laptopClosedProc.running = true
+  }
+
   function logEvent(event) {
     lastEvent = event
     lastEventAt = new Date().toISOString()
@@ -130,9 +141,14 @@ Item {
     failedAttempts = 0
     authenticatingPassword = false
     fingerprintAuthenticating = false
+    faceAuthenticating = false
     fingerprintRetryTimer.stop()
+    faceRetryTimer.stop()
+    faceHoldTimer.stop()
+    faceState = "scanning"
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
+    if (facePam.active) facePam.abort()
   }
 
   function beginLock() {
@@ -150,6 +166,7 @@ Item {
     Qt.callLater(function() {
       root.refreshBackground()
       root.refreshFingerprintStatus()
+      root.refreshFaceStatus()
     })
 
     return true
@@ -254,6 +271,43 @@ Item {
     }
   }
 
+  function startFace() {
+    if (!lockRequested || !sessionLock.secure || !faceConfigured) return
+    if (laptopClosed || displaysBlank) return
+    if (facePam.active || faceAuthenticating) return
+
+    faceState = "scanning"
+    faceAuthenticating = true
+    if (!facePam.start()) {
+      faceAuthenticating = false
+      if (faceConfigured && !laptopClosed && !displaysBlank) faceRetryTimer.restart()
+    }
+  }
+
+  function handleFaceFinished(result) {
+    faceAuthenticating = false
+
+    if (!lockRequested) return
+    if (result === PamResult.Success) {
+      // Hold the recognised frame so the card is seen finishing. PAM has
+      // already succeeded, so this delays the teardown, not the unlock. With
+      // no chrome installed the hold is zero and this is the old behaviour.
+      var hold = FaceChrome.holdMs("recognized")
+      faceState = "recognized"
+      if (hold > 0) {
+        faceHoldTimer.interval = hold
+        faceHoldTimer.restart()
+        return
+      }
+      finishUnlock()
+    } else if (faceConfigured && !laptopClosed && !displaysBlank) {
+      // The retry timer already outlasts the miss animation, so a miss needs
+      // no new delay. It only needed a state to show.
+      faceState = "notRecognized"
+      faceRetryTimer.restart()
+    }
+  }
+
   function handleFingerprintFinished(result) {
     fingerprintAuthenticating = false
 
@@ -277,6 +331,7 @@ Item {
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
         root.startFingerprint()
+        root.startFace()
       }
     }
 
@@ -309,6 +364,9 @@ Item {
         backgroundPath: root.backgroundPath
         backgroundVersion: root.backgroundVersion
         fingerprintConfigured: root.fingerprintConfigured
+        faceConfigured: root.faceConfigured
+        faceState: root.faceState
+        faceScanning: root.faceAuthenticating
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
@@ -341,6 +399,9 @@ Item {
       backgroundPath: root.backgroundPath
       backgroundVersion: root.backgroundVersion
       fingerprintConfigured: root.fingerprintConfigured
+      faceConfigured: root.faceConfigured
+      faceState: "scanning"
+      faceScanning: false
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0
@@ -394,11 +455,42 @@ Item {
     }
   }
 
+  PamContext {
+    id: facePam
+    config: "omarchy-lock-face"
+    user: root.userName
+
+    onCompleted: function(result) {
+      root.handleFaceFinished(result)
+    }
+
+    onError: function(error) {
+      root.faceAuthenticating = false
+      if (root.lockRequested && root.faceConfigured && !root.laptopClosed && !root.displaysBlank) {
+        root.faceState = "notRecognized"
+        faceRetryTimer.restart()
+      }
+    }
+  }
+
   Timer {
     id: fingerprintRetryTimer
     interval: 250
     repeat: false
     onTriggered: root.startFingerprint()
+  }
+
+  Timer {
+    id: faceHoldTimer
+    repeat: false
+    onTriggered: root.finishUnlock()
+  }
+
+  Timer {
+    id: faceRetryTimer
+    interval: 2000
+    repeat: false
+    onTriggered: root.startFace()
   }
 
   Process {
@@ -424,6 +516,34 @@ Item {
       root.fingerprintConfigured = String(fingerprintCheckStdout.text || "").trim() === "yes"
       if (root.lockRequested && root.fingerprintConfigured) root.startFingerprint()
       else if (!root.fingerprintConfigured && fingerprintPam.active) fingerprintPam.abort()
+    }
+  }
+
+  Process {
+    id: faceCheckProc
+    command: ["bash", "-c", "if [[ -f /etc/pam.d/omarchy-lock-face ]]; then echo yes; else echo no; fi"]
+    stdout: StdioCollector { id: faceCheckStdout; waitForEnd: true }
+    onExited: {
+      root.faceConfigured = String(faceCheckStdout.text || "").trim() === "yes"
+      if (root.lockRequested && root.faceConfigured) root.startFace()
+      else if (!root.faceConfigured && facePam.active) facePam.abort()
+    }
+  }
+
+  Process {
+    id: laptopClosedProc
+    command: ["bash", "-c", "omarchy-hw-laptop-closed && echo closed || echo open"]
+    stdout: StdioCollector { id: laptopClosedOut; waitForEnd: true }
+    onExited: {
+      var wasClosed = root.laptopClosed
+      root.laptopClosed = String(laptopClosedOut.text || "").trim() === "closed"
+      if (root.laptopClosed) {
+        faceRetryTimer.stop()
+        faceAuthenticating = false
+        if (facePam.active) facePam.abort()
+      } else if (wasClosed && root.lockRequested && root.faceConfigured) {
+        root.startFace()
+      }
     }
   }
 
@@ -490,10 +610,10 @@ Item {
         root.armBlankTimer()
         return
       }
-      // Only a password check in flight should hold the display up. The
-      // fingerprint PAM stays armed for the whole lock, so gating on
-      // `authenticating` here would keep the panel lit until unlock.
-      if (root.lockRequested && !root.authenticatingPassword) root.runBlank()
+      // Fingerprint PAM stays armed for the whole lock, so gating on
+      // `authenticating` would keep the panel lit until unlock. Face is a
+      // bounded Howdy scan. Hold the panel while that scan is in flight.
+      if (root.lockRequested && !root.authenticatingPassword && !root.faceAuthenticating) root.runBlank()
     }
   }
 
@@ -551,12 +671,48 @@ Item {
     else armBlankTimer()
   }
 
+  onFaceAuthenticatingChanged: {
+    if (!lockRequested) return
+    if (faceAuthenticating) idleBlankTimer.stop()
+    else armBlankTimer()
+  }
+
+  onDisplaysBlankChanged: {
+    if (displaysBlank) {
+      faceRetryTimer.stop()
+    } else if (lockRequested) {
+      startFace()
+    }
+  }
+
+  Timer {
+    id: lidPollTimer
+    interval: 2000
+    repeat: true
+    running: root.lockRequested
+    onTriggered: {
+      if (!laptopClosedProc.running) laptopClosedProc.running = true
+    }
+  }
+
   FileView {
     path: "/etc/pam.d/omarchy-lock-password"
     watchChanges: true
     printErrors: false
     onLoaded: root.passwordPamConfigured = true
     onLoadFailed: root.passwordPamConfigured = false
+    onFileChanged: reload()
+  }
+
+  FileView {
+    path: "/etc/pam.d/omarchy-lock-face"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.refreshFaceStatus()
+    onLoadFailed: {
+      root.faceConfigured = false
+      if (facePam.active) facePam.abort()
+    }
     onFileChanged: reload()
   }
 
@@ -574,6 +730,7 @@ Item {
   Component.onCompleted: {
     refreshBackground()
     refreshFingerprintStatus()
+    refreshFaceStatus()
     checkStrandedLock()
   }
 
@@ -600,6 +757,8 @@ Item {
         realScreens: root.realScreenCount(),
         passwordPam: root.passwordPamConfigured,
         fingerprint: root.fingerprintConfigured,
+        face: root.faceConfigured,
+        laptopClosed: root.laptopClosed,
         authenticating: root.authenticating,
         lastEvent: root.lastEvent,
         lastEventAt: root.lastEventAt
@@ -609,6 +768,7 @@ Item {
     function preview(): string {
       root.refreshBackground()
       root.refreshFingerprintStatus()
+      root.refreshFaceStatus()
       root.previewVisible = true
       return "ok"
     }

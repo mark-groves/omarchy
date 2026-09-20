@@ -52,6 +52,12 @@ else
   as_root rm -f /etc/pam.d/omarchy-lock-fingerprint
 fi
 
+# Face is a third lock conversation written after Howdy enroll. A host without
+# a fingerprint still keeps that file. Never delete it here.
+if [[ -f /etc/pam.d/omarchy-lock-face ]]; then
+  echo "Keeping lock screen face authentication..."
+fi
+
 # omarchy-shell can't reach a running shell during chroot install. The echo
 # is just confirmation, so swallow the failure rather than letting it become
 # the script's exit code.

@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# omarchy:summary=Set up face authentication for lock, sudo, and system prompts
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+
+readonly MODULE=/usr/lib/security/pam_howdy.so
+readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
+
+if [[ ! -f $MODULE ]]; then
+  echo -e "\e[31mhowdy-next is not installed ($MODULE is missing).\e[0m"
+  exit 1
+fi
+
+if [[ ! -f $HOWDY_HELPER_DROPIN ]]; then
+  echo -e "\e[31mMissing Howdy polkit camera drop-in:\n$HOWDY_HELPER_DROPIN\e[0m"
+  exit 1
+fi
+
+if (( EUID != 0 )); then
+  exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
+fi
+
+script_bin=$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")
+export PATH="$script_bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin"
+
+echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
+echo "Howdy is installed. Enroll a face model with howdy if you have not already."
+echo
+
+# PAM runs the emitter helper by absolute path on every surface, and the polkit
+# helper's sandbox hides /home, so a linked checkout cannot be that path. A copy
+# under /usr/local/bin is reachable from all three and owned by no package.
+echo "Installing the IR emitter helper..."
+emitter_helper=/usr/local/bin/omarchy-hw-ir-emitter
+mkdir -p "$(dirname "$emitter_helper")"
+emitter_tmp=$(mktemp "$emitter_helper.new.XXXXXX")
+cat "$script_bin/omarchy-hw-ir-emitter" >"$emitter_tmp"
+chmod 755 "$emitter_tmp"
+mv -Tf "$emitter_tmp" "$emitter_helper"
+
+echo "Configuring lock screen for face authentication..."
+lock_pam=/etc/pam.d/omarchy-lock-face
+lock_tmp=$(mktemp "$lock_pam.new.XXXXXX")
+tee "$lock_tmp" >/dev/null <<'EOF'
+#%PAM-1.0
+auth       optional                    pam_exec.so quiet /usr/local/bin/omarchy-hw-ir-emitter
+auth       required                    pam_howdy.so
+account    include                     system-local-login
+EOF
+chmod 644 "$lock_tmp"
+mv -Tf "$lock_tmp" "$lock_pam"
+
+echo "Configuring sudo for face authentication..."
+omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so
+
+echo "Configuring polkit for face authentication..."
+omarchy-apply-polkit-pam add face
+
+echo "Pinning howdy-compare to one CPU..."
+omarchy-apply-howdy-compare install
+
+echo -e "\e[32m\nFace authentication is now used for lock, sudo, and system prompts.\e[0m"
+echo "Password remains the fallback. Look at the lid camera when asked."
+echo "This command does not enroll. Change the face with howdy."

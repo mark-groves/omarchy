@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# omarchy:summary=Remove face authentication from lock, sudo, and system prompts
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+
+if (( EUID != 0 )); then
+  exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
+fi
+
+script_bin=$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")
+export PATH="$script_bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin"
+
+echo -e "\e[32mRemoving face authentication from lock, sudo, and system prompts.\n\e[0m"
+
+if [[ -f /etc/pam.d/omarchy-lock-face ]]; then
+  echo "Removing lock screen face authentication..."
+  rm -f /etc/pam.d/omarchy-lock-face
+fi
+
+if grep -q pam_howdy.so /etc/pam.d/sudo; then
+  echo "Removing face authentication from sudo..."
+  omarchy-pam-pair-drop /etc/pam.d/sudo pam_howdy.so
+fi
+
+if [[ -f /etc/pam.d/polkit-1 ]]; then
+  echo "Removing face authentication from polkit..."
+  omarchy-apply-polkit-pam remove face
+fi
+
+if [[ -e /usr/local/bin/omarchy-hw-ir-emitter ]]; then
+  echo "Removing the IR emitter helper..."
+  rm -f /usr/local/bin/omarchy-hw-ir-emitter
+fi
+
+omarchy-apply-howdy-compare remove
+
+echo -e "\e[32mFace authentication has been removed from lock, sudo, and system prompts.\e[0m"
+echo "Password is still the way in. Howdy models are unchanged."

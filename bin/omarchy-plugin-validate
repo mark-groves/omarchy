@@ -108,6 +108,14 @@ for kind_entry_point in \
     || fail "kind '$kind' requires an 'entryPoints.$entry_point' to load"
 done
 
+# polkit-chrome is not a host-instantiated kind. The first-party polkit agent
+# loads one extra entry point from an enabled plugin that declares it. Demand
+# a key from the card table so a typo does not install a no-op.
+if jq -e '(.kinds | index("polkit-chrome")) != null' "$MANIFEST" >/dev/null 2>&1; then
+  jq -e '.entryPoints | has("polkitFace") or has("polkitFingerprint")' "$MANIFEST" >/dev/null 2>&1 \
+    || fail "kind 'polkit-chrome' requires an 'entryPoints.polkitFace' or 'entryPoints.polkitFingerprint' to load"
+fi
+
 # Refuse any symlink anywhere inside the plugin folder. Symlinks could point a
 # copied plugin back at arbitrary files on disk after it lands in the trusted
 # plugins directory. The .git dir is skipped: installed plugins are git

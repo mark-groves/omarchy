@@ -75,7 +75,15 @@ cat >"$stub_bin/omarchy-pkg-drop" <<'SH'
 #!/bin/bash
 SH
 
-chmod +x "$stub_bin/sudo" "$stub_bin/omarchy-pkg-drop"
+cat >"$stub_bin/omarchy-apply-polkit-pam" <<'SH'
+#!/bin/bash
+printf 'apply-polkit-pam' >>"${TEST_LOG:-/dev/null}"
+printf '\t%s' "$@" >>"${TEST_LOG:-/dev/null}"
+printf '\n' >>"${TEST_LOG:-/dev/null}"
+exit 0
+SH
+
+chmod +x "$stub_bin/sudo" "$stub_bin/omarchy-pkg-drop" "$stub_bin/omarchy-apply-polkit-pam"
 
 invoke_remove() {
   : >"$calls"
