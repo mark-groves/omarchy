@@ -147,6 +147,7 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         width: Style.space(116)
         height: width
+        visible: faceCard.visible
         cardState: root.faceState
         active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
         accent: Color.lock.borderActive

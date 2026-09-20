@@ -269,8 +269,12 @@ assert(
   'the agent paints chrome itself through the host canvas'
 )
 assert(
-  /if \(root\.slotUrl !== ""\) FaceChrome\.sourceUrl = root\.slotUrl/.test(agentQml),
-  'the agent points the shared loader at the resolved slot url'
+  /entryPointKey\s*===\s*"polkitFace"/.test(agentQml) && /FaceChrome\.sourceUrl = root\.slotUrl/.test(agentQml),
+  'only a face slot may replace the shared face module'
+)
+assert(
+  !/if \(root\.slotUrl !== ""\) FaceChrome\.sourceUrl = root\.slotUrl/.test(agentQml),
+  'a non-empty fingerprint slot does not overwrite FaceChrome'
 )
 assert(
   !/onSlotUrlChanged:\s*FaceChrome\.sourceUrl\s*=\s*root\.slotUrl/.test(agentQml),

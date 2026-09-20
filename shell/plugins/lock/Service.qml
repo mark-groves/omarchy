@@ -404,7 +404,7 @@ Item {
       fingerprintConfigured: root.fingerprintConfigured
       faceConfigured: root.faceConfigured
       faceState: "scanning"
-      faceScanning: root.faceConfigured
+      faceScanning: root.previewVisible && root.faceConfigured
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0

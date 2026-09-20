@@ -140,11 +140,15 @@ assert(
   'the card above the password field cannot take focus'
 )
 assert(
+  /objectName:\s*"faceCardIndicator"[\s\S]*?visible:\s*faceCard\.visible/.test(viewQml),
+  'the lock canvas follows the card so FrameAnimation stops when the card hides'
+)
+assert(
   !/chrome\s*=/.test(viewQml) && !/Loader/.test(viewQml),
   'lock never loads a plugin Item next to its password field'
 )
 assert(
-  /faceScanning:\s*root\.faceConfigured/.test(serviceQml),
-  'lock preview keeps the scan animation running'
+  /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
+  'lock preview keeps the scan animation running only while the preview is shown'
 )
 JS

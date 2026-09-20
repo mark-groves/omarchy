@@ -65,9 +65,13 @@ Item {
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
 
   onSlotUrlChanged: {
-    // An empty slot is a missing dialog, not an unload. Clearing here would
-    // drop the shared module out from under the lock screen.
-    if (root.slotUrl !== "") FaceChrome.sourceUrl = root.slotUrl
+    // FaceChrome is the face module. An empty slot is a missing dialog.
+    // A fingerprint slot is a different entry point. Either write would
+    // drop the shared face module out from under the lock screen.
+    if (root.slotUrl !== "" && presentation && presentation.slot
+        && presentation.slot.entryPointKey === "polkitFace") {
+      FaceChrome.sourceUrl = root.slotUrl
+    }
   }
 
   onRegistryRevisionChanged: {
