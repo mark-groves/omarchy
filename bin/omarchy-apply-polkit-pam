@@ -16,6 +16,8 @@ readonly PAM_FILE=/etc/pam.d/polkit-1
 readonly LOCK_FILE=/run/lock/omarchy-polkit-pam.lock
 readonly MODULE_DIR=/usr/lib/security
 readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
+readonly EMITTER_HELPER=/usr/local/bin/omarchy-hw-ir-emitter
+readonly EMITTER_LINE="auth      optional pam_exec.so quiet $EMITTER_HELPER"
 readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
 readonly HEADER='#%PAM-1.0'
 readonly CANONICAL_BODY='auth      include    system-auth
@@ -64,6 +66,10 @@ is_auth_line() {
 
 is_gate_line() {
   is_auth_line "$1" && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]
+}
+
+is_emitter_line() {
+  is_auth_line "$1" && [[ $1 == *pam_exec.so* && $1 == *$EMITTER_HELPER* ]]
 }
 
 is_header_line() {
@@ -144,7 +150,7 @@ parse_pam() {
     if is_header_line "$line"; then
       continue
     fi
-    if is_gate_line "$line"; then
+    if is_gate_line "$line" || is_emitter_line "$line"; then
       continue
     fi
     if is_auth_line "$line" && module=$(line_module "$line"); then
@@ -221,6 +227,9 @@ emit_pam() {
   local -a emitted=()
 
   n=$(gated_count)
+  if [[ -v PRESENT_ARGS[face] ]]; then
+    n=$((n + 1))
+  fi
 
   if (( ${#PRESENT_ARGS[@]} == 0 )); then
     local joined
@@ -234,6 +243,9 @@ emit_pam() {
   emitted+=("$HEADER")
   if (( n > 0 )); then
     emitted+=("auth      [success=$n default=ignore] pam_exec.so quiet $GATE_HELPER")
+  fi
+  if [[ -v PRESENT_ARGS[face] ]]; then
+    emitted+=("$EMITTER_LINE")
   fi
   for method in "${CANONICAL_ORDER[@]}"; do
     if [[ -v PRESENT_ARGS[$method] ]] && method_lid_gated "$method"; then
@@ -321,6 +333,7 @@ Usage: omarchy-apply-polkit-pam [add METHOD]... [remove METHOD]...
        omarchy-apply-polkit-pam --list
 
 METHOD is face, fingerprint, or fido2.
+face also emits the IR emitter line above pam_howdy.so.
 No verbs re-derives the prefix from the existing file.
 --print writes the result to stdout and touches nothing. Exit 3 means delete.
 --list prints the methods present in /etc/pam.d/polkit-1, one per line.

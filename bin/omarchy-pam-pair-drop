@@ -13,9 +13,14 @@ if (( EUID == 0 )); then
 fi
 
 readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
+readonly EMITTER_HELPER=/usr/local/bin/omarchy-hw-ir-emitter
 
 is_gate_line() {
   [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]
+}
+
+is_emitter_line() {
+  [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$EMITTER_HELPER* ]]
 }
 
 emit_pair_drop() {
@@ -25,6 +30,9 @@ emit_pair_drop() {
 
   while IFS= read -r line || [[ -n $line ]]; do
     if [[ $line == *"$module"* ]]; then
+      if (( ${#kept[@]} > 0 )) && is_emitter_line "${kept[-1]}"; then
+        unset "kept[-1]"
+      fi
       if (( ${#kept[@]} > 0 )) && is_gate_line "${kept[-1]}"; then
         unset "kept[-1]"
       fi
@@ -43,7 +51,7 @@ usage() {
 Usage: omarchy-pam-pair-drop FILE MODULE
        omarchy-pam-pair-drop --from FILE --print MODULE
 
-Drops MODULE and only the lid-gate line immediately above it.
+Drops MODULE, the IR emitter line immediately above it if present, and the lid-gate line above that.
 USAGE
 }
 

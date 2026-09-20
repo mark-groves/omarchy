@@ -13,10 +13,19 @@ if (( EUID == 0 )); then
 fi
 
 readonly GATE_HELPER=/usr/bin/omarchy-hw-laptop-closed
-readonly GATE_LINE="auth      [success=1 default=ignore] pam_exec.so quiet $GATE_HELPER"
+readonly EMITTER_HELPER=/usr/local/bin/omarchy-hw-ir-emitter
+readonly EMITTER_LINE="auth      optional pam_exec.so quiet $EMITTER_HELPER"
+
+gate_line() {
+  printf 'auth      [success=%s default=ignore] pam_exec.so quiet %s' "$1" "$GATE_HELPER"
+}
 
 is_gate_line() {
   [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$GATE_HELPER* ]]
+}
+
+is_emitter_line() {
+  [[ $1 =~ ^[[:space:]]*auth[[:space:]]+ ]] && [[ $1 == *pam_exec.so* && $1 == *$EMITTER_HELPER* ]]
 }
 
 is_header_line() {
@@ -45,38 +54,49 @@ emit_lines() {
 
 emit_pair_add() {
   local source=$1 module=$2
-  local -a lines=()
+  local -a lines=() prefix=()
   local i method_line
 
   method_line="auth      sufficient $module"
   mapfile -t lines < "$source"
 
+  if [[ $module == "pam_howdy.so" ]]; then
+    prefix=("$(gate_line 2)" "$EMITTER_LINE")
+  else
+    prefix=("$(gate_line 1)")
+  fi
+
   for i in "${!lines[@]}"; do
     if [[ ${lines[i]} == *"$module"* ]]; then
-      if (( i > 0 )) && is_gate_line "${lines[i - 1]}"; then
+      if [[ $module == "pam_howdy.so" ]]; then
+        if (( i >= 2 )) && is_emitter_line "${lines[i - 1]}" && is_gate_line "${lines[i - 2]}"; then
+          emit_lines "${lines[@]}"
+          return
+        fi
+        if (( i > 0 )) && is_gate_line "${lines[i - 1]}"; then
+          emit_lines "${lines[@]:0:$((i - 1))}" "${prefix[@]}" "${lines[@]:i}"
+          return
+        fi
+      elif (( i > 0 )) && is_gate_line "${lines[i - 1]}"; then
         emit_lines "${lines[@]}"
         return
       fi
-      if (( i > 0 )); then
-        emit_lines "${lines[@]:0:i}" "$GATE_LINE" "${lines[@]:i}"
-      else
-        emit_lines "$GATE_LINE" "${lines[@]}"
-      fi
+      emit_lines "${lines[@]:0:i}" "${prefix[@]}" "${lines[@]:i}"
       return
     fi
   done
 
   if (( ${#lines[@]} > 0 )) && is_header_line "${lines[0]}"; then
-    emit_lines "${lines[0]}" "$GATE_LINE" "$method_line" "${lines[@]:1}"
+    emit_lines "${lines[0]}" "${prefix[@]}" "$method_line" "${lines[@]:1}"
     return
   fi
 
   if (( ${#lines[@]} > 0 )); then
-    emit_lines "$GATE_LINE" "$method_line" "${lines[@]}"
+    emit_lines "${prefix[@]}" "$method_line" "${lines[@]}"
     return
   fi
 
-  emit_lines "$GATE_LINE" "$method_line"
+  emit_lines "${prefix[@]}" "$method_line"
 }
 
 usage() {
@@ -84,7 +104,7 @@ usage() {
 Usage: omarchy-pam-pair-add FILE MODULE
        omarchy-pam-pair-add --from FILE --print MODULE
 
-Inserts MODULE as sufficient with a lid-gate line immediately above it.
+Inserts MODULE as sufficient with a lid-gate line immediately above it. pam_howdy.so also gets the IR emitter line between the gate and the module.
 USAGE
 }
 

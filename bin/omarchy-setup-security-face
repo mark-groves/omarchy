@@ -29,11 +29,23 @@ echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
 echo
 
+# PAM runs the emitter helper by absolute path on every surface, and the polkit
+# helper's sandbox hides /home, so a linked checkout cannot be that path. A copy
+# under /usr/local/bin is reachable from all three and owned by no package.
+echo "Installing the IR emitter helper..."
+emitter_helper=/usr/local/bin/omarchy-hw-ir-emitter
+mkdir -p "$(dirname "$emitter_helper")"
+emitter_tmp=$(mktemp "$emitter_helper.new.XXXXXX")
+cat "$script_bin/omarchy-hw-ir-emitter" >"$emitter_tmp"
+chmod 755 "$emitter_tmp"
+mv -Tf "$emitter_tmp" "$emitter_helper"
+
 echo "Configuring lock screen for face authentication..."
 lock_pam=/etc/pam.d/omarchy-lock-face
 lock_tmp=$(mktemp "$lock_pam.new.XXXXXX")
 tee "$lock_tmp" >/dev/null <<'EOF'
 #%PAM-1.0
+auth       optional                    pam_exec.so quiet /usr/local/bin/omarchy-hw-ir-emitter
 auth       required                    pam_howdy.so
 account    include                     system-local-login
 EOF
