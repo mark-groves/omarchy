@@ -269,8 +269,12 @@ assert(
   'the agent paints chrome itself through the host canvas'
 )
 assert(
-  /FaceChrome\.sourceUrl\s*=\s*root\.slotUrl/.test(agentQml),
+  /if \(root\.slotUrl !== ""\) FaceChrome\.sourceUrl = root\.slotUrl/.test(agentQml),
   'the agent points the shared loader at the resolved slot url'
+)
+assert(
+  !/onSlotUrlChanged:\s*FaceChrome\.sourceUrl\s*=\s*root\.slotUrl/.test(agentQml),
+  'an empty polkit slot does not unload chrome out from under lock'
 )
 assert(
   !/item\.chrome/.test(agentQml) && !/item\.flow/.test(agentQml),
@@ -315,5 +319,18 @@ assert(
 assert(
   /Math\.min\(ms, 2000\)/.test(chrome),
   'a plugin cannot pin a credential dialog open'
+)
+assert(
+  /function bindFromRegistry\(/.test(chrome) && /function urlFromRegistry\(/.test(chrome),
+  'FaceChrome discovers an enabled polkitFace module from the registry'
+)
+assert(
+  /entryPoints\.polkitFace/.test(chrome) && /polkit-chrome/.test(chrome),
+  'chrome discovery uses the same kind and slot key as the polkit resolver'
+)
+const shellQml = fs.readFileSync(path.join(root, 'shell/shell.qml'), 'utf8')
+assert(
+  /FaceChrome\.pluginRegistry\s*=\s*pluginRegistry/.test(shellQml),
+  'the shell binds face chrome at startup so lock does not wait for polkit'
 )
 JS

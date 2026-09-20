@@ -64,7 +64,11 @@ Item {
   readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
 
-  onSlotUrlChanged: FaceChrome.sourceUrl = root.slotUrl
+  onSlotUrlChanged: {
+    // An empty slot is a missing dialog, not an unload. Clearing here would
+    // drop the shared module out from under the lock screen.
+    if (root.slotUrl !== "") FaceChrome.sourceUrl = root.slotUrl
+  }
 
   onRegistryRevisionChanged: {
     if (failedSlotRevision === registryRevision) return
