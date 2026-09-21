@@ -65,7 +65,7 @@ assert(/FaceChrome\.holdMs\(next\.state\)/.test(overlayQml), 'overlay holds a re
 assert(/firstPartyServiceFor\("omarchy\.lock"\)/.test(overlayQml) && /firstPartyServiceFor\("omarchy\.polkit"\)/.test(overlayQml), 'overlay asks lock and polkit whether they already own the card')
 assert(/WlrKeyboardFocus\.None/.test(overlayQml) && /mask:\s*Region \{\}/.test(overlayQml), 'overlay is click-through and does not steal the terminal')
 assert(!/Loader/.test(overlayQml) && !/passwordInput/.test(overlayQml) && !/PamContext/.test(overlayQml), 'overlay never loads a plugin item or owns PAM')
-assert(/FileView/.test(overlayQml) && /face-auth\.json/.test(overlayQml), 'overlay watches the PAM signal file')
+assert(/FileView/.test(overlayQml) && /root\.signalPath/.test(overlayQml), 'overlay watches the PAM signal file')
 assert(/property bool primed/.test(overlayQml) && /setText\("\{\}\\n"\)/.test(overlayQml), 'overlay starts the watch without showing a leftover scan')
 
 assert(/OPENCV_LOG_LEVEL=ERROR/.test(wrapper), 'howdy-compare wrapper quiets OpenCV WARNs')

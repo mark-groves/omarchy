@@ -37,8 +37,8 @@ assert(
 )
 
 assert(
-  /if \(root\.lockRequested && !root\.authenticatingPassword && !root\.faceAuthenticating\) root\.runBlank\(\)/.test(serviceQml),
-  'a password or face check in flight stops the blank timer'
+  /if \(root\.lockRequested && !root\.authenticatingPassword && !root\.faceAuthenticating && !root\.faceHolding\) root\.runBlank\(\)/.test(serviceQml),
+  'a password, face check, or face hold in flight stops the blank timer'
 )
 
 assert(
@@ -86,7 +86,7 @@ assert(
   'starting a scan puts the card in the scanning state'
 )
 assert(
-  /faceState = "notRecognized"/.test(serviceQml),
+  /holdFaceResult\("notRecognized"\)/.test(serviceQml),
   'a miss is shown rather than being silent'
 )
 
