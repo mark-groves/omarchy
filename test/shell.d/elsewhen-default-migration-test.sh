@@ -40,12 +40,12 @@ if PACKAGE_STATUS=1 run_migration; then
 fi
 [[ ! -e $plugin && ! -L $plugin && $(cat "$CALL_LOG") == "package elsewhen" ]] ||
   fail "package failure leaves the plugin and shell untouched"
-pass "package failure stops before linking or changing the shell"
+pass "package failure stops before changing the shell"
 
 run_migration
-[[ $(readlink "$plugin") == /usr/share/omarchy/plugins/omacom.elsewhen ]] || fail "package link is installed"
-[[ $(readlink "$ROOT/config/omarchy/plugins/omacom.elsewhen") == "$(readlink "$plugin")" ]] || fail "fresh installs use the same package link"
-pass "migration and fresh installs link to the package"
+[[ ! -e $plugin && ! -L $plugin ]] || fail "migration does not create a user plugin link"
+[[ ! -e $ROOT/config/omarchy/plugins/omacom.elsewhen && ! -L $ROOT/config/omarchy/plugins/omacom.elsewhen ]] || fail "fresh installs do not ship a user plugin link"
+pass "migration and fresh installs rely on the packaged plugin directory"
 
 expected=$'package elsewhen\nshell rescanPlugins\nshell putBarWidget omacom.elsewhen {"before":"omarchy.clock"}'
 [[ $(cat "$CALL_LOG") == "$expected" ]] || fail "install, scan and placement run in order" "$(cat "$CALL_LOG")"
@@ -53,10 +53,10 @@ pass "real bar helper enables and places before the clock without restarting dur
 
 run_migration
 [[ $(cat "$CALL_LOG") == "$expected" ]] || fail "migration can be rerun"
-pass "migration can be rerun with its package link present"
+[[ ! -e $plugin && ! -L $plugin ]] || fail "rerunning the migration does not create a user plugin link"
+pass "migration can be rerun without a user plugin link"
 
-rm "$plugin"
-mkdir "$plugin"
+mkdir -p "$plugin"
 printf 'local work\n' >"$plugin/notes"
 run_migration
 [[ ! -L $plugin && $(cat "$plugin/notes") == "local work" ]] || fail "existing checkout is preserved"
