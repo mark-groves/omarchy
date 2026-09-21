@@ -88,6 +88,8 @@ assert(/trap 'exit 130' INT/.test(wrapper) && /trap 'exit 143' TERM/.test(wrappe
 assert(/signaled_result=1/.test(wrapper), 'a normal compare exit does not overwrite the result with cancelled')
 assert(/face-auth\.json/.test(signal), 'helper writes the signal file')
 assert(/cancelled/.test(signal), 'helper accepts a cancelled hide')
+assert(/owned_dir_ok/.test(signal) && /login_uid/.test(signal), 'helper checks ownership before a privileged write')
+assert(!/for dir in \/run\/user\/\*/.test(signal), 'helper does not walk /run/user/*')
 assert(!/\bsudo\b/.test(signal) && !/\bpkexec\b/.test(signal), 'helper never escalates')
 
 assert(/property bool faceHolding/.test(lockQml), 'lock tracks a display-only hold')

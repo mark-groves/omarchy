@@ -57,30 +57,37 @@ fi
 
 unset_loginuid=4294967295
 
-session_runtime() {
-  local uid="" dir=""
+# PAM howdy runs this as euid 0 with an empty environment. loginuid is the
+# authenticating user. Guessing /run/user/* + Wayland can land in another
+# person's session on a shared host, so an unset loginuid is a skip.
+login_uid() {
+  local uid=""
+  [[ -r /proc/self/loginuid ]] || return 1
+  uid=$(< /proc/self/loginuid)
+  [[ $uid =~ ^[0-9]+$ ]] || return 1
+  (( uid != unset_loginuid && uid != 0 )) || return 1
+  printf '%s\n' "$uid"
+}
 
+session_runtime() {
+  local uid=""
   if (( EUID != 0 )); then
     printf '%s\n' "${XDG_RUNTIME_DIR:-/run/user/$EUID}"
-    return
+    return 0
   fi
+  uid=$(login_uid) || return 0
+  printf '%s\n' "/run/user/$uid"
+}
 
-  if [[ -r /proc/self/loginuid ]]; then
-    uid=$(< /proc/self/loginuid)
-    if [[ $uid =~ ^[0-9]+$ ]] && (( uid != unset_loginuid && uid != 0 )); then
-      printf '%s\n' "/run/user/$uid"
-      return
-    fi
-  fi
-
-  for dir in /run/user/*; do
-    [[ -d $dir ]] || continue
-    [[ ${dir##*/} == "0" ]] && continue
-    if compgen -G "$dir/wayland-[0-9]*" >/dev/null; then
-      printf '%s\n' "$dir"
-      return
-    fi
-  done
+# lstat: a symlink is not a writable session dir. Mode keeps group/other
+# from planting a replacement between the check and the write.
+owned_dir_ok() {
+  local path=$1
+  local owner=$2
+  local meta
+  [[ -d $path && ! -L $path ]] || return 1
+  meta=$(/usr/bin/stat -c '%u:%a' -- "$path" 2>/dev/null) || return 1
+  [[ $meta =~ ^${owner}:[0-7][0145][0145]$ ]]
 }
 
 if (( have_runtime == 0 )); then
@@ -91,19 +98,65 @@ if [[ -z $runtime_dir ]]; then
   exit 0
 fi
 
+# The user owns /run/user/$loginuid. mkdir -p and mktemp follow a planted
+# omarchy symlink, and that would be a root write outside the session dir
+# before PAM has decided. Skip instead of following.
+if [[ -L $runtime_dir || ! -d $runtime_dir ]]; then
+  exit 0
+fi
+
+expected_owner=$EUID
+if (( EUID == 0 )); then
+  if (( have_runtime == 0 )); then
+    expected_owner=$(login_uid) || exit 0
+  else
+    expected_owner=$(/usr/bin/stat -c '%u' -- "$runtime_dir" 2>/dev/null) || exit 0
+  fi
+  owned_dir_ok "$runtime_dir" "$expected_owner" || exit 0
+fi
+
 dir=$runtime_dir/omarchy
-if ! mkdir -p -- "$dir" 2>/dev/null; then
+if [[ -L $dir ]]; then
+  exit 0
+fi
+
+if [[ ! -e $dir ]]; then
+  # Root does not create a directory in a user-owned runtime tree. The
+  # session overlay already made omarchy/. A missing dir is a skip.
+  if (( EUID == 0 )) && (( expected_owner != 0 )); then
+    exit 0
+  fi
+  mkdir -- "$dir" 2>/dev/null || exit 0
+fi
+
+if [[ -L $dir || ! -d $dir ]]; then
+  exit 0
+fi
+
+if (( EUID == 0 )) && ! owned_dir_ok "$dir" "$expected_owner"; then
   exit 0
 fi
 
 ts=${EPOCHREALTIME/./}
 payload=$(printf '{"state":"%s","ts":%s}\n' "$state" "$ts")
 tmp=$(mktemp -- "$dir/face-auth.json.XXXXXX" 2>/dev/null) || exit 0
+if [[ -L $dir ]]; then
+  rm -f -- "$tmp"
+  exit 0
+fi
+if (( EUID == 0 )) && ! owned_dir_ok "$dir" "$expected_owner"; then
+  rm -f -- "$tmp"
+  exit 0
+fi
 if ! printf '%s' "$payload" >"$tmp" 2>/dev/null; then
   rm -f -- "$tmp"
   exit 0
 fi
 chmod 644 -- "$tmp" 2>/dev/null || true
+if [[ -L $dir ]]; then
+  rm -f -- "$tmp"
+  exit 0
+fi
 if ! mv -Tf -- "$tmp" "$dir/face-auth.json" 2>/dev/null; then
   rm -f -- "$tmp"
 fi

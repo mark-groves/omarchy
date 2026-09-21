@@ -66,3 +66,54 @@ status=0
 "$signal" scanning --runtime-dir /dev/null/nope >/dev/null 2>"$runtime/err" || status=$?
 (( status == 0 )) || fail "an unwritable runtime dir still exits 0" "exit $status $(cat "$runtime/err")"
 pass "an unwritable runtime dir does not fail the caller"
+
+if grep -F 'for dir in /run/user/*' "$signal" >/dev/null; then
+  fail "root does not walk /run/user/* when loginuid is unset"
+fi
+if grep -E 'wayland-\[' "$signal" >/dev/null; then
+  fail "root does not pick a session by a Wayland socket glob"
+fi
+grep -F 'login_uid' "$signal" >/dev/null || fail "root session lookup is loginuid-only"
+grep -F 'owned_dir_ok' "$signal" >/dev/null || fail "privileged writes check ownership and mode"
+grep -F '[[ -L $dir ]]' "$signal" >/dev/null || fail "the helper refuses an omarchy symlink"
+if grep -E 'mkdir -p -- "\$dir"' "$signal" >/dev/null; then
+  fail "mkdir -p follows a planted omarchy symlink"
+fi
+pass "root writes stay in the loginuid runtime dir"
+
+victim=$runtime/victim
+mkdir -p -- "$victim"
+printf 'canary\n' >"$victim/canary"
+rm -rf -- "$runtime/omarchy"
+ln -s -- "$victim" "$runtime/omarchy"
+status=0
+"$signal" scanning --runtime-dir "$runtime" >/dev/null 2>"$runtime/err" || status=$?
+(( status == 0 )) || fail "a planted omarchy symlink still exits 0" "exit $status $(cat "$runtime/err")"
+[[ -L $runtime/omarchy ]] || fail "a planted omarchy symlink is left in place"
+[[ $(cat "$victim/canary") == "canary" ]] || fail "a planted omarchy symlink does not clobber the target"
+[[ ! -e $victim/face-auth.json ]] || fail "a planted omarchy symlink does not receive face-auth.json"
+shopt -s nullglob
+leftovers=("$victim"/face-auth.json*)
+shopt -u nullglob
+(( ${#leftovers[@]} == 0 )) || fail "a planted omarchy symlink does not receive a temp write" "${leftovers[*]}"
+pass "a planted omarchy symlink is not written through"
+
+rm -f -- "$runtime/omarchy"
+link_parent=$runtime/link-parent
+real_runtime=$runtime/real-runtime
+mkdir -p -- "$link_parent" "$real_runtime"
+ln -s -- "$real_runtime" "$link_parent/runtime"
+status=0
+"$signal" scanning --runtime-dir "$link_parent/runtime" >/dev/null 2>"$runtime/err" || status=$?
+(( status == 0 )) || fail "a runtime-dir symlink still exits 0" "exit $status $(cat "$runtime/err")"
+[[ ! -e $real_runtime/omarchy/face-auth.json ]] ||
+  fail "a runtime-dir symlink is not followed" "$(find "$real_runtime" -type f)"
+pass "a runtime-dir symlink is not followed"
+
+rm -rf -- "$runtime/omarchy"
+printf 'not-a-dir\n' >"$runtime/omarchy"
+status=0
+"$signal" scanning --runtime-dir "$runtime" >/dev/null 2>"$runtime/err" || status=$?
+(( status == 0 )) || fail "a non-directory omarchy still exits 0" "exit $status $(cat "$runtime/err")"
+[[ $(cat "$runtime/omarchy") == "not-a-dir" ]] || fail "a non-directory omarchy is left alone"
+pass "a non-directory omarchy is not replaced"
