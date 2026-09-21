@@ -166,6 +166,33 @@ assertEqual(duringError.extraSpace, 150, 'geometry does not collapse while the s
 assertEqual(duringError.hint, 'Enter password', 'the password row keeps its own hint')
 assertEqual(duringError.chromeHint, 'Look at the camera', 'the held face card keeps the face hint')
 
+assert(polkit.isFaceAuthRequest(filled), 'an open-lid face request is a face scan')
+assert(polkit.faceSlotResolved(filled), 'an open-lid face request resolves polkitFace')
+assert(polkit.shouldHoldFaceSuccess(filled), 'a face card still showing holds a match')
+assert(polkit.shouldNoteFaceMiss(filled, 'scanning'), 'Howdy falling through to a password is a miss')
+assert(!polkit.shouldNoteFaceMiss(filled, 'recognized'), 'a match is not a miss')
+assert(polkit.isFaceAuthRequest(duringError), 'chromeKind stays face after Howdy asks for a password')
+assert(!polkit.shouldHoldFaceSuccess(duringError), 'a typed password is not Face recognized')
+assert(polkit.shouldNoteFaceMiss(duringError, 'scanning'), 'the password fall-through still notes the miss')
+
+const passwordOnly = polkit.cardPresentationFor(polkit.pamStepsFromConfig(vendor), true, false, source(plugins, ['markgroves.polkit-face']))
+assertEqual(passwordOnly.kind, 'password', 'vendor polkit is a password card')
+assert(!polkit.isFaceAuthRequest(passwordOnly), 'an installed face plugin does not make a password prompt a face scan')
+assert(!polkit.faceSlotResolved(passwordOnly), 'a password prompt does not resolve polkitFace')
+assert(!polkit.shouldHoldFaceSuccess(passwordOnly), 'password success does not hold Face recognized')
+assert(!polkit.shouldNoteFaceMiss(passwordOnly, 'scanning'), 'password required is not a face miss')
+
+const closedLid = polkit.cardPresentationFor(faceSteps, true, true, source(plugins, ['markgroves.polkit-face']))
+assert(!polkit.isFaceAuthRequest(closedLid), 'a closed lid never ran the face step')
+assert(!polkit.shouldHoldFaceSuccess(closedLid), 'closed-lid success is not a face hold')
+
+const fingerprintWaiting = polkit.cardPresentationFor(fingerprintSteps, true, false, source(plugins, ['acme.polkit-fingerprint', 'markgroves.polkit-face']))
+assertEqual(fingerprintWaiting.chromeKind, 'fingerprint', 'fingerprint PAM stays on fingerprint chrome')
+assert(!polkit.isFaceAuthRequest(fingerprintWaiting), 'a fingerprint prompt is not a face scan')
+assert(!polkit.faceSlotResolved(fingerprintWaiting), 'a fingerprint slot is not polkitFace')
+assert(!polkit.shouldHoldFaceSuccess(fingerprintWaiting), 'fingerprint success does not hold Face recognized')
+assert(!polkit.shouldNoteFaceMiss(fingerprintWaiting, 'scanning'), 'fingerprint asking for a response is not a face miss')
+
 const disabled = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, []))
 assertEqual(disabled.slot, null, 'installed but disabled chrome is an empty slot')
 assertEqual(disabled.extraSpace, 0, 'empty face slot collapses extra space')
@@ -175,6 +202,9 @@ const missing = polkit.cardPresentationFor(faceSteps, true, false, source({}, []
 assertEqual(missing.slot, null, 'no chrome plugin is the same empty slot as disabled')
 assertEqual(missing.extraSpace, 0, 'missing chrome collapses extra space')
 assertEqual(missing.hint, 'Look at the camera', 'missing chrome keeps the first-party hint')
+assert(polkit.isFaceAuthRequest(missing), 'first-party face with no plugin is still a face request')
+assert(!polkit.faceSlotResolved(missing), 'no plugin means no polkitFace slot')
+assert(polkit.shouldHoldFaceSuccess(missing), 'the first-party face card can still hold a match')
 
 const failedUrl = 'file:///plugins/markgroves.polkit-face/FaceCardFrame.js'
 const broken = polkit.cardPresentationFor(faceSteps, true, false, source(plugins, ['markgroves.polkit-face'], { [failedUrl]: true }))
@@ -291,6 +321,30 @@ assert(
 assert(
   /function faceResultHoldMs\(/.test(agentQml) && /FaceChrome\.holdMs\(state\)/.test(agentQml),
   'the agent holds a result for as long as the plugin declares'
+)
+assert(
+  /PolkitModel\.shouldHoldFaceSuccess\(presentation\)/.test(agentQml),
+  'a match hold requires this request to still be on the face card'
+)
+assert(
+  /PolkitModel\.shouldNoteFaceMiss\(presentation,\s*faceState\)/.test(agentQml),
+  'a miss hold requires this request to be a face scan'
+)
+assert(
+  /PolkitModel\.faceSlotResolved\(presentation\)/.test(agentQml),
+  'the ready-or-not hold fallback uses this request\'s polkitFace slot'
+)
+assert(
+  !/showFaceChrome \|\| FaceChrome\.sourceUrl/.test(agentQml),
+  'an installed face plugin URL is not treated as a face result'
+)
+assert(
+  !/\(!slotPainting && FaceChrome\.sourceUrl === ""\)/.test(agentQml),
+  'a global chrome URL does not authorize a miss hold'
+)
+assert(
+  !/!FaceChrome\.ready && FaceChrome\.sourceUrl !== ""/.test(agentQml),
+  'the hold fallback does not use the shared FaceChrome URL'
 )
 assert(
   /successTimer/.test(agentQml) && /root\.closing = true/.test(agentQml),

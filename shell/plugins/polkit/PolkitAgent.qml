@@ -117,14 +117,18 @@ Item {
   // Howdy has no "not recognized" exit; PAM simply falls through to asking for
   // a password. That fall-through is the miss, so the card holds the
   // not-recognized frame before the password row takes over.
+  //
+  // FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin
+  // is installed. A password or fingerprint prompt must not inherit a miss or
+  // match hold from that global URL.
   function faceResultHoldMs(state) {
     var hold = FaceChrome.holdMs(state)
-    if (hold <= 0 && !FaceChrome.ready && FaceChrome.sourceUrl !== "") hold = 800
+    if (hold <= 0 && !FaceChrome.ready && PolkitModel.faceSlotResolved(presentation)) hold = 800
     return hold
   }
 
   function noteFaceMiss() {
-    if ((!slotPainting && FaceChrome.sourceUrl === "") || faceState !== "scanning") return
+    if (!PolkitModel.shouldNoteFaceMiss(presentation, faceState)) return
     var hold = root.faceResultHoldMs("notRecognized")
     if (hold <= 0) return
     faceState = "notRecognized"
@@ -308,7 +312,7 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
-      if (root.showFaceChrome || FaceChrome.sourceUrl !== "") {
+      if (PolkitModel.shouldHoldFaceSuccess(presentation)) {
         var hold = root.faceResultHoldMs("recognized")
         if (hold > 0) {
           root.faceState = "recognized"

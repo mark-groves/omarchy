@@ -186,6 +186,24 @@ function authorizationLabel(message) {
   return match ? "Authorize running '" + match[1] + "'" : text
 }
 
+// FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin
+// is installed. It is not "this polkit request is a face scan".
+function isFaceAuthRequest(presentation) {
+  return !!(presentation && presentation.chromeKind === "face")
+}
+
+function faceSlotResolved(presentation) {
+  return !!(presentation && presentation.slot && presentation.slot.entryPointKey === "polkitFace")
+}
+
+function shouldNoteFaceMiss(presentation, faceState) {
+  return isFaceAuthRequest(presentation) && faceState === "scanning"
+}
+
+function shouldHoldFaceSuccess(presentation) {
+  return isFaceAuthRequest(presentation) && !!presentation && presentation.kind === "face"
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     promptLooksFingerprint: promptLooksFingerprint,
@@ -203,6 +221,10 @@ if (typeof module !== "undefined") {
     hintFor: hintFor,
     cardIsSquare: cardIsSquare,
     fingerprintConfiguredFromPamConfig: fingerprintConfiguredFromPamConfig,
-    authorizationLabel: authorizationLabel
+    authorizationLabel: authorizationLabel,
+    isFaceAuthRequest: isFaceAuthRequest,
+    faceSlotResolved: faceSlotResolved,
+    shouldNoteFaceMiss: shouldNoteFaceMiss,
+    shouldHoldFaceSuccess: shouldHoldFaceSuccess
   }
 }
