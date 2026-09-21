@@ -329,6 +329,7 @@ Item {
     }
 
     function onAuthenticationRequestCancelled() {
+      successTimer.stop()
       root.resultHold = false
       root.closing = true
       closeTimer.restart()

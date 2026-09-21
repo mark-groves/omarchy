@@ -351,6 +351,10 @@ assert(
   'a held success still closes the dialog'
 )
 assert(
+  /function onAuthenticationRequestCancelled\(\) \{\s*successTimer\.stop\(\)\s*root\.resultHold = false/.test(agentQml),
+  'cancel stops the success hold before clearing resultHold'
+)
+assert(
   /property bool resultHold/.test(agentQml) && /dialogVisible:.*resultHold/.test(agentQml),
   'an instant match keeps the dialog visible while the card finishes'
 )
