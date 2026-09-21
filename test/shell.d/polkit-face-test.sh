@@ -347,12 +347,16 @@ assert(
   'the hold fallback does not use the shared FaceChrome URL'
 )
 assert(
-  /successTimer/.test(agentQml) && /root\.closing = true/.test(agentQml),
-  'a held success still closes the dialog'
+  /function completeFacePlayback\(\)[\s\S]*?closing = true/.test(agentQml) && /onResultPlayed:\s*root\.completeFacePlayback\(\)/.test(agentQml),
+  'a held success still closes the dialog after the card plays'
 )
 assert(
-  /function onAuthenticationRequestCancelled\(\) \{\s*successTimer\.stop\(\)\s*root\.resultHold = false/.test(agentQml),
-  'cancel stops the success hold before clearing resultHold'
+  /function onAuthenticationRequestCancelled\(\) \{\s*root\.resultHold = false/.test(agentQml),
+  'cancel clears the success hold without waiting for playback'
+)
+assert(
+  !/successTimer/.test(agentQml) && !/missTimer/.test(agentQml),
+  'polkit does not run face holds on wall-clock timers'
 )
 assert(
   /property bool resultHold/.test(agentQml) && /dialogVisible:.*resultHold/.test(agentQml),

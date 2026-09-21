@@ -78,6 +78,8 @@ assert(/objectName:\s*"faceOverlayCard"/.test(overlayQml), 'overlay card is name
 assert(/target:\s*"omarchy\.face-overlay"/.test(overlayQml), 'overlay registers its own IPC target')
 assert(/function show\(payloadJson: string\)/.test(overlayQml), 'overlay can be shown over IPC')
 assert(/FaceChrome\.holdMs\(next\.state\)/.test(overlayQml), 'overlay holds a result for as long as the plugin declares')
+assert(/awaitingPlayback = true[\s\S]{0,160}holdTimer\.stop\(\)/.test(overlayQml), 'a result hold waits for presented frames and does not start the wall timer')
+assert(/onResultPlayed:[\s\S]{0,120}awaitingPlayback/.test(overlayQml), 'the overlay hides a result when the canvas finishes it')
 assert(/Model\.isHideState\(next\.state\)/.test(overlayQml) && /root\.hideCard\(\)/.test(overlayQml), 'cancelled hides the overlay without a hold')
 assert(/Model\.scanTimeoutMs\(\)/.test(overlayQml), 'scanning starts a timeout so a killed wrapper cannot stick')
 assert(/firstPartyServiceFor\("omarchy\.lock"\)/.test(overlayQml) && /firstPartyServiceFor\("omarchy\.polkit"\)/.test(overlayQml), 'overlay asks lock and polkit whether they already own the card')
@@ -108,7 +110,8 @@ assert(/property bool faceHolding/.test(lockQml), 'lock tracks a display-only ho
 assert(/faceScanning:\s*root\.faceAuthenticating \|\| root\.faceHolding/.test(lockQml), 'lock keeps the card animating through the hold')
 assert(/function holdFaceResult\(/.test(lockQml), 'lock holds recognized and miss through one helper')
 assert(/!root\.faceHolding/.test(lockQml), 'lock does not blank the panel during a face hold')
-assert(/id: faceMissHoldTimer/.test(lockQml), 'lock holds a miss long enough for the card to play out')
+assert(/onFaceResultPlayed:\s*root\.completeFacePlayback\(\)/.test(lockQml), 'lock holds a miss until the card has played it')
+assert(!/faceMissHoldTimer/.test(lockQml), 'lock does not time a miss on the wall clock')
 
 assert(/property bool resultHold/.test(polkitQml), 'polkit keeps the dialog up after PAM succeeds')
 assert(/dialogVisible:.*resultHold/.test(polkitQml), 'polkit visibility includes the result hold')

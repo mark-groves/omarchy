@@ -13,6 +13,8 @@ Item {
 
   property bool opened: false
   property string cardState: "scanning"
+  property bool awaitingPlayback: false
+  property int playbackEpoch: 0
   property var lastSignal: null
   property var pendingSignal: null
 
@@ -56,6 +58,7 @@ Item {
 
   function hideCard() {
     holdTimer.stop()
+    root.awaitingPlayback = false
     root.opened = false
   }
 
@@ -80,16 +83,22 @@ Item {
     root.opened = true
 
     var hold = Model.resultHoldMs(next.state, FaceChrome.holdMs(next.state))
-    var timeout = next.state === "scanning" ? Model.scanTimeoutMs() : 0
-    var delay = hold > 0 ? hold : timeout
-    if (delay > 0) {
-      holdTimer.interval = delay
-      holdTimer.restart()
-    } else if (next.state !== "scanning") {
-      root.hideCard()
-    } else {
+    if (hold > 0) {
+      // The canvas emits resultPlayed after the result has been on screen.
+      // A wall-clock timer would hide the card if PAM returned before the
+      // first frame, or while the display was still waking.
+      root.awaitingPlayback = true
+      root.playbackEpoch += 1
       holdTimer.stop()
+      return "ok"
     }
+    root.awaitingPlayback = false
+    if (next.state === "scanning") {
+      holdTimer.interval = Model.scanTimeoutMs()
+      holdTimer.restart()
+      return "ok"
+    }
+    root.hideCard()
     return "ok"
   }
 
@@ -187,7 +196,12 @@ Item {
           width: root.cardSide
           height: width
           cardState: root.cardState
+          playbackEpoch: root.playbackEpoch
+          visible: root.painting
           active: root.painting
+          onResultPlayed: {
+            if (root.awaitingPlayback) root.hideCard()
+          }
           accent: Color.polkit.accent
           foreground: Color.polkit.text
           errorColor: Color.polkit.textError

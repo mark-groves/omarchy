@@ -4,6 +4,7 @@ import Quickshell.Io
 import Quickshell.Services.Pam
 import Quickshell.Wayland
 import qs.Commons
+import "../../Commons/FacePlayback.js" as Playback
 
 Item {
   id: root
@@ -25,8 +26,10 @@ Item {
   property bool fingerprintAuthenticating: false
   property bool faceAuthenticating: false
   // Display-only hold after PAM already returned, so an instant match still
-  // lets the recognised (or miss) frame play out.
+  // lets the recognised (or miss) frame play out. Completion comes from the
+  // canvas, after presented frames, and does not change the PAM result.
   property bool faceHolding: false
+  property int facePlaybackEpoch: 0
   // What the shared face card should be showing. Lock previously bound nothing
   // face-related into the view, so a scan and a miss were both silent.
   property string faceState: "scanning"
@@ -151,8 +154,6 @@ Item {
     faceHolding = false
     fingerprintRetryTimer.stop()
     faceRetryTimer.stop()
-    faceHoldTimer.stop()
-    faceMissHoldTimer.stop()
     faceState = "scanning"
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
@@ -283,10 +284,10 @@ Item {
     if (!lockRequested || !sessionLock.secure || !faceConfigured) return
     if (laptopClosed || displaysBlank) return
     if (facePam.active || faceAuthenticating) return
-    if (faceHoldTimer.running) return
+    // A result armed while the panel was blank or the frame clock was stopped
+    // is still owed its frames. A new scan must not replace that card.
+    if (faceHolding) return
 
-    faceHolding = false
-    faceMissHoldTimer.stop()
     faceState = "scanning"
     faceAuthenticating = true
     if (!facePam.start()) {
@@ -295,13 +296,55 @@ Item {
     }
   }
 
+  // True when the card will play the result before the session moves on.
+  // False leaves the PAM result untouched and lets the caller continue at once.
   function holdFaceResult(state) {
-    var hold = FaceChrome.holdMs(state)
-    if (hold <= 0 && !FaceChrome.ready && FaceChrome.sourceUrl !== "") hold = 800
+    var canPresent = root.faceConfigured && !root.fingerprintConfigured
+    var chromeExpected = canPresent && FaceChrome.sourceUrl !== ""
+    var action = Playback.playbackAction(state, FaceChrome.ready, FaceChrome.holdMs(state), chromeExpected)
     faceState = state
-    if (hold <= 0) return 0
+    if (!canPresent || action === "immediate") {
+      faceHolding = false
+      return false
+    }
+    if (state === "recognized") faceRetryTimer.stop()
     faceHolding = true
-    return hold
+    facePlaybackEpoch += 1
+    return true
+  }
+
+  function completeFacePlayback() {
+    if (!faceHolding) return
+    var recognized = faceState === "recognized"
+    faceHolding = false
+    if (!lockRequested) return
+    if (recognized) {
+      finishUnlock()
+      return
+    }
+    // The retry may already be running. If it fired while the card was still
+    // playing, startFace refused it, so arm another gap once the miss is done.
+    if (!faceRetryTimer.running && faceConfigured && !laptopClosed && !displaysBlank) faceRetryTimer.restart()
+  }
+
+  function abandonFacePlaybackIfUnplayable() {
+    if (!faceHolding) return
+    if (!faceConfigured || fingerprintConfigured) {
+      completeFacePlayback()
+      return
+    }
+    if (FaceChrome.ready) {
+      if (Playback.playbackAction(faceState, true, FaceChrome.holdMs(faceState), true) === "immediate") completeFacePlayback()
+      return
+    }
+    if (FaceChrome.sourceUrl !== "" && FaceChrome.failure === "") return
+    completeFacePlayback()
+  }
+
+  function releaseUnmatchedFace() {
+    if (!lockRequested || !faceConfigured || laptopClosed) return
+    root.holdFaceResult("notRecognized")
+    if (!displaysBlank) faceRetryTimer.restart()
   }
 
   function handleFaceFinished(result) {
@@ -309,24 +352,13 @@ Item {
 
     if (!lockRequested) return
     if (result === PamResult.Success) {
-      // Hold the recognised frame so the card is seen finishing. PAM has
-      // already succeeded, so this delays the teardown, not the unlock. With
-      // no chrome installed the hold is zero and this is the old behaviour.
-      var hold = root.holdFaceResult("recognized")
-      if (hold > 0) {
-        faceHoldTimer.interval = hold
-        faceHoldTimer.restart()
-        return
-      }
+      // PAM has already succeeded. Waiting here only keeps the recognised
+      // frame on screen; with no card to play, unlock is immediate.
+      if (root.holdFaceResult("recognized")) return
       finishUnlock()
-    } else if (faceConfigured && !laptopClosed && !displaysBlank) {
-      var missHold = root.holdFaceResult("notRecognized")
-      if (missHold > 0) {
-        faceMissHoldTimer.interval = missHold
-        faceMissHoldTimer.restart()
-      }
-      faceRetryTimer.restart()
+      return
     }
+    root.releaseUnmatchedFace()
   }
 
   function handleFingerprintFinished(result) {
@@ -387,7 +419,9 @@ Item {
         fingerprintConfigured: root.fingerprintConfigured
         faceConfigured: root.faceConfigured
         faceState: root.faceState
+        facePlaybackEpoch: root.facePlaybackEpoch
         faceScanning: root.faceAuthenticating || root.faceHolding
+        onFaceResultPlayed: root.completeFacePlayback()
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
@@ -487,14 +521,7 @@ Item {
 
     onError: function(error) {
       root.faceAuthenticating = false
-      if (root.lockRequested && root.faceConfigured && !root.laptopClosed && !root.displaysBlank) {
-        var missHold = root.holdFaceResult("notRecognized")
-        if (missHold > 0) {
-          faceMissHoldTimer.interval = missHold
-          faceMissHoldTimer.restart()
-        }
-        faceRetryTimer.restart()
-      }
+      root.releaseUnmatchedFace()
     }
   }
 
@@ -503,21 +530,6 @@ Item {
     interval: 250
     repeat: false
     onTriggered: root.startFingerprint()
-  }
-
-  Timer {
-    id: faceHoldTimer
-    repeat: false
-    onTriggered: {
-      root.faceHolding = false
-      root.finishUnlock()
-    }
-  }
-
-  Timer {
-    id: faceMissHoldTimer
-    repeat: false
-    onTriggered: root.faceHolding = false
   }
 
   Timer {
@@ -721,8 +733,15 @@ Item {
     if (displaysBlank) {
       faceRetryTimer.stop()
     } else if (lockRequested) {
+      // The canvas starts the armed result once frames are presented.
+      // startFace returns while that hold is still playing.
       startFace()
     }
+  }
+
+  Connections {
+    target: FaceChrome
+    function onRevisionChanged() { root.abandonFacePlaybackIfUnplayable() }
   }
 
   Timer {

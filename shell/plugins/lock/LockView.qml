@@ -12,6 +12,7 @@ Item {
   property bool faceConfigured: false
   // "scanning" | "recognized" | "notRecognized", driven by the lock service.
   property string faceState: "scanning"
+  property int facePlaybackEpoch: 0
   property bool faceScanning: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
@@ -54,6 +55,7 @@ Item {
   signal passwordTextEdited(string password)
   signal clearFailureRequested()
   signal wakeRequested()
+  signal faceResultPlayed()
 
   function forcePasswordFocus() {
     passwordInput.forceActiveFocus()
@@ -149,7 +151,9 @@ Item {
         height: width
         visible: faceCard.visible
         cardState: root.faceState
+        playbackEpoch: root.facePlaybackEpoch
         active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
+        onResultPlayed: root.faceResultPlayed()
         accent: Color.lock.borderActive
         foreground: Color.lock.text
         errorColor: Color.lock.textError
