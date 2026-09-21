@@ -47,6 +47,8 @@ assert_wrapper_text() {
     fail "wrapper signals the face overlay" "$(cat "$path")"
   grep -F 'signal_face scanning' "$path" >/dev/null ||
     fail "wrapper signals scanning before compare" "$(cat "$path")"
+  grep -F 'if [[ -n $cancel_signal ]]; then' "$path" >/dev/null ||
+    fail "wrapper checks for cancel before starting compare" "$(cat "$path")"
   grep -F 'signal_result recognized' "$path" >/dev/null ||
     fail "wrapper signals recognized after a match" "$(cat "$path")"
   grep -F 'signal_result notRecognized' "$path" >/dev/null ||
@@ -327,6 +329,41 @@ if [[ -f $slow_pid_file ]]; then
   fi
 fi
 pass "TERM to the wrapper stops compare and hides the overlay"
+
+: >"$signals"
+rm -f -- "$slow_pid_file"
+slow_scan=$root/slow-scan-helper
+compare_ran=$root/compare.ran
+cat >"$slow_scan" <<SH
+#!/bin/bash
+printf '%s\n' "\$1" >>"$signals"
+if [[ \$1 == scanning ]]; then
+  sleep 2
+fi
+exit 0
+SH
+chmod 755 "$slow_scan"
+printf '#!/bin/bash\necho ran >%q\nexit 0\n' "$compare_ran" >"$root/should-not-run.real"
+chmod 755 "$root/should-not-run.real"
+rewrite_wrapper "$root/wrap-cancel-before" "$root/should-not-run.real"
+sed -i "s|helper=$fake_helper|helper=$slow_scan|" "$root/wrap-cancel-before"
+status=0
+"$root/wrap-cancel-before" &
+wpid=$!
+for _ in {1..40}; do
+  if grep -qx scanning "$signals" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+grep -qx scanning "$signals" || fail "cancel-before-compare signals scanning first" "$(cat "$signals")"
+kill -TERM "$wpid"
+wait "$wpid" || status=$?
+(( status == 143 )) || fail "cancel during scanning exits 143" "exit $status $(cat "$signals")"
+[[ ! -e $compare_ran ]] || fail "cancel during scanning must not start Howdy" "$(cat "$compare_ran")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "cancel during scanning hides the overlay" "$(cat "$signals")"
+pass "cancel during scanning does not start Howdy"
 
 # The trap records cancel and returns $?. After wait, a finished Howdy
 # status (< 128) is kept; only a signaled child becomes 130/143.

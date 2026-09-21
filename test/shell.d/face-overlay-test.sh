@@ -94,6 +94,7 @@ assert(/signal_face scanning/.test(wrapper) && /signal_result recognized/.test(w
 assert(/signal_face cancelled/.test(wrapper) && /trap on_exit EXIT/.test(wrapper), 'wrapper hides the card if compare never returns a result')
 assert(/on_cancel INT 130/.test(wrapper) && /on_cancel TERM 143/.test(wrapper), 'INT and TERM stop compare and still exit with their usual statuses')
 assert(/return "\$saved"/.test(wrapper) && /compare_status >= 128/.test(wrapper), 'a late cancel keeps compare\'s PAM status')
+assert(/signal_face scanning/.test(wrapper) && /if \[\[ -n \$cancel_signal \]\]/.test(wrapper), 'cancel during scanning does not start Howdy')
 assert(/compare_pid=\$!/.test(wrapper) && /howdy-compare\.real "\$@" &/.test(wrapper), 'compare is backgrounded so a cancel is not deferred')
 assert(/signaled_result=1/.test(wrapper), 'a normal compare exit does not overwrite the result with cancelled')
 assert(/face-auth\.json/.test(signal), 'helper writes the signal file')

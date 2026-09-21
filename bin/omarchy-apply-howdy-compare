@@ -90,8 +90,19 @@ trap 'on_cancel INT 130' INT
 trap 'on_cancel TERM 143' TERM
 
 signal_face scanning
+# Cancel during scanning must not start Howdy. compare_pid is still 0,
+# so the trap cannot stop a child that is not running yet.
+if [[ -n $cancel_signal ]]; then
+  exit "$cancel_status"
+fi
 /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@" &
 compare_pid=$!
+if [[ -n $cancel_signal ]]; then
+  stop_compare "$cancel_signal"
+  wait "$compare_pid" 2>/dev/null || true
+  compare_pid=0
+  exit "$cancel_status"
+fi
 wait "$compare_pid"
 compare_status=$?
 compare_pid=0
