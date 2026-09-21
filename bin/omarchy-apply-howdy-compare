@@ -37,6 +37,8 @@ export OPENCV_LOG_LEVEL=ERROR
 # the scan.
 signaled_result=0
 compare_pid=0
+compare_done=0
+compare_status=1
 signal_face() {
   local conf=/etc/omarchy.conf
   local omarchy_path=/usr/share/omarchy
@@ -73,22 +75,34 @@ stop_compare() {
   fi
 }
 
+# Overlay signaling never overrides compare's exit. A late INT/TERM after
+# Howdy already returned must still leave PAM with that status.
+on_cancel() {
+  if (( compare_done )); then
+    exit "$compare_status"
+  fi
+  stop_compare "$1"
+  exit "$2"
+}
+
 trap on_exit EXIT
-trap 'stop_compare INT; exit 130' INT
-trap 'stop_compare TERM; exit 143' TERM
+trap 'on_cancel INT 130' INT
+trap 'on_cancel TERM 143' TERM
 
 signal_face scanning
 /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@" &
 compare_pid=$!
 wait "$compare_pid"
-status=$?
+compare_status=$?
+compare_done=1
 compare_pid=0
-if (( status == 0 )); then
+signaled_result=1
+if (( compare_status == 0 )); then
   signal_result recognized
 else
   signal_result notRecognized
 fi
-exit $status
+exit $compare_status
 EOF
 }
 

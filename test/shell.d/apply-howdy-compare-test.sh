@@ -55,14 +55,18 @@ assert_wrapper_text() {
     fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
   grep -F 'trap on_exit EXIT' "$path" >/dev/null ||
     fail "wrapper traps EXIT so a killed sudo hides the card" "$(cat "$path")"
-  grep -F "trap 'stop_compare INT; exit 130' INT" "$path" >/dev/null ||
+  grep -F "trap 'on_cancel INT 130' INT" "$path" >/dev/null ||
     fail "INT stops compare and exits 130" "$(cat "$path")"
-  grep -F "trap 'stop_compare TERM; exit 143' TERM" "$path" >/dev/null ||
+  grep -F "trap 'on_cancel TERM 143' TERM" "$path" >/dev/null ||
     fail "TERM stops compare and exits 143" "$(cat "$path")"
   grep -F 'compare_pid=$!' "$path" >/dev/null ||
     fail "wrapper records compare's pid so the trap can stop it" "$(cat "$path")"
   grep -F 'wait "$compare_pid"' "$path" >/dev/null ||
     fail "wrapper waits for the background compare" "$(cat "$path")"
+  grep -F 'if (( compare_done )); then' "$path" >/dev/null ||
+    fail "a late INT/TERM keeps compare's exit status" "$(cat "$path")"
+  grep -F 'exit "$compare_status"' "$path" >/dev/null ||
+    fail "a finished scan is not rewritten as 130 or 143" "$(cat "$path")"
   if grep -E '^/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "\$@"$' "$path" >/dev/null; then
     fail "a foreground compare defers INT/TERM until Howdy finishes" "$(cat "$path")"
   fi
