@@ -38,8 +38,8 @@ assert_wrapper_text() {
   if grep -E 'OPENCV_LOG_LEVEL=(SILENT|OFF|0|FATAL)' "$path" >/dev/null; then
     fail "wrapper does not hide OpenCV errors" "$(cat "$path")"
   fi
-  grep -F '/usr/lib/howdy/howdy-compare.real "$@"' "$path" >/dev/null ||
-    fail "wrapper runs howdy-compare.real with \"\$@\"" "$(cat "$path")"
+  grep -F '/usr/lib/howdy/howdy-compare.real "$@" &' "$path" >/dev/null ||
+    fail "wrapper backgrounds howdy-compare.real so INT/TERM can stop it" "$(cat "$path")"
   if grep -E '^exec /usr/bin/taskset' "$path" >/dev/null; then
     fail "wrapper does not exec compare so it can signal the result" "$(cat "$path")"
   fi
@@ -55,10 +55,17 @@ assert_wrapper_text() {
     fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
   grep -F 'trap on_exit EXIT' "$path" >/dev/null ||
     fail "wrapper traps EXIT so a killed sudo hides the card" "$(cat "$path")"
-  grep -F "trap 'exit 130' INT" "$path" >/dev/null ||
-    fail "wrapper maps INT to exit 130" "$(cat "$path")"
-  grep -F "trap 'exit 143' TERM" "$path" >/dev/null ||
-    fail "wrapper maps TERM to exit 143" "$(cat "$path")"
+  grep -F "trap 'stop_compare INT; exit 130' INT" "$path" >/dev/null ||
+    fail "INT stops compare and exits 130" "$(cat "$path")"
+  grep -F "trap 'stop_compare TERM; exit 143' TERM" "$path" >/dev/null ||
+    fail "TERM stops compare and exits 143" "$(cat "$path")"
+  grep -F 'compare_pid=$!' "$path" >/dev/null ||
+    fail "wrapper records compare's pid so the trap can stop it" "$(cat "$path")"
+  grep -F 'wait "$compare_pid"' "$path" >/dev/null ||
+    fail "wrapper waits for the background compare" "$(cat "$path")"
+  if grep -E '^/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "\$@"$' "$path" >/dev/null; then
+    fail "a foreground compare defers INT/TERM until Howdy finishes" "$(cat "$path")"
+  fi
   grep -F 'signaled_result=1' "$path" >/dev/null ||
     fail "wrapper marks a normal result so EXIT does not hide a match" "$(cat "$path")"
   if grep -E 'signal_face cancelled' "$path" >/dev/null && ! grep -F 'if (( signaled_result == 0 )); then' "$path" >/dev/null; then
@@ -272,7 +279,8 @@ pass "wrapper miss keeps compare's status and does not cancel"
 
 : >"$signals"
 slow=$root/slow.real
-printf '#!/bin/bash\nexec sleep 30\n' >"$slow"
+slow_pid_file=$root/slow.pid
+printf '#!/bin/bash\necho $$ >%q\nexec sleep 30\n' "$slow_pid_file" >"$slow"
 chmod 755 "$slow"
 rewrite_wrapper "$root/wrap-int" "$slow"
 status=0
@@ -283,6 +291,33 @@ timeout --preserve-status --signal=INT --kill-after=2s 0.4 "$root/wrap-int" || s
 [[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
   fail "INT wrapper signals cancelled" "$(cat "$signals")"
 pass "cancelled sudo hides the overlay without changing compare's status"
+
+: >"$signals"
+rewrite_wrapper "$root/wrap-term" "$slow"
+status=0
+"$root/wrap-term" &
+wpid=$!
+for _ in {1..40}; do
+  if grep -qx scanning "$signals" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+grep -qx scanning "$signals" || fail "TERM wrapper signals scanning before cancel" "$(cat "$signals")"
+# TERM the wrapper only. A foreground compare would ignore this until Howdy
+# finished; the trap must stop compare so PAM is not blocked.
+kill -TERM "$wpid"
+wait "$wpid" || status=$?
+(( status == 143 )) || fail "TERM wrapper exits 143" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "TERM wrapper signals cancelled" "$(cat "$signals")"
+if [[ -f $slow_pid_file ]]; then
+  slow_pid=$(<"$slow_pid_file")
+  if [[ $slow_pid =~ ^[0-9]+$ ]]; then
+    kill -TERM "$slow_pid" 2>/dev/null || true
+  fi
+fi
+pass "TERM to the wrapper stops compare and hides the overlay"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"
