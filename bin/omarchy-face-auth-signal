@@ -137,6 +137,22 @@ if (( EUID == 0 )) && ! owned_dir_ok "$dir" "$expected_owner"; then
   exit 0
 fi
 
+# mktemp closes the fd. The session user owns $dir and can replace that
+# name with a symlink before the write. Root must not follow it. Drop to
+# the session owner for mktemp through mv; a planted symlink is then
+# their write, not a privileged one. Skip if we cannot drop.
+if (( EUID == 0 && expected_owner != 0 )); then
+  gid=$(/usr/bin/stat -c '%g' -- "$dir") || exit 0
+  [[ $gid =~ ^[0-9]+$ ]] || exit 0
+  self=$0
+  if [[ $self != /* ]]; then
+    self=$(command -v -- "$0" 2>/dev/null) || exit 0
+  fi
+  /usr/bin/setpriv --reuid="$expected_owner" --regid="$gid" --clear-groups -- \
+    /usr/bin/bash -- "$self" "$state" --runtime-dir "$runtime_dir" || true
+  exit 0
+fi
+
 ts=${EPOCHREALTIME/./}
 payload=$(printf '{"state":"%s","ts":%s}\n' "$state" "$ts")
 tmp=$(mktemp -- "$dir/face-auth.json.XXXXXX" 2>/dev/null) || exit 0

@@ -62,6 +62,17 @@ payload=$(cat "$runtime/omarchy/face-auth.json")
   fail "cancelled payload names the state" "$payload"
 pass "cancelled writes the hide state"
 
+drop_runtime=$(mktemp -d)
+status=0
+/usr/bin/setpriv --reuid="$EUID" --regid="$(id -g)" --clear-groups -- \
+  /usr/bin/bash -- "$signal" scanning --runtime-dir "$drop_runtime" >/dev/null 2>"$runtime/err" || status=$?
+(( status == 0 )) || fail "setpriv re-exec of the helper exits 0" "exit $status $(cat "$runtime/err")"
+payload=$(cat "$drop_runtime/omarchy/face-auth.json")
+[[ $payload == '{"state":"scanning","ts":'* ]] ||
+  fail "setpriv re-exec still writes the signal" "$payload"
+rm -rf -- "$drop_runtime"
+pass "the session-owner write path still publishes the signal"
+
 status=0
 "$signal" scanning --runtime-dir /dev/null/nope >/dev/null 2>"$runtime/err" || status=$?
 (( status == 0 )) || fail "an unwritable runtime dir still exits 0" "exit $status $(cat "$runtime/err")"
@@ -76,6 +87,18 @@ fi
 grep -F 'login_uid' "$signal" >/dev/null || fail "root session lookup is loginuid-only"
 grep -F 'owned_dir_ok' "$signal" >/dev/null || fail "privileged writes check ownership and mode"
 grep -F '[[ -L $dir ]]' "$signal" >/dev/null || fail "the helper refuses an omarchy symlink"
+grep -F 'setpriv --reuid="$expected_owner"' "$signal" >/dev/null ||
+  fail "root writes the signal as the session owner" "$(grep -n setpriv "$signal" || true)"
+awk '
+  /EUID == 0 && expected_owner != 0/ { drop=1 }
+  drop && /setpriv/ { saw=1 }
+  drop && saw && /exit 0/ { closed=1 }
+  drop && /mktemp/ {
+    if (!closed) { print "root still reaches mktemp before dropping"; exit 1 }
+    exit 0
+  }
+  END { if (!closed) { print "root drop never fail-closes"; exit 1 } }
+' "$signal" || fail "root never writes through the mktemp name" "$(cat "$signal")"
 if grep -E 'mkdir -p -- "\$dir"' "$signal" >/dev/null; then
   fail "mkdir -p follows a planted omarchy symlink"
 fi
