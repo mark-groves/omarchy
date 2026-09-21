@@ -63,15 +63,19 @@ payload=$(cat "$runtime/omarchy/face-auth.json")
 pass "cancelled writes the hide state"
 
 drop_runtime=$(mktemp -d)
-status=0
-/usr/bin/setpriv --reuid="$EUID" --regid="$(id -g)" --clear-groups -- \
-  /usr/bin/bash -- "$signal" scanning --runtime-dir "$drop_runtime" >/dev/null 2>"$runtime/err" || status=$?
-(( status == 0 )) || fail "setpriv re-exec of the helper exits 0" "exit $status $(cat "$runtime/err")"
-payload=$(cat "$drop_runtime/omarchy/face-auth.json")
-[[ $payload == '{"state":"scanning","ts":'* ]] ||
-  fail "setpriv re-exec still writes the signal" "$payload"
+if /usr/bin/setpriv --reuid="$EUID" --regid="$(id -g)" --clear-groups -- /usr/bin/true >/dev/null 2>&1; then
+  status=0
+  /usr/bin/setpriv --reuid="$EUID" --regid="$(id -g)" --clear-groups -- \
+    /usr/bin/bash -- "$signal" scanning --runtime-dir "$drop_runtime" >/dev/null 2>"$runtime/err" || status=$?
+  (( status == 0 )) || fail "setpriv re-exec of the helper exits 0" "exit $status $(cat "$runtime/err")"
+  payload=$(cat "$drop_runtime/omarchy/face-auth.json")
+  [[ $payload == '{"state":"scanning","ts":'* ]] ||
+    fail "setpriv re-exec still writes the signal" "$payload"
+  pass "the session-owner write path still publishes the signal"
+else
+  pass "setpriv cannot drop in this environment; skipping the re-exec write"
+fi
 rm -rf -- "$drop_runtime"
-pass "the session-owner write path still publishes the signal"
 
 status=0
 "$signal" scanning --runtime-dir /dev/null/nope >/dev/null 2>"$runtime/err" || status=$?
