@@ -28,11 +28,14 @@ exit 1
 SH
 chmod +x "$test_dir/bin/"*
 
+mkdir -p "$test_dir/packaged/shell/plugins/omacom.elsewhen"
+sed "s|/usr/share/omarchy|$test_dir/packaged|g" "$ROOT/migrations/1789581661.sh" >"$test_dir/migration.sh"
+
 plugin="$test_dir/home/.config/omarchy/plugins/omacom.elsewhen"
 run_migration() {
   : >"$CALL_LOG"
-  HOME="$test_dir/home" OMARCHY_PATH="$ROOT" PATH="$test_dir/bin:$ROOT/bin:$PATH" \
-    bash -euo pipefail "$ROOT/migrations/1789581661.sh" >"$test_dir/output" 2>&1
+  HOME="$test_dir/home" OMARCHY_PATH="${1:-$test_dir/packaged}" PATH="$test_dir/bin:$ROOT/bin:$PATH" \
+    bash -euo pipefail "$test_dir/migration.sh" >"$test_dir/output" 2>&1
 }
 
 if PACKAGE_STATUS=1 run_migration; then
@@ -56,22 +59,30 @@ run_migration
 [[ ! -e $plugin && ! -L $plugin ]] || fail "rerunning the migration does not create a user plugin link"
 pass "migration can be rerun without a user plugin link"
 
+run_migration "$ROOT"
+[[ $(readlink "$plugin") == "$test_dir/packaged/shell/plugins/omacom.elsewhen" ]] || fail "dev checkout links the packaged plugin"
+pass "dev checkout discovers Elsewhen through a user plugin link"
+run_migration "$ROOT"
+[[ $(readlink "$plugin") == "$test_dir/packaged/shell/plugins/omacom.elsewhen" ]] || fail "dev link survives a rerun"
+pass "dev link is idempotent"
+rm "$plugin"
+
 mkdir -p "$plugin"
 printf 'local work\n' >"$plugin/notes"
-run_migration
+run_migration "$ROOT"
 [[ ! -L $plugin && $(cat "$plugin/notes") == "local work" ]] || fail "existing checkout is preserved"
 pass "existing checkout and local files are preserved"
 
 rm "$plugin/notes"
 rmdir "$plugin"
 ln -s "$test_dir/custom-plugin" "$plugin"
-run_migration
+run_migration "$ROOT"
 [[ $(readlink "$plugin") == "$test_dir/custom-plugin" ]] || fail "existing symlink is preserved"
 pass "existing symlink is preserved, including a missing target"
 
 for failure in 'SCAN_STATUS=1' 'TEST_PUT_RESULT=unknown'; do
   if env "$failure" HOME="$test_dir/home" OMARCHY_PATH="$ROOT" PATH="$test_dir/bin:$ROOT/bin:$PATH" \
-    bash -euo pipefail "$ROOT/migrations/1789581661.sh" >"$test_dir/output" 2>&1; then
+    bash -euo pipefail "$test_dir/migration.sh" >"$test_dir/output" 2>&1; then
     fail "$failure must leave the migration pending"
   fi
   pass "$failure leaves the migration pending"
