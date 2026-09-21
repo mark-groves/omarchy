@@ -33,8 +33,24 @@ assert_wrapper_text() {
     fail "wrapper pins with taskset -c 0" "$(cat "$path")"
   grep -F 'OMP_NUM_THREADS=1' "$path" >/dev/null ||
     fail "wrapper sets OMP_NUM_THREADS=1" "$(cat "$path")"
+  grep -F 'OPENCV_LOG_LEVEL=ERROR' "$path" >/dev/null ||
+    fail "wrapper sets OPENCV_LOG_LEVEL=ERROR" "$(cat "$path")"
+  if grep -E 'OPENCV_LOG_LEVEL=(SILENT|OFF|0|FATAL)' "$path" >/dev/null; then
+    fail "wrapper does not hide OpenCV errors" "$(cat "$path")"
+  fi
   grep -F '/usr/lib/howdy/howdy-compare.real "$@"' "$path" >/dev/null ||
-    fail "wrapper execs howdy-compare.real with \"\$@\"" "$(cat "$path")"
+    fail "wrapper runs howdy-compare.real with \"\$@\"" "$(cat "$path")"
+  if grep -E '^exec /usr/bin/taskset' "$path" >/dev/null; then
+    fail "wrapper does not exec compare so it can signal the result" "$(cat "$path")"
+  fi
+  grep -F 'omarchy-face-auth-signal' "$path" >/dev/null ||
+    fail "wrapper signals the face overlay" "$(cat "$path")"
+  grep -F 'signal_face scanning' "$path" >/dev/null ||
+    fail "wrapper signals scanning before compare" "$(cat "$path")"
+  grep -F 'signal_face recognized' "$path" >/dev/null ||
+    fail "wrapper signals recognized after a match" "$(cat "$path")"
+  grep -F 'signal_face notRecognized' "$path" >/dev/null ||
+    fail "wrapper signals notRecognized after a miss" "$(cat "$path")"
   bash -n "$path" || fail "wrapper passes bash -n"
 }
 

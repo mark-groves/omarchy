@@ -289,12 +289,20 @@ assert(
   'the chrome column cannot take focus'
 )
 assert(
-  /FaceChrome\.holdMs\("recognized"\)/.test(agentQml) && /FaceChrome\.holdMs\("notRecognized"\)/.test(agentQml),
+  /function faceResultHoldMs\(/.test(agentQml) && /FaceChrome\.holdMs\(state\)/.test(agentQml),
   'the agent holds a result for as long as the plugin declares'
 )
 assert(
   /successTimer/.test(agentQml) && /root\.closing = true/.test(agentQml),
   'a held success still closes the dialog'
+)
+assert(
+  /property bool resultHold/.test(agentQml) && /dialogVisible:.*resultHold/.test(agentQml),
+  'an instant match keeps the dialog visible while the card finishes'
+)
+assert(
+  /showPasswordRow:.*!root\.resultHold/.test(agentQml),
+  'the password row does not replace a held match'
 )
 assert(
   /Look at the camera/.test(agentQml) === false,

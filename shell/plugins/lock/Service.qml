@@ -24,6 +24,9 @@ Item {
   property bool authenticatingPassword: false
   property bool fingerprintAuthenticating: false
   property bool faceAuthenticating: false
+  // Display-only hold after PAM already returned, so an instant match still
+  // lets the recognised (or miss) frame play out.
+  property bool faceHolding: false
   // What the shared face card should be showing. Lock previously bound nothing
   // face-related into the view, so a scan and a miss were both silent.
   property string faceState: "scanning"
@@ -145,9 +148,11 @@ Item {
     authenticatingPassword = false
     fingerprintAuthenticating = false
     faceAuthenticating = false
+    faceHolding = false
     fingerprintRetryTimer.stop()
     faceRetryTimer.stop()
     faceHoldTimer.stop()
+    faceMissHoldTimer.stop()
     faceState = "scanning"
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
@@ -278,13 +283,25 @@ Item {
     if (!lockRequested || !sessionLock.secure || !faceConfigured) return
     if (laptopClosed || displaysBlank) return
     if (facePam.active || faceAuthenticating) return
+    if (faceHoldTimer.running) return
 
+    faceHolding = false
+    faceMissHoldTimer.stop()
     faceState = "scanning"
     faceAuthenticating = true
     if (!facePam.start()) {
       faceAuthenticating = false
       if (faceConfigured && !laptopClosed && !displaysBlank) faceRetryTimer.restart()
     }
+  }
+
+  function holdFaceResult(state) {
+    var hold = FaceChrome.holdMs(state)
+    if (hold <= 0 && !FaceChrome.ready && FaceChrome.sourceUrl !== "") hold = 800
+    faceState = state
+    if (hold <= 0) return 0
+    faceHolding = true
+    return hold
   }
 
   function handleFaceFinished(result) {
@@ -295,8 +312,7 @@ Item {
       // Hold the recognised frame so the card is seen finishing. PAM has
       // already succeeded, so this delays the teardown, not the unlock. With
       // no chrome installed the hold is zero and this is the old behaviour.
-      var hold = FaceChrome.holdMs("recognized")
-      faceState = "recognized"
+      var hold = root.holdFaceResult("recognized")
       if (hold > 0) {
         faceHoldTimer.interval = hold
         faceHoldTimer.restart()
@@ -304,9 +320,11 @@ Item {
       }
       finishUnlock()
     } else if (faceConfigured && !laptopClosed && !displaysBlank) {
-      // The retry timer already outlasts the miss animation, so a miss needs
-      // no new delay. It only needed a state to show.
-      faceState = "notRecognized"
+      var missHold = root.holdFaceResult("notRecognized")
+      if (missHold > 0) {
+        faceMissHoldTimer.interval = missHold
+        faceMissHoldTimer.restart()
+      }
       faceRetryTimer.restart()
     }
   }
@@ -369,7 +387,7 @@ Item {
         fingerprintConfigured: root.fingerprintConfigured
         faceConfigured: root.faceConfigured
         faceState: root.faceState
-        faceScanning: root.faceAuthenticating
+        faceScanning: root.faceAuthenticating || root.faceHolding
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
@@ -470,7 +488,11 @@ Item {
     onError: function(error) {
       root.faceAuthenticating = false
       if (root.lockRequested && root.faceConfigured && !root.laptopClosed && !root.displaysBlank) {
-        root.faceState = "notRecognized"
+        var missHold = root.holdFaceResult("notRecognized")
+        if (missHold > 0) {
+          faceMissHoldTimer.interval = missHold
+          faceMissHoldTimer.restart()
+        }
         faceRetryTimer.restart()
       }
     }
@@ -486,7 +508,16 @@ Item {
   Timer {
     id: faceHoldTimer
     repeat: false
-    onTriggered: root.finishUnlock()
+    onTriggered: {
+      root.faceHolding = false
+      root.finishUnlock()
+    }
+  }
+
+  Timer {
+    id: faceMissHoldTimer
+    repeat: false
+    onTriggered: root.faceHolding = false
   }
 
   Timer {
@@ -616,7 +647,7 @@ Item {
       // Fingerprint PAM stays armed for the whole lock, so gating on
       // `authenticating` would keep the panel lit until unlock. Face is a
       // bounded Howdy scan. Hold the panel while that scan is in flight.
-      if (root.lockRequested && !root.authenticatingPassword && !root.faceAuthenticating) root.runBlank()
+      if (root.lockRequested && !root.authenticatingPassword && !root.faceAuthenticating && !root.faceHolding) root.runBlank()
     }
   }
 
@@ -677,7 +708,13 @@ Item {
   onFaceAuthenticatingChanged: {
     if (!lockRequested) return
     if (faceAuthenticating) idleBlankTimer.stop()
-    else armBlankTimer()
+    else if (!faceHolding) armBlankTimer()
+  }
+
+  onFaceHoldingChanged: {
+    if (!lockRequested) return
+    if (faceHolding) idleBlankTimer.stop()
+    else if (!faceAuthenticating) armBlankTimer()
   }
 
   onDisplaysBlankChanged: {

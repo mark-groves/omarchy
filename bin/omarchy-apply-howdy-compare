@@ -23,8 +23,36 @@ print_wrapper() {
 # caps CPU time at 15 s while OpenCV uses every core. One CPU keeps CPU time
 # equal to wall time. -p keeps euid 0 under sudo, which bash would otherwise
 # drop to the caller and leave compare unable to read the Howdy config.
+# OPENCV_LOG_LEVEL=ERROR drops the DNN graph-engine WARN lines without hiding
+# real OpenCV errors. Compare is the process that prints them.
 export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1
-exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
+export OPENCV_LOG_LEVEL=ERROR
+
+# Tell the session shell a scan started or finished. Display-only: never
+# change compare's exit status, and never write to stdout (Howdy owns that).
+signal_face() {
+  local conf=/etc/omarchy.conf
+  local omarchy_path=/usr/share/omarchy
+  local helper
+  if [[ -f $conf && ! -L $conf && $(/usr/bin/stat -c %u:%a -- "$conf") =~ ^0:[0-7][0145][0145]$ ]]; then
+    # shellcheck disable=SC1090
+    . "$conf"
+    omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
+  fi
+  helper=$omarchy_path/bin/omarchy-face-auth-signal
+  [[ -x $helper ]] || return 0
+  "$helper" "$1" >/dev/null 2>&1 || true
+}
+
+signal_face scanning
+/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
+status=$?
+if (( status == 0 )); then
+  signal_face recognized
+else
+  signal_face notRecognized
+fi
+exit $status
 EOF
 }
 

@@ -1,0 +1,110 @@
+#!/bin/bash
+
+# omarchy:summary=Tell the running shell a face scan started or finished
+# omarchy:args=scanning|recognized|notRecognized [--runtime-dir DIR]
+# omarchy:hidden=true
+
+set -euo pipefail
+
+# Display-only. PAM and howdy-compare must keep working if the session
+# socket, runtime dir, or shell is missing. Bad arguments still fail so a
+# caller that misspells a state notices in tests.
+
+export PATH="/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
+
+usage() {
+  echo "Usage: omarchy-face-auth-signal scanning|recognized|notRecognized [--runtime-dir DIR]" >&2
+}
+
+state=""
+runtime_dir=""
+have_runtime=0
+
+while (( $# > 0 )); do
+  case $1 in
+    scanning|recognized|notRecognized)
+      if [[ -n $state ]]; then
+        usage
+        exit 64
+      fi
+      state=$1
+      shift
+      ;;
+    --runtime-dir)
+      if (( $# < 2 )); then
+        usage
+        exit 64
+      fi
+      runtime_dir=$2
+      have_runtime=1
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 64
+      ;;
+  esac
+done
+
+if [[ -z $state ]]; then
+  usage
+  exit 64
+fi
+
+unset_loginuid=4294967295
+
+session_runtime() {
+  local uid="" dir=""
+
+  if (( EUID != 0 )); then
+    printf '%s\n' "${XDG_RUNTIME_DIR:-/run/user/$EUID}"
+    return
+  fi
+
+  if [[ -r /proc/self/loginuid ]]; then
+    uid=$(< /proc/self/loginuid)
+    if [[ $uid =~ ^[0-9]+$ ]] && (( uid != unset_loginuid && uid != 0 )); then
+      printf '%s\n' "/run/user/$uid"
+      return
+    fi
+  fi
+
+  for dir in /run/user/*; do
+    [[ -d $dir ]] || continue
+    [[ ${dir##*/} == "0" ]] && continue
+    if compgen -G "$dir/wayland-[0-9]*" >/dev/null; then
+      printf '%s\n' "$dir"
+      return
+    fi
+  done
+}
+
+if (( have_runtime == 0 )); then
+  runtime_dir=$(session_runtime || true)
+fi
+
+if [[ -z $runtime_dir ]]; then
+  exit 0
+fi
+
+dir=$runtime_dir/omarchy
+if ! mkdir -p -- "$dir" 2>/dev/null; then
+  exit 0
+fi
+
+ts=${EPOCHREALTIME/./}
+payload=$(printf '{"state":"%s","ts":%s}\n' "$state" "$ts")
+tmp=$(mktemp -- "$dir/face-auth.json.XXXXXX" 2>/dev/null) || exit 0
+if ! printf '%s' "$payload" >"$tmp" 2>/dev/null; then
+  rm -f -- "$tmp"
+  exit 0
+fi
+chmod 644 -- "$tmp" 2>/dev/null || true
+if ! mv -Tf -- "$tmp" "$dir/face-auth.json" 2>/dev/null; then
+  rm -f -- "$tmp"
+fi
+exit 0

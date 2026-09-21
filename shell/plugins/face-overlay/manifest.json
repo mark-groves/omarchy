@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy.face-overlay",
+  "name": "Face Auth Overlay",
+  "version": "1.0.0",
+  "author": "Omarchy",
+  "description": "Transient face-scan card for terminal sudo and other PAM face prompts without their own chrome.",
+  "kinds": [
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "FaceOverlay.qml"
+  }
+}
