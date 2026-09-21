@@ -40,6 +40,15 @@ function parseShowPayload(raw) {
   return parseSignal(text)
 }
 
+function isStaleSignal(next, startedTs) {
+  if (!next) return true
+  var ts = Number(next.ts)
+  if (!isFinite(ts) || ts <= 0) return true
+  var started = Number(startedTs)
+  if (!isFinite(started) || started <= 0) return false
+  return ts < started
+}
+
 function isNewerSignal(next, current) {
   if (!next) return false
   if (!current) return true
@@ -74,6 +83,7 @@ if (typeof module !== "undefined") {
     signalPath: signalPath,
     parseSignal: parseSignal,
     parseShowPayload: parseShowPayload,
+    isStaleSignal: isStaleSignal,
     isNewerSignal: isNewerSignal,
     shouldSuppress: shouldSuppress,
     resultHoldMs: resultHoldMs,

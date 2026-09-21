@@ -18,6 +18,7 @@ Item {
 
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
   readonly property string signalPath: Model.signalPath(root.runtimeDir)
+  readonly property var watchStartedTs: Date.now() * 1000
 
   readonly property var lockService: root.shell && root.shell.firstPartyServiceFor
     ? root.shell.firstPartyServiceFor("omarchy.lock") : null
@@ -111,10 +112,10 @@ Item {
 
   Process {
     id: ensureSignalDir
-    command: ["mkdir", "-p", root.runtimeDir + "/omarchy"]
+    command: ["bash", "-c", "mkdir -p -- \"$1\" && if [[ ! -e $2 ]]; then printf '%s\\n' '{}' >\"$2\"; fi", "omarchy-face-overlay", root.runtimeDir + "/omarchy", root.signalPath]
     running: false
     onExited: {
-      if (exitCode === 0 && root.signalPath !== "") signalFile.setText("{}\n")
+      if (exitCode === 0 && root.signalPath !== "") signalFile.reload()
     }
   }
 
@@ -126,13 +127,15 @@ Item {
     printErrors: false
     property bool primed: false
     onLoaded: {
-      // The first read is only to start the watch. A leftover file from the
-      // last session must not pop the card; PAM writes after that do.
+      var raw = text()
       if (!primed) {
         primed = true
-        return
+        // Leftover from before this watch stays down. A live PAM write
+        // that is the first file we see still has to open the card.
+        var next = Model.parseSignal(raw)
+        if (!next || Model.isStaleSignal(next, root.watchStartedTs)) return
       }
-      root.ingest(text())
+      root.ingest(raw)
     }
     onLoadFailed: {
       if (root.runtimeDir !== "") ensureSignalDir.running = true
