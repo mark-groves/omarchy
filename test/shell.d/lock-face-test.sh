@@ -37,8 +37,8 @@ assert(
 )
 
 assert(
-  /if \(root\.lockRequested && !root\.authenticatingPassword && !root\.faceAuthenticating\) root\.runBlank\(\)/.test(serviceQml),
-  'a password or face check in flight stops the blank timer'
+  /if \(root\.lockRequested && !root\.authenticatingPassword && !root\.faceAuthenticating && !root\.faceHolding\) root\.runBlank\(\)/.test(serviceQml),
+  'a password, face check, or face hold in flight stops the blank timer'
 )
 
 assert(
@@ -86,14 +86,14 @@ assert(
   'starting a scan puts the card in the scanning state'
 )
 assert(
-  /faceState = "notRecognized"/.test(serviceQml),
+  /holdFaceResult\("notRecognized"\)/.test(serviceQml),
   'a miss is shown rather than being silent'
 )
 
 const faceFinished = serviceQml.match(/function handleFaceFinished\([\s\S]*?\n  \}/)
 assert(faceFinished, 'lock has a handleFaceFinished')
 assert(
-  /FaceChrome\.holdMs\("recognized"\)/.test(faceFinished[0]),
+  /holdFaceResult\("recognized"\)/.test(faceFinished[0]),
   'a match holds the recognised frame for as long as the plugin declares'
 )
 assert(
@@ -101,13 +101,25 @@ assert(
   'with no chrome installed a match still unlocks immediately'
 )
 assert(
-  /id: faceHoldTimer[\s\S]{0,200}?onTriggered: root\.finishUnlock\(\)/.test(serviceQml),
+  /id: faceHoldTimer[\s\S]{0,240}?root\.finishUnlock\(\)/.test(serviceQml),
   'the hold always ends in an unlock'
 )
-
-const teardown = serviceQml.match(/fingerprintRetryTimer\.stop\(\)[\s\S]{0,200}/)
 assert(
-  teardown && /faceHoldTimer\.stop\(\)/.test(teardown[0]),
+  /holdFaceResult\("notRecognized"\)/.test(faceFinished[0]),
+  'a miss holds the not-recognised frame for as long as the plugin declares'
+)
+assert(
+  /faceScanning:\s*root\.faceAuthenticating \|\| root\.faceHolding/.test(serviceQml),
+  'the lock canvas keeps animating while a result is held'
+)
+assert(
+  /if \(faceHoldTimer\.running\) return/.test(serviceQml),
+  'a new scan does not cancel a recognised hold that is already unlocking'
+)
+
+const teardown = serviceQml.match(/fingerprintRetryTimer\.stop\(\)[\s\S]{0,280}/)
+assert(
+  teardown && /faceHoldTimer\.stop\(\)/.test(teardown[0]) && /faceMissHoldTimer\.stop\(\)/.test(teardown[0]),
   'tearing the lock down never leaves an unlock waiting on a display hold'
 )
 

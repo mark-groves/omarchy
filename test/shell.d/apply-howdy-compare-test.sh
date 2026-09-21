@@ -33,8 +33,55 @@ assert_wrapper_text() {
     fail "wrapper pins with taskset -c 0" "$(cat "$path")"
   grep -F 'OMP_NUM_THREADS=1' "$path" >/dev/null ||
     fail "wrapper sets OMP_NUM_THREADS=1" "$(cat "$path")"
-  grep -F '/usr/lib/howdy/howdy-compare.real "$@"' "$path" >/dev/null ||
-    fail "wrapper execs howdy-compare.real with \"\$@\"" "$(cat "$path")"
+  grep -F 'OPENCV_LOG_LEVEL=ERROR' "$path" >/dev/null ||
+    fail "wrapper sets OPENCV_LOG_LEVEL=ERROR" "$(cat "$path")"
+  if grep -E 'OPENCV_LOG_LEVEL=(SILENT|OFF|0|FATAL)' "$path" >/dev/null; then
+    fail "wrapper does not hide OpenCV errors" "$(cat "$path")"
+  fi
+  grep -F '/usr/lib/howdy/howdy-compare.real "$@" &' "$path" >/dev/null ||
+    fail "wrapper backgrounds howdy-compare.real so INT/TERM can stop it" "$(cat "$path")"
+  if grep -E '^exec /usr/bin/taskset' "$path" >/dev/null; then
+    fail "wrapper does not exec compare so it can signal the result" "$(cat "$path")"
+  fi
+  grep -F 'omarchy-face-auth-signal' "$path" >/dev/null ||
+    fail "wrapper signals the face overlay" "$(cat "$path")"
+  grep -F 'signal_face scanning' "$path" >/dev/null ||
+    fail "wrapper signals scanning before compare" "$(cat "$path")"
+  grep -F 'if [[ -n $cancel_signal ]]; then' "$path" >/dev/null ||
+    fail "wrapper checks for cancel before starting compare" "$(cat "$path")"
+  grep -F 'signal_result recognized' "$path" >/dev/null ||
+    fail "wrapper signals recognized after a match" "$(cat "$path")"
+  grep -F 'signal_result notRecognized' "$path" >/dev/null ||
+    fail "wrapper signals notRecognized after a miss" "$(cat "$path")"
+  grep -F 'signal_face cancelled' "$path" >/dev/null ||
+    fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
+  grep -F 'trap on_exit EXIT' "$path" >/dev/null ||
+    fail "wrapper traps EXIT so a killed sudo hides the card" "$(cat "$path")"
+  grep -F "trap 'on_cancel INT 130' INT" "$path" >/dev/null ||
+    fail "INT stops compare and exits 130" "$(cat "$path")"
+  grep -F "trap 'on_cancel TERM 143' TERM" "$path" >/dev/null ||
+    fail "TERM stops compare and exits 143" "$(cat "$path")"
+  grep -F 'compare_pid=$!' "$path" >/dev/null ||
+    fail "wrapper records compare's pid so the trap can stop it" "$(cat "$path")"
+  grep -F 'wait "$compare_pid"' "$path" >/dev/null ||
+    fail "wrapper waits for the background compare" "$(cat "$path")"
+  grep -F 'return "$saved"' "$path" >/dev/null ||
+    fail "a pending INT/TERM after wait keeps Howdy's status" "$(cat "$path")"
+  grep -F 'compare_status >= 128' "$path" >/dev/null ||
+    fail "a finished scan is not rewritten as 130 or 143" "$(cat "$path")"
+  if awk '/^on_cancel\(\)/,/^}/ { if ($0 ~ /exit "/) found=1 } END { exit found+0 }' "$path"; then
+    :
+  else
+    fail "the cancel trap must not exit before compare_status is captured" "$(cat "$path")"
+  fi
+  if grep -E '^/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "\$@"$' "$path" >/dev/null; then
+    fail "a foreground compare defers INT/TERM until Howdy finishes" "$(cat "$path")"
+  fi
+  grep -F 'signaled_result=1' "$path" >/dev/null ||
+    fail "wrapper marks a normal result so EXIT does not hide a match" "$(cat "$path")"
+  if grep -E 'signal_face cancelled' "$path" >/dev/null && ! grep -F 'if (( signaled_result == 0 )); then' "$path" >/dev/null; then
+    fail "cancelled must not replace a recognized or notRecognized write" "$(cat "$path")"
+  fi
   bash -n "$path" || fail "wrapper passes bash -n"
 }
 
@@ -196,6 +243,177 @@ status=$(run_apply install --root "$root")
 (( status == 0 )) || fail "reinstall for wrapper checks exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 assert_wrapper_text "$compare"
 pass "wrapper content pins compare to one CPU"
+
+signals=$root/signals.log
+fake_helper=$root/record-signal
+cat >"$fake_helper" <<SH
+#!/bin/bash
+printf '%s\n' "\$1" >>"$signals"
+exit 0
+SH
+chmod 755 "$fake_helper"
+
+rewrite_wrapper() {
+  local dest=$1
+  local fake_real=$2
+  cp -- "$compare" "$dest"
+  chmod 755 "$dest"
+  sed -i \
+    -e "s|/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real|$fake_real|" \
+    -e "s|helper=\$omarchy_path/bin/omarchy-face-auth-signal|helper=$fake_helper|" \
+    "$dest"
+}
+
+: >"$signals"
+fast0=$root/fast0.real
+printf '#!/bin/bash\nexit 0\n' >"$fast0"
+chmod 755 "$fast0"
+rewrite_wrapper "$root/wrap0" "$fast0"
+status=0
+"$root/wrap0" || status=$?
+(( status == 0 )) || fail "wrapper match exits 0" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,recognized" ]] ||
+  fail "wrapper match signals scanning then recognized" "$(cat "$signals")"
+pass "wrapper match keeps compare's status and does not cancel"
+
+: >"$signals"
+fast1=$root/fast1.real
+printf '#!/bin/bash\nexit 14\n' >"$fast1"
+chmod 755 "$fast1"
+rewrite_wrapper "$root/wrap1" "$fast1"
+status=0
+"$root/wrap1" || status=$?
+(( status == 14 )) || fail "wrapper miss keeps compare's status" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,notRecognized" ]] ||
+  fail "wrapper miss signals scanning then notRecognized" "$(cat "$signals")"
+pass "wrapper miss keeps compare's status and does not cancel"
+
+: >"$signals"
+slow=$root/slow.real
+slow_pid_file=$root/slow.pid
+printf '#!/bin/bash\necho $$ >%q\nexec sleep 30\n' "$slow_pid_file" >"$slow"
+chmod 755 "$slow"
+rewrite_wrapper "$root/wrap-int" "$slow"
+status=0
+# Background bash ignores keyboard SIGINT. timeout sends INT to a new
+# process group, which is the sudo Ctrl-C path.
+timeout --preserve-status --signal=INT --kill-after=2s 0.4 "$root/wrap-int" || status=$?
+(( status == 130 )) || fail "INT wrapper exits 130" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "INT wrapper signals cancelled" "$(cat "$signals")"
+pass "cancelled sudo hides the overlay without changing compare's status"
+
+: >"$signals"
+rewrite_wrapper "$root/wrap-term" "$slow"
+status=0
+"$root/wrap-term" &
+wpid=$!
+for _ in {1..40}; do
+  if grep -qx scanning "$signals" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+grep -qx scanning "$signals" || fail "TERM wrapper signals scanning before cancel" "$(cat "$signals")"
+# TERM the wrapper only. A foreground compare would ignore this until Howdy
+# finished; the trap must stop compare so PAM is not blocked.
+kill -TERM "$wpid"
+wait "$wpid" || status=$?
+(( status == 143 )) || fail "TERM wrapper exits 143" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "TERM wrapper signals cancelled" "$(cat "$signals")"
+if [[ -f $slow_pid_file ]]; then
+  slow_pid=$(<"$slow_pid_file")
+  if [[ $slow_pid =~ ^[0-9]+$ ]]; then
+    kill -TERM "$slow_pid" 2>/dev/null || true
+  fi
+fi
+pass "TERM to the wrapper stops compare and hides the overlay"
+
+: >"$signals"
+rm -f -- "$slow_pid_file"
+slow_scan=$root/slow-scan-helper
+compare_ran=$root/compare.ran
+cat >"$slow_scan" <<SH
+#!/bin/bash
+printf '%s\n' "\$1" >>"$signals"
+if [[ \$1 == scanning ]]; then
+  sleep 2
+fi
+exit 0
+SH
+chmod 755 "$slow_scan"
+printf '#!/bin/bash\necho ran >%q\nexit 0\n' "$compare_ran" >"$root/should-not-run.real"
+chmod 755 "$root/should-not-run.real"
+rewrite_wrapper "$root/wrap-cancel-before" "$root/should-not-run.real"
+sed -i "s|helper=$fake_helper|helper=$slow_scan|" "$root/wrap-cancel-before"
+status=0
+"$root/wrap-cancel-before" &
+wpid=$!
+for _ in {1..40}; do
+  if grep -qx scanning "$signals" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+grep -qx scanning "$signals" || fail "cancel-before-compare signals scanning first" "$(cat "$signals")"
+kill -TERM "$wpid"
+wait "$wpid" || status=$?
+(( status == 143 )) || fail "cancel during scanning exits 143" "exit $status $(cat "$signals")"
+[[ ! -e $compare_ran ]] || fail "cancel during scanning must not start Howdy" "$(cat "$compare_ran")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "cancel during scanning hides the overlay" "$(cat "$signals")"
+pass "cancel during scanning does not start Howdy"
+
+# The trap records cancel and returns $?. After wait, a finished Howdy
+# status (< 128) is kept; only a signaled child becomes 130/143.
+late=$root/late-cancel
+cat >"$late" <<'SH'
+#!/bin/bash
+cancel_signal=""
+cancel_status=0
+on_cancel() {
+  local saved=$?
+  cancel_signal=$1
+  cancel_status=$2
+  return "$saved"
+}
+(exit 14)
+on_cancel INT 130
+compare_status=$?
+if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
+  exit "$cancel_status"
+fi
+exit "$compare_status"
+SH
+chmod 755 "$late"
+status=0
+"$late" || status=$?
+(( status == 14 )) || fail "a late INT after a finished miss keeps 14" "exit $status"
+signaled=$root/late-signaled
+cat >"$signaled" <<'SH'
+#!/bin/bash
+cancel_signal=""
+cancel_status=0
+on_cancel() {
+  local saved=$?
+  cancel_signal=$1
+  cancel_status=$2
+  return "$saved"
+}
+(exit 137)
+on_cancel TERM 143
+compare_status=$?
+if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
+  exit "$cancel_status"
+fi
+exit "$compare_status"
+SH
+chmod 755 "$signaled"
+status=0
+"$signaled" || status=$?
+(( status == 143 )) || fail "a signaled compare still exits 143" "exit $status"
+pass "post-wait cancel keeps a finished Howdy status"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"

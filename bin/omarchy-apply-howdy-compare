@@ -23,8 +23,102 @@ print_wrapper() {
 # caps CPU time at 15 s while OpenCV uses every core. One CPU keeps CPU time
 # equal to wall time. -p keeps euid 0 under sudo, which bash would otherwise
 # drop to the caller and leave compare unable to read the Howdy config.
+# OPENCV_LOG_LEVEL=ERROR drops the DNN graph-engine WARN lines without hiding
+# real OpenCV errors. Compare is the process that prints them.
 export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1
-exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
+export OPENCV_LOG_LEVEL=ERROR
+
+# Tell the session shell a scan started or finished. Display-only: never
+# change compare's exit status, and never write to stdout (Howdy owns that).
+# A cancelled or killed sudo must still hide the card: scanning opens it and
+# recognized / notRecognized only run on a normal compare exit.
+# Compare runs in the background so INT/TERM are not deferred until Howdy
+# finishes. The trap stops compare so PAM is not blocked for the rest of
+# the scan.
+signaled_result=0
+compare_pid=0
+cancel_signal=""
+cancel_status=0
+compare_status=1
+signal_face() {
+  local conf=/etc/omarchy.conf
+  local omarchy_path=/usr/share/omarchy
+  local helper
+  if [[ -f $conf && ! -L $conf && $(/usr/bin/stat -c %u:%a -- "$conf") =~ ^0:[0-7][0145][0145]$ ]]; then
+    # shellcheck disable=SC1090
+    . "$conf"
+    omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
+  fi
+  helper=$omarchy_path/bin/omarchy-face-auth-signal
+  [[ -x $helper ]] || return 0
+  "$helper" "$1" >/dev/null 2>&1 || true
+}
+
+signal_result() {
+  signaled_result=1
+  signal_face "$1"
+}
+
+on_exit() {
+  if (( signaled_result == 0 )); then
+    signal_face cancelled
+  fi
+}
+
+stop_compare() {
+  if (( compare_pid > 0 )); then
+    kill -s "$1" "$compare_pid" 2>/dev/null || true
+    if kill -0 "$compare_pid" 2>/dev/null; then
+      kill -s KILL "$compare_pid" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Record cancel without exiting. A pending INT/TERM can run after wait
+# returns and before compare_status=$?. Returning the incoming status
+# keeps that assignment on Howdy's exit instead of the trap's.
+on_cancel() {
+  local saved=$?
+  cancel_signal=$1
+  cancel_status=$2
+  stop_compare "$1"
+  return "$saved"
+}
+
+trap on_exit EXIT
+trap 'on_cancel INT 130' INT
+trap 'on_cancel TERM 143' TERM
+
+signal_face scanning
+# Cancel during scanning must not start Howdy. compare_pid is still 0,
+# so the trap cannot stop a child that is not running yet.
+if [[ -n $cancel_signal ]]; then
+  exit "$cancel_status"
+fi
+/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@" &
+compare_pid=$!
+if [[ -n $cancel_signal ]]; then
+  stop_compare "$cancel_signal"
+  wait "$compare_pid" 2>/dev/null || true
+  compare_pid=0
+  exit "$cancel_status"
+fi
+wait "$compare_pid"
+compare_status=$?
+compare_pid=0
+
+# One path after wait: a finished Howdy status wins over 130/143.
+if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
+  exit "$cancel_status"
+fi
+
+signaled_result=1
+if (( compare_status == 0 )); then
+  signal_result recognized
+else
+  signal_result notRecognized
+fi
+exit $compare_status
 EOF
 }
 

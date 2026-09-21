@@ -41,7 +41,7 @@ Item {
   property int failedSlotRevision: 0
   property string lastChromeLog: ""
 
-  readonly property bool dialogVisible: polkitAgent.isActive || closing
+  readonly property bool dialogVisible: polkitAgent.isActive || closing || resultHold
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
   readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
   readonly property int registryRevision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0
@@ -57,9 +57,10 @@ Item {
   readonly property bool slotPainting: FaceChrome.ready && root.slotUrl !== ""
   // A miss holds the not-recognized frame before the password row replaces it.
   property bool missHold: false
+  property bool resultHold: false
   property string faceState: "scanning"
-  readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold)
-  readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold
+  readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold || root.resultHold)
+  readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold && !root.resultHold
   readonly property int slotExtra: root.showFaceChrome && presentation && presentation.extraSpace ? Style.space(presentation.extraSpace) : 0
   readonly property int cardHeight: panel.height > 0 ? Math.min(fieldHeight + contentMargin * 2 + slotExtra, panel.height - Style.gapsOut * 2) : fieldHeight + contentMargin * 2 + slotExtra
   readonly property int cardWidth: presentation && presentation.square ? cardHeight : Math.min(Style.space(312), Math.max(Style.space(260), panel.width - Style.gapsOut * 2))
@@ -116,9 +117,19 @@ Item {
   // Howdy has no "not recognized" exit; PAM simply falls through to asking for
   // a password. That fall-through is the miss, so the card holds the
   // not-recognized frame before the password row takes over.
+  //
+  // FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin
+  // is installed. A password or fingerprint prompt must not inherit a miss or
+  // match hold from that global URL.
+  function faceResultHoldMs(state) {
+    var hold = FaceChrome.holdMs(state)
+    if (hold <= 0 && !FaceChrome.ready && PolkitModel.faceSlotResolved(presentation)) hold = 800
+    return hold
+  }
+
   function noteFaceMiss() {
-    if (!slotPainting || faceState !== "scanning") return
-    var hold = FaceChrome.holdMs("notRecognized")
+    if (!PolkitModel.shouldNoteFaceMiss(presentation, faceState)) return
+    var hold = root.faceResultHoldMs("notRecognized")
     if (hold <= 0) return
     faceState = "notRecognized"
     missHold = true
@@ -157,6 +168,7 @@ Item {
     successTimer.stop()
     missTimer.stop()
     missHold = false
+    resultHold = false
     faceState = "scanning"
     closing = false
     submitted = false
@@ -186,6 +198,8 @@ Item {
     var flow = polkitAgent.flow
     passwordInput.text = ""
     submitted = false
+    resultHold = false
+    successTimer.stop()
     closing = true
     closeTimer.restart()
     if (flow) flow.cancelAuthenticationRequest()
@@ -217,6 +231,7 @@ Item {
     id: successTimer
     repeat: false
     onTriggered: {
+      root.resultHold = false
       root.closing = true
       closeTimer.restart()
     }
@@ -268,7 +283,7 @@ Item {
     onAuthenticationRequestStarted: root.beginFlow()
     onIsActiveChanged: {
       if (isActive) root.syncFromFlow()
-      else if (!root.closing) root.resetSnapshot()
+      else if (!root.closing && !root.resultHold) root.resetSnapshot()
     }
     onIsRegisteredChanged: {
       if (isRegistered) console.log("omarchy polkit agent registered")
@@ -297,11 +312,12 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
-      if (root.showFaceChrome) {
-        var hold = FaceChrome.holdMs("recognized")
+      if (PolkitModel.shouldHoldFaceSuccess(presentation)) {
+        var hold = root.faceResultHoldMs("recognized")
         if (hold > 0) {
           root.faceState = "recognized"
           root.missHold = false
+          root.resultHold = true
           missTimer.stop()
           successTimer.interval = hold
           successTimer.restart()
@@ -313,6 +329,8 @@ Item {
     }
 
     function onAuthenticationRequestCancelled() {
+      successTimer.stop()
+      root.resultHold = false
       root.closing = true
       closeTimer.restart()
     }
