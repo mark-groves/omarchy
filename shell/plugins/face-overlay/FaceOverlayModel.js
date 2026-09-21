@@ -1,5 +1,16 @@
 function knownState(state) {
-  return state === "scanning" || state === "recognized" || state === "notRecognized"
+  return state === "scanning" || state === "recognized" || state === "notRecognized" || state === "cancelled"
+}
+
+function isHideState(state) {
+  return state === "cancelled"
+}
+
+// Howdy's compare sandbox is 15 s of CPU. The wrapper pins that to one core,
+// so wall time matches. Twenty seconds is long enough for a real scan and
+// short enough that a killed wrapper cannot leave Look at the camera up.
+function scanTimeoutMs() {
+  return 20000
 }
 
 function signalPath(runtimeDir) {
@@ -51,12 +62,15 @@ function resultHoldMs(state, holdMs) {
 function hintFor(state) {
   if (state === "recognized") return "Face recognized"
   if (state === "notRecognized") return "Face not recognized"
+  if (state === "cancelled") return ""
   return "Look at the camera"
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
     knownState: knownState,
+    isHideState: isHideState,
+    scanTimeoutMs: scanTimeoutMs,
     signalPath: signalPath,
     parseSignal: parseSignal,
     parseShowPayload: parseShowPayload,

@@ -61,6 +61,13 @@ Item {
   function applySignal(next) {
     if (!Model.isNewerSignal(next, root.lastSignal)) return "stale"
     root.lastSignal = next
+    // Cancelled sudo never writes recognized or notRecognized. Hide now.
+    // Scanning also starts a timeout so SIGKILL cannot leave the card up.
+    if (Model.isHideState(next.state)) {
+      root.pendingSignal = null
+      root.hideCard()
+      return root.suppress ? "suppressed" : "ok"
+    }
     if (root.suppress) return "suppressed"
     if (!FaceChrome.ready) {
       root.pendingSignal = next
@@ -72,8 +79,10 @@ Item {
     root.opened = true
 
     var hold = Model.resultHoldMs(next.state, FaceChrome.holdMs(next.state))
-    if (hold > 0) {
-      holdTimer.interval = hold
+    var timeout = next.state === "scanning" ? Model.scanTimeoutMs() : 0
+    var delay = hold > 0 ? hold : timeout
+    if (delay > 0) {
+      holdTimer.interval = delay
       holdTimer.restart()
     } else if (next.state !== "scanning") {
       root.hideCard()

@@ -38,7 +38,18 @@ assertDeepEqual(
   { state: 'notRecognized', ts: 14 },
   'parseSignal reads a miss'
 )
+assertDeepEqual(
+  model.parseSignal('{"state":"cancelled","ts":15}'),
+  { state: 'cancelled', ts: 15 },
+  'parseSignal reads a cancelled scan'
+)
 assertEqual(model.parseSignal('{"state":"idle"}'), null, 'unknown states are ignored')
+assert(model.isHideState('cancelled'), 'cancelled hides the card')
+assert(!model.isHideState('scanning'), 'scanning does not hide the card')
+assertEqual(model.resultHoldMs('cancelled', 900), 0, 'cancelled is not a held result')
+assertEqual(model.scanTimeoutMs(), 20000, 'a scanning card times out if compare never returns')
+assertEqual(model.hintFor('cancelled'), '', 'a cancelled card has no hint')
+assertDeepEqual(model.parseShowPayload('cancelled'), { state: 'cancelled', ts: 0 }, 'IPC accepts a cancelled hide')
 assertEqual(model.parseSignal(''), null, 'empty writes are ignored')
 assertDeepEqual(model.parseShowPayload('scanning'), { state: 'scanning', ts: 0 }, 'IPC accepts a bare state')
 assertEqual(model.parseShowPayload('{"state":"recognized","ts":9}').state, 'recognized', 'IPC accepts JSON')
@@ -62,6 +73,8 @@ assert(/objectName:\s*"faceOverlayCard"/.test(overlayQml), 'overlay card is name
 assert(/target:\s*"omarchy\.face-overlay"/.test(overlayQml), 'overlay registers its own IPC target')
 assert(/function show\(payloadJson: string\)/.test(overlayQml), 'overlay can be shown over IPC')
 assert(/FaceChrome\.holdMs\(next\.state\)/.test(overlayQml), 'overlay holds a result for as long as the plugin declares')
+assert(/Model\.isHideState\(next\.state\)/.test(overlayQml) && /root\.hideCard\(\)/.test(overlayQml), 'cancelled hides the overlay without a hold')
+assert(/Model\.scanTimeoutMs\(\)/.test(overlayQml), 'scanning starts a timeout so a killed wrapper cannot stick')
 assert(/firstPartyServiceFor\("omarchy\.lock"\)/.test(overlayQml) && /firstPartyServiceFor\("omarchy\.polkit"\)/.test(overlayQml), 'overlay asks lock and polkit whether they already own the card')
 assert(/WlrKeyboardFocus\.None/.test(overlayQml) && /mask:\s*Region \{\}/.test(overlayQml), 'overlay is click-through and does not steal the terminal')
 assert(!/Loader/.test(overlayQml) && !/passwordInput/.test(overlayQml) && !/PamContext/.test(overlayQml), 'overlay never loads a plugin item or owns PAM')
@@ -70,7 +83,11 @@ assert(/property bool primed/.test(overlayQml) && /setText\("\{\}\\n"\)/.test(ov
 
 assert(/OPENCV_LOG_LEVEL=ERROR/.test(wrapper), 'howdy-compare wrapper quiets OpenCV WARNs')
 assert(/signal_face scanning/.test(wrapper) && /signal_face recognized/.test(wrapper), 'wrapper signals scan start and match')
+assert(/signal_face cancelled/.test(wrapper) && /trap on_exit EXIT/.test(wrapper), 'wrapper hides the card if compare never returns a result')
+assert(/trap 'exit 130' INT/.test(wrapper) && /trap 'exit 143' TERM/.test(wrapper), 'INT and TERM still exit with their usual statuses')
+assert(/signaled_result=1/.test(wrapper), 'a normal compare exit does not overwrite the result with cancelled')
 assert(/face-auth\.json/.test(signal), 'helper writes the signal file')
+assert(/cancelled/.test(signal), 'helper accepts a cancelled hide')
 assert(!/\bsudo\b/.test(signal) && !/\bpkexec\b/.test(signal), 'helper never escalates')
 
 assert(/property bool faceHolding/.test(lockQml), 'lock tracks a display-only hold')

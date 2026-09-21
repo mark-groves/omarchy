@@ -55,6 +55,14 @@ payload=$(cat "$runtime/omarchy/face-auth.json")
 pass "notRecognized writes the miss state"
 
 status=0
+"$signal" cancelled --runtime-dir "$runtime" >/dev/null 2>"$runtime/err" || status=$?
+(( status == 0 )) || fail "cancelled exits 0" "exit $status $(cat "$runtime/err")"
+payload=$(cat "$runtime/omarchy/face-auth.json")
+[[ $payload == '{"state":"cancelled","ts":'* ]] ||
+  fail "cancelled payload names the state" "$payload"
+pass "cancelled writes the hide state"
+
+status=0
 "$signal" scanning --runtime-dir /dev/null/nope >/dev/null 2>"$runtime/err" || status=$?
 (( status == 0 )) || fail "an unwritable runtime dir still exits 0" "exit $status $(cat "$runtime/err")"
 pass "an unwritable runtime dir does not fail the caller"

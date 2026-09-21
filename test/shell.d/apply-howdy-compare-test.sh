@@ -51,6 +51,19 @@ assert_wrapper_text() {
     fail "wrapper signals recognized after a match" "$(cat "$path")"
   grep -F 'signal_face notRecognized' "$path" >/dev/null ||
     fail "wrapper signals notRecognized after a miss" "$(cat "$path")"
+  grep -F 'signal_face cancelled' "$path" >/dev/null ||
+    fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
+  grep -F 'trap on_exit EXIT' "$path" >/dev/null ||
+    fail "wrapper traps EXIT so a killed sudo hides the card" "$(cat "$path")"
+  grep -F "trap 'exit 130' INT" "$path" >/dev/null ||
+    fail "wrapper maps INT to exit 130" "$(cat "$path")"
+  grep -F "trap 'exit 143' TERM" "$path" >/dev/null ||
+    fail "wrapper maps TERM to exit 143" "$(cat "$path")"
+  grep -F 'signaled_result=1' "$path" >/dev/null ||
+    fail "wrapper marks a normal result so EXIT does not hide a match" "$(cat "$path")"
+  if grep -E 'signal_face cancelled' "$path" >/dev/null && ! grep -F 'if (( signaled_result == 0 )); then' "$path" >/dev/null; then
+    fail "cancelled must not replace a recognized or notRecognized write" "$(cat "$path")"
+  fi
   bash -n "$path" || fail "wrapper passes bash -n"
 }
 
@@ -212,6 +225,88 @@ status=$(run_apply install --root "$root")
 (( status == 0 )) || fail "reinstall for wrapper checks exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 assert_wrapper_text "$compare"
 pass "wrapper content pins compare to one CPU"
+
+signals=$root/signals.log
+fake_helper=$root/record-signal
+cat >"$fake_helper" <<SH
+#!/bin/bash
+printf '%s\n' "\$1" >>"$signals"
+exit 0
+SH
+chmod 755 "$fake_helper"
+
+rewrite_wrapper() {
+  local dest=$1
+  local fake_real=$2
+  cp -- "$compare" "$dest"
+  chmod 755 "$dest"
+  sed -i \
+    -e "s|/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real|$fake_real|" \
+    -e "s|helper=\$omarchy_path/bin/omarchy-face-auth-signal|helper=$fake_helper|" \
+    "$dest"
+}
+
+stop_children() {
+  local parent=$1
+  local kid
+  for kid in $(ps --ppid "$parent" -o pid= 2>/dev/null || true); do
+    [[ -n $kid ]] || continue
+    stop_children "$kid"
+    kill -TERM "$kid" 2>/dev/null || true
+  done
+}
+
+: >"$signals"
+fast0=$root/fast0.real
+printf '#!/bin/bash\nexit 0\n' >"$fast0"
+chmod 755 "$fast0"
+rewrite_wrapper "$root/wrap0" "$fast0"
+status=0
+"$root/wrap0" || status=$?
+(( status == 0 )) || fail "wrapper match exits 0" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,recognized" ]] ||
+  fail "wrapper match signals scanning then recognized" "$(cat "$signals")"
+pass "wrapper match keeps compare's status and does not cancel"
+
+: >"$signals"
+fast1=$root/fast1.real
+printf '#!/bin/bash\nexit 14\n' >"$fast1"
+chmod 755 "$fast1"
+rewrite_wrapper "$root/wrap1" "$fast1"
+status=0
+"$root/wrap1" || status=$?
+(( status == 14 )) || fail "wrapper miss keeps compare's status" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,notRecognized" ]] ||
+  fail "wrapper miss signals scanning then notRecognized" "$(cat "$signals")"
+pass "wrapper miss keeps compare's status and does not cancel"
+
+: >"$signals"
+slow=$root/slow.real
+printf '#!/bin/bash\nexec sleep 30\n' >"$slow"
+chmod 755 "$slow"
+rewrite_wrapper "$root/wrap-int" "$slow"
+status=0
+"$root/wrap-int" &
+wpid=$!
+for _ in {1..40}; do
+  if grep -qx scanning "$signals" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+grep -qx scanning "$signals" || fail "INT wrapper signals scanning before cancel" "$(cat "$signals")"
+kids=$(ps --ppid "$wpid" -o pid= 2>/dev/null || true)
+kill -INT "$wpid"
+wait "$wpid" || status=$?
+for kid in $kids; do
+  [[ -n $kid ]] || continue
+  kill -TERM "$kid" 2>/dev/null || true
+done
+stop_children "$wpid"
+(( status == 130 )) || fail "INT wrapper exits 130" "exit $status $(cat "$signals")"
+[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
+  fail "INT wrapper signals cancelled" "$(cat "$signals")"
+pass "cancelled sudo hides the overlay without changing compare's status"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"

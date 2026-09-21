@@ -30,6 +30,9 @@ export OPENCV_LOG_LEVEL=ERROR
 
 # Tell the session shell a scan started or finished. Display-only: never
 # change compare's exit status, and never write to stdout (Howdy owns that).
+# A cancelled or killed sudo must still hide the card: scanning opens it and
+# recognized / notRecognized only run on a normal compare exit.
+signaled_result=0
 signal_face() {
   local conf=/etc/omarchy.conf
   local omarchy_path=/usr/share/omarchy
@@ -44,13 +47,28 @@ signal_face() {
   "$helper" "$1" >/dev/null 2>&1 || true
 }
 
+signal_result() {
+  signaled_result=1
+  signal_face "$1"
+}
+
+on_exit() {
+  if (( signaled_result == 0 )); then
+    signal_face cancelled
+  fi
+}
+
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 signal_face scanning
 /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
 status=$?
 if (( status == 0 )); then
-  signal_face recognized
+  signal_result recognized
 else
-  signal_face notRecognized
+  signal_result notRecognized
 fi
 exit $status
 EOF
