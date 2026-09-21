@@ -85,7 +85,7 @@ assert(/WlrKeyboardFocus\.None/.test(overlayQml) && /mask:\s*Region \{\}/.test(o
 assert(!/Loader/.test(overlayQml) && !/passwordInput/.test(overlayQml) && !/PamContext/.test(overlayQml), 'overlay never loads a plugin item or owns PAM')
 assert(/FileView/.test(overlayQml) && /root\.signalPath/.test(overlayQml), 'overlay watches the PAM signal file')
 assert(/property bool primed/.test(overlayQml) && /watchStartedTs/.test(overlayQml), 'overlay starts the watch without showing a leftover scan')
-assert(/Model\.isStaleSignal\(next,\s*root\.watchStartedTs\)/.test(overlayQml), 'the first load still ingest a live PAM write')
+assert(/Model\.isStaleSignal\(next,\s*root\.watchStartedTs\)/.test(overlayQml), 'the first load still ingests a live PAM write')
 assert(/\[\[ ! -e \$2 \]\]/.test(overlayQml), 'the watch file is created only when it is absent')
 assert(!/setText\("\{\}\\n"\)/.test(overlayQml), 'creating the watch file must not wipe a live signal')
 
