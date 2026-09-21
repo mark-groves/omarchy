@@ -63,10 +63,15 @@ assert_wrapper_text() {
     fail "wrapper records compare's pid so the trap can stop it" "$(cat "$path")"
   grep -F 'wait "$compare_pid"' "$path" >/dev/null ||
     fail "wrapper waits for the background compare" "$(cat "$path")"
-  grep -F 'if (( compare_done )); then' "$path" >/dev/null ||
-    fail "a late INT/TERM keeps compare's exit status" "$(cat "$path")"
-  grep -F 'exit "$compare_status"' "$path" >/dev/null ||
+  grep -F 'return "$saved"' "$path" >/dev/null ||
+    fail "a pending INT/TERM after wait keeps Howdy's status" "$(cat "$path")"
+  grep -F 'compare_status >= 128' "$path" >/dev/null ||
     fail "a finished scan is not rewritten as 130 or 143" "$(cat "$path")"
+  if awk '/^on_cancel\(\)/,/^}/ { if ($0 ~ /exit "/) found=1 } END { exit found+0 }' "$path"; then
+    :
+  else
+    fail "the cancel trap must not exit before compare_status is captured" "$(cat "$path")"
+  fi
   if grep -E '^/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "\$@"$' "$path" >/dev/null; then
     fail "a foreground compare defers INT/TERM until Howdy finishes" "$(cat "$path")"
   fi
@@ -322,6 +327,56 @@ if [[ -f $slow_pid_file ]]; then
   fi
 fi
 pass "TERM to the wrapper stops compare and hides the overlay"
+
+# The trap records cancel and returns $?. After wait, a finished Howdy
+# status (< 128) is kept; only a signaled child becomes 130/143.
+late=$root/late-cancel
+cat >"$late" <<'SH'
+#!/bin/bash
+cancel_signal=""
+cancel_status=0
+on_cancel() {
+  local saved=$?
+  cancel_signal=$1
+  cancel_status=$2
+  return "$saved"
+}
+(exit 14)
+on_cancel INT 130
+compare_status=$?
+if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
+  exit "$cancel_status"
+fi
+exit "$compare_status"
+SH
+chmod 755 "$late"
+status=0
+"$late" || status=$?
+(( status == 14 )) || fail "a late INT after a finished miss keeps 14" "exit $status"
+signaled=$root/late-signaled
+cat >"$signaled" <<'SH'
+#!/bin/bash
+cancel_signal=""
+cancel_status=0
+on_cancel() {
+  local saved=$?
+  cancel_signal=$1
+  cancel_status=$2
+  return "$saved"
+}
+(exit 137)
+on_cancel TERM 143
+compare_status=$?
+if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
+  exit "$cancel_status"
+fi
+exit "$compare_status"
+SH
+chmod 755 "$signaled"
+status=0
+"$signaled" || status=$?
+(( status == 143 )) || fail "a signaled compare still exits 143" "exit $status"
+pass "post-wait cancel keeps a finished Howdy status"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"
