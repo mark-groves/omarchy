@@ -21,12 +21,12 @@ trap cleanup EXIT
 require_compositor "screenshot sanity test"
 
 if ! command -v quickshell >/dev/null 2>&1; then
-  pass "quickshell not installed; skipping screenshot sanity test"
+  skip "quickshell not installed; skipping screenshot sanity test"
   exit 0
 fi
 
 if pgrep -x omasnap >/dev/null 2>&1; then
-  pass "omasnap is already running; skipping screenshot sanity test"
+  skip "omasnap is already running; skipping screenshot sanity test"
   exit 0
 fi
 
