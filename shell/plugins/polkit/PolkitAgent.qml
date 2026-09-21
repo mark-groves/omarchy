@@ -129,7 +129,7 @@ Item {
 
   function armFacePlayback(state) {
     var expected = PolkitModel.faceSlotResolved(presentation)
-    var action = Playback.playbackAction(state, FaceChrome.ready, root.faceResultHoldMs(state), expected)
+    var action = Playback.playbackAction(state, FaceChrome.ready, root.faceResultHoldMs(state), expected, FaceChrome.failure !== "")
     if (action === "immediate") return false
     facePlaybackEpoch += 1
     if (state === "recognized") {

@@ -29,12 +29,16 @@ function isHeldState(state) {
 }
 
 // "play" when the plugin hold can run on the canvas.
-// "wait" when chrome is expected and has not loaded, so the surface does not
-// start a clock before the first frame exists.
-// "immediate" when there is nothing to show. The PAM result stays as it was.
-function playbackAction(state, pluginReady, pluginHoldMs, chromeExpected) {
+// "wait" when chrome is expected and has neither loaded nor failed, so the
+// surface does not start a clock before the first frame exists.
+// "immediate" when there is nothing to show, including a module that has
+// already been rejected. The PAM result stays as it was.
+function playbackAction(state, pluginReady, pluginHoldMs, chromeExpected, chromeFailed) {
   if (!isHeldState(state)) return "immediate"
-  if (!pluginReady) return chromeExpected ? "wait" : "immediate"
+  if (!pluginReady) {
+    if (chromeFailed) return "immediate"
+    return chromeExpected ? "wait" : "immediate"
+  }
   var ms = Number(pluginHoldMs)
   if (!isFinite(ms) || ms <= 0) return "immediate"
   return "play"

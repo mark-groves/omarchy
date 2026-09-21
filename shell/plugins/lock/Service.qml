@@ -301,7 +301,7 @@ Item {
   function holdFaceResult(state) {
     var canPresent = root.faceConfigured && !root.fingerprintConfigured
     var chromeExpected = canPresent && FaceChrome.sourceUrl !== ""
-    var action = Playback.playbackAction(state, FaceChrome.ready, FaceChrome.holdMs(state), chromeExpected)
+    var action = Playback.playbackAction(state, FaceChrome.ready, FaceChrome.holdMs(state), chromeExpected, FaceChrome.failure !== "")
     faceState = state
     if (!canPresent || action === "immediate") {
       faceHolding = false

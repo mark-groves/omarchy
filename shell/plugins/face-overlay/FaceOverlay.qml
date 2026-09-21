@@ -62,6 +62,18 @@ Item {
     root.opened = false
   }
 
+  // A rejected module will not paint, and it will not emit another revision
+  // after the one that stored the failure. Finish the result now. A module
+  // that is still loading, or still ready to paint, keeps the presented hold.
+  function finishHoldIfChromeFailed(state) {
+    if (FaceChrome.ready || FaceChrome.failure === "") return false
+    var held = state === "recognized" || state === "notRecognized" || root.awaitingPlayback
+    if (!held) return false
+    root.pendingSignal = null
+    root.hideCard()
+    return true
+  }
+
   function applySignal(next) {
     if (!Model.isNewerSignal(next, root.lastSignal)) return "stale"
     root.lastSignal = next
@@ -74,6 +86,7 @@ Item {
     }
     if (root.suppress) return "suppressed"
     if (!FaceChrome.ready) {
+      if (root.finishHoldIfChromeFailed(next.state)) return "ok"
       root.pendingSignal = next
       return "no-chrome"
     }
@@ -109,6 +122,8 @@ Item {
   Connections {
     target: FaceChrome
     function onRevisionChanged() {
+      var pendingState = root.pendingSignal ? root.pendingSignal.state : ""
+      if (root.finishHoldIfChromeFailed(pendingState)) return
       if (FaceChrome.ready && root.pendingSignal) root.applySignal(root.pendingSignal)
     }
   }
