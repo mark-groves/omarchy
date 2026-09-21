@@ -47,9 +47,9 @@ assert_wrapper_text() {
     fail "wrapper signals the face overlay" "$(cat "$path")"
   grep -F 'signal_face scanning' "$path" >/dev/null ||
     fail "wrapper signals scanning before compare" "$(cat "$path")"
-  grep -F 'signal_face recognized' "$path" >/dev/null ||
+  grep -F 'signal_result recognized' "$path" >/dev/null ||
     fail "wrapper signals recognized after a match" "$(cat "$path")"
-  grep -F 'signal_face notRecognized' "$path" >/dev/null ||
+  grep -F 'signal_result notRecognized' "$path" >/dev/null ||
     fail "wrapper signals notRecognized after a miss" "$(cat "$path")"
   grep -F 'signal_face cancelled' "$path" >/dev/null ||
     fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
@@ -246,16 +246,6 @@ rewrite_wrapper() {
     "$dest"
 }
 
-stop_children() {
-  local parent=$1
-  local kid
-  for kid in $(ps --ppid "$parent" -o pid= 2>/dev/null || true); do
-    [[ -n $kid ]] || continue
-    stop_children "$kid"
-    kill -TERM "$kid" 2>/dev/null || true
-  done
-}
-
 : >"$signals"
 fast0=$root/fast0.real
 printf '#!/bin/bash\nexit 0\n' >"$fast0"
@@ -286,23 +276,9 @@ printf '#!/bin/bash\nexec sleep 30\n' >"$slow"
 chmod 755 "$slow"
 rewrite_wrapper "$root/wrap-int" "$slow"
 status=0
-"$root/wrap-int" &
-wpid=$!
-for _ in {1..40}; do
-  if grep -qx scanning "$signals" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
-done
-grep -qx scanning "$signals" || fail "INT wrapper signals scanning before cancel" "$(cat "$signals")"
-kids=$(ps --ppid "$wpid" -o pid= 2>/dev/null || true)
-kill -INT "$wpid"
-wait "$wpid" || status=$?
-for kid in $kids; do
-  [[ -n $kid ]] || continue
-  kill -TERM "$kid" 2>/dev/null || true
-done
-stop_children "$wpid"
+# Background bash ignores keyboard SIGINT. timeout sends INT to a new
+# process group, which is the sudo Ctrl-C path.
+timeout --preserve-status --signal=INT --kill-after=2s 0.4 "$root/wrap-int" || status=$?
 (( status == 130 )) || fail "INT wrapper exits 130" "exit $status $(cat "$signals")"
 [[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
   fail "INT wrapper signals cancelled" "$(cat "$signals")"

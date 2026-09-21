@@ -82,7 +82,7 @@ assert(/FileView/.test(overlayQml) && /root\.signalPath/.test(overlayQml), 'over
 assert(/property bool primed/.test(overlayQml) && /setText\("\{\}\\n"\)/.test(overlayQml), 'overlay starts the watch without showing a leftover scan')
 
 assert(/OPENCV_LOG_LEVEL=ERROR/.test(wrapper), 'howdy-compare wrapper quiets OpenCV WARNs')
-assert(/signal_face scanning/.test(wrapper) && /signal_face recognized/.test(wrapper), 'wrapper signals scan start and match')
+assert(/signal_face scanning/.test(wrapper) && /signal_result recognized/.test(wrapper), 'wrapper signals scan start and match')
 assert(/signal_face cancelled/.test(wrapper) && /trap on_exit EXIT/.test(wrapper), 'wrapper hides the card if compare never returns a result')
 assert(/trap 'exit 130' INT/.test(wrapper) && /trap 'exit 143' TERM/.test(wrapper), 'INT and TERM still exit with their usual statuses')
 assert(/signaled_result=1/.test(wrapper), 'a normal compare exit does not overwrite the result with cancelled')
