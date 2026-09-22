@@ -6,21 +6,22 @@ alwaysApply: true
 # `inherit-parent` or `auto` as a value: the role runs on the parent chat model (omit Task `model`). Alias entries in a panel list still count toward its fan-out.
 # Cloud and project agents: read this repo file at `.cursor/rules/pstack-models.mdc`.
 # Skills that name `~/.cursor/rules/pstack-models.mdc` should use this path when the user-level file is absent.
+# budget: custom (panel grok: xhigh-fast; opus: 5.5 high)
 feature, refactoring: grok-4.7-high-fast
-bug-fix: claude-opus-5-thinking-high
-perf-issue: claude-opus-5-thinking-high
-hillclimb: claude-opus-5-thinking-high
-judgment and prose: claude-fable-5-1-thinking-high
-hardest tasks: claude-fable-5-1-thinking-high
+bug-fix: claude-opus-5-5-high
+perf-issue: claude-opus-5-5-high
+hillclimb: claude-opus-5-5-high
+judgment and prose: claude-opus-5-5-high
+hardest tasks: claude-opus-5-5-high
 how explorer: grok-4.7-high-fast
-how explainer: claude-opus-5-thinking-high
-how critics: claude-opus-5-thinking-high, grok-4.7-high-fast, claude-fable-5-1-thinking-high
+how explainer: claude-opus-5-5-high
+how critics: claude-opus-5-5-high, grok-4.7-xhigh-fast, claude-fable-5-1-thinking-high
 why investigators: grok-4.7-high-fast
-why synthesizer: claude-opus-5-thinking-high
+why synthesizer: claude-opus-5-5-high
 reflect tooling: grok-4.7-high-fast
-reflect judgment, divergent, synthesizer: claude-fable-5-1-thinking-high
-arena runners: grok-4.7-high-fast, claude-opus-5-thinking-high, claude-fable-5-1-thinking-high
-arena cross-judge pool: claude-opus-5-thinking-high, grok-4.7-high-fast, claude-fable-5-1-thinking-high
+reflect judgment, divergent, synthesizer: claude-opus-5-5-high
+arena runners: grok-4.7-xhigh-fast, claude-opus-5-5-high, claude-fable-5-1-thinking-high
+arena cross-judge pool: claude-opus-5-5-high, grok-4.7-xhigh-fast, claude-fable-5-1-thinking-high
 swarm workers: grok-4.7-high-fast
-architect runners: grok-4.7-high-fast, claude-opus-5-thinking-high, claude-fable-5-1-thinking-high
-interrogate reviewers: claude-opus-5-thinking-high, grok-4.7-high-fast, claude-fable-5-1-thinking-high
+architect runners: grok-4.7-xhigh-fast, claude-opus-5-5-high, claude-fable-5-1-thinking-high
+interrogate reviewers: claude-opus-5-5-high, grok-4.7-xhigh-fast, claude-fable-5-1-thinking-high
