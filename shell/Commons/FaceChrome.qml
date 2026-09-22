@@ -44,6 +44,9 @@ QtObject {
   onSourceUrlChanged: {
     api = null
     failure = ""
+    // Surfaces holding a result re-check on revision. A cleared source never
+    // loads or rejects, so this is the only revision it will emit.
+    revision++
     if (sourceUrl === "") pluginFile.path = ""
     else pluginFile.path = root.pathFor(sourceUrl)
   }

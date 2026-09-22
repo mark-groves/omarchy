@@ -63,10 +63,13 @@ Item {
   }
 
   // A rejected module will not paint, and it will not emit another revision
-  // after the one that stored the failure. Finish the result now. A module
-  // that is still loading, or still ready to paint, keeps the presented hold.
+  // after the one that stored the failure. Neither will a source cleared
+  // under an armed hold. Finish the result now. A module that is still
+  // loading, or still ready to paint, keeps the presented hold.
   function finishHoldIfChromeFailed(state) {
-    if (FaceChrome.ready || FaceChrome.failure === "") return false
+    if (FaceChrome.ready) return false
+    var cleared = root.awaitingPlayback && FaceChrome.sourceUrl === ""
+    if (FaceChrome.failure === "" && !cleared) return false
     var held = state === "recognized" || state === "notRecognized" || root.awaitingPlayback
     if (!held) return false
     root.pendingSignal = null

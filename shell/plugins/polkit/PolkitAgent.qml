@@ -166,7 +166,7 @@ Item {
       if (Playback.playbackAction(state, true, root.faceResultHoldMs(state), expected) === "immediate") completeFacePlayback()
       return
     }
-    if (expected && FaceChrome.failure === "") return
+    if (expected && FaceChrome.sourceUrl !== "" && FaceChrome.failure === "") return
     completeFacePlayback()
   }
 
