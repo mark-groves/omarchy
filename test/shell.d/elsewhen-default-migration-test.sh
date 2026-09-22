@@ -39,7 +39,8 @@ SH
 chmod +x "$test_dir/bin/"*
 
 mkdir -p "$test_dir/packaged/shell/plugins/omacom.elsewhen"
-sed "s|/usr/share/omarchy|$test_dir/packaged|g" "$ROOT/migrations/1789581661.sh" >"$test_dir/migration.sh"
+migration="$ROOT/migrations/1790042972.sh"
+sed "s|/usr/share/omarchy|$test_dir/packaged|g" "$migration" >"$test_dir/migration.sh"
 
 plugin="$test_dir/home/.config/omarchy/plugins/omacom.elsewhen"
 run_migration() {
@@ -120,3 +121,12 @@ grep -q "omacom.elsewhen was not put on the bar" "$test_dir/output" || fail "an 
 [[ $(readlink "$plugin") == "$test_dir/packaged/shell/plugins/omacom.elsewhen" ]] || fail "the package and plugin link land without a shell"
 [[ $(cat "$CALL_LOG") == "$expected" ]] || fail "the rescan is best-effort and the put is still asked" "$(cat "$CALL_LOG")"
 pass "an absent shell leaves the update running with the package and link in place"
+
+# The first run of this migration was under 1789581661.sh, before the re-point
+# existed; that marker must not stop the renamed file from running there.
+state="$test_dir/state"
+mkdir -p "$state"
+touch "$state/1789581661.sh"
+OMARCHY_MIGRATION_STATE="$state" OMARCHY_PATH="$ROOT" "$ROOT/bin/omarchy-migrate" --pending >"$test_dir/pending" || true
+grep -qx "$(basename "$migration")" "$test_dir/pending" || fail "the old marker must not satisfy the renamed migration" "$(cat "$test_dir/pending")"
+pass "a machine that applied the migration under its old name runs it again"
