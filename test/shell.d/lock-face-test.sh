@@ -156,8 +156,14 @@ assert(
   'the lock canvas follows the card so FrameAnimation stops when the card hides'
 )
 assert(
-  !/chrome\s*=/.test(viewQml) && !/Loader/.test(viewQml),
+  !/chrome\s*=/.test(viewQml) &&
+    !/source:\s*FaceChrome/.test(viewQml) &&
+    !/FaceChromeCanvas[\s\S]{0,80}Loader/.test(viewQml),
   'lock never loads a plugin Item next to its password field'
+)
+assert(
+  /id:\s*feedLoader/.test(viewQml) && /source:\s*"LockFeedSurface\.qml"/.test(viewQml),
+  'the lock Loader is the isolated OWE video feed, not face chrome'
 )
 assert(
   /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
