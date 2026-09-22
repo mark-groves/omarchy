@@ -97,15 +97,15 @@ assert(
   'a match holds the recognised frame for as long as the plugin declares'
 )
 assert(
-  /if \(hold > 0\)[\s\S]*?faceHoldTimer\.restart\(\)[\s\S]*?\n      \}\n      finishUnlock\(\)/.test(faceFinished[0]),
-  'with no chrome installed a match still unlocks immediately'
+  /if \(root\.holdFaceResult\("recognized"\)\) return\s*\n\s*finishUnlock\(\)/.test(faceFinished[0]),
+  'with no card to play a match still unlocks immediately'
 )
 assert(
-  /id: faceHoldTimer[\s\S]{0,240}?root\.finishUnlock\(\)/.test(serviceQml),
-  'the hold always ends in an unlock'
+  /function completeFacePlayback\(\)[\s\S]*?finishUnlock\(\)/.test(serviceQml),
+  'a played-out match ends in an unlock'
 )
 assert(
-  /holdFaceResult\("notRecognized"\)/.test(faceFinished[0]),
+  /releaseUnmatchedFace\(\)/.test(faceFinished[0]) && /holdFaceResult\("notRecognized"\)/.test(serviceQml),
   'a miss holds the not-recognised frame for as long as the plugin declares'
 )
 assert(
@@ -113,14 +113,22 @@ assert(
   'the lock canvas keeps animating while a result is held'
 )
 assert(
-  /if \(faceHoldTimer\.running\) return/.test(serviceQml),
-  'a new scan does not cancel a recognised hold that is already unlocking'
+  /if \(faceHolding\) return/.test(serviceQml),
+  'a new scan does not cancel a result that is still playing'
+)
+assert(
+  /onFaceResultPlayed:\s*root\.completeFacePlayback\(\)/.test(serviceQml),
+  'lock completes the hold from the canvas, after frames have been presented'
+)
+assert(
+  !/faceHoldTimer/.test(serviceQml) && !/faceMissHoldTimer/.test(serviceQml),
+  'lock does not run the face hold on a wall-clock timer'
 )
 
-const teardown = serviceQml.match(/fingerprintRetryTimer\.stop\(\)[\s\S]{0,280}/)
+const teardown = serviceQml.match(/function resetAuthenticationState\(\) \{[\s\S]*?\n  \}/)
 assert(
-  teardown && /faceHoldTimer\.stop\(\)/.test(teardown[0]) && /faceMissHoldTimer\.stop\(\)/.test(teardown[0]),
-  'tearing the lock down never leaves an unlock waiting on a display hold'
+  teardown && /faceHolding = false/.test(teardown[0]) && /faceRetryTimer\.stop\(\)/.test(teardown[0]),
+  'tearing the lock down clears a display hold so it cannot unlock later'
 )
 
 assert(

@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import "../Commons/FaceCardPainter.js" as Painter
+import "../Commons/FacePlayback.js" as Playback
 
 // The shared face-scan card, painted by the host.
 //
@@ -26,23 +27,43 @@ Item {
   // How long the surface should hold the current result before tearing down.
   readonly property int holdMs: FaceChrome.holdMs(cardState)
 
-  // Milliseconds since `cardState` last changed. Results are timed from here
-  // rather than from a timestamp the surface passes in, so every surface
-  // animates identically without agreeing on a clock.
+  // Milliseconds of presented frames since this card cycle began. A result
+  // hold starts at the first presented frame of the cycle, which is 0 until
+  // the frame clock actually runs.
   property real elapsed: 0
   property real clock: 0
 
-  onCardStateChanged: {
+  // Surfaces bump this when a new result should play, including a repeat of
+  // the same state string. PAM time is not part of the cycle.
+  property int playbackEpoch: 0
+  property bool resultLatched: false
+
+  signal resultPlayed()
+
+  readonly property bool presenting: root.active && root.painting && root.visible
+
+  function beginCycle() {
     elapsed = 0
+    resultLatched = false
     canvas.requestPaint()
   }
 
+  onCardStateChanged: beginCycle()
+  onPlaybackEpochChanged: beginCycle()
+  onPresentingChanged: {
+    if (root.presenting) canvas.requestPaint()
+  }
+
   FrameAnimation {
-    running: root.active && root.painting && root.visible
+    running: root.presenting
     onTriggered: {
-      var dt = frameTime * 1000
-      root.clock += dt
-      root.elapsed += dt
+      var next = Playback.advancePresented(root.elapsed, frameTime, root.presenting)
+      root.clock += next - root.elapsed
+      root.elapsed = next
+      if (!root.resultLatched && Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) {
+        root.resultLatched = true
+        root.resultPlayed()
+      }
       canvas.requestPaint()
     }
   }

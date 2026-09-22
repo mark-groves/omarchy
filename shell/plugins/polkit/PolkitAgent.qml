@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "PolkitModel.js" as PolkitModel
+import "../../Commons/FacePlayback.js" as Playback
 
 Item {
   id: root
@@ -59,6 +60,7 @@ Item {
   property bool missHold: false
   property bool resultHold: false
   property string faceState: "scanning"
+  property int facePlaybackEpoch: 0
   readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold || root.resultHold)
   readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold && !root.resultHold
   readonly property int slotExtra: root.showFaceChrome && presentation && presentation.extraSpace ? Style.space(presentation.extraSpace) : 0
@@ -120,21 +122,57 @@ Item {
   //
   // FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin
   // is installed. A password or fingerprint prompt must not inherit a miss or
-  // match hold from that global URL.
+  // match hold from that global URL. The hold is presented frames, not a timer.
   function faceResultHoldMs(state) {
-    var hold = FaceChrome.holdMs(state)
-    if (hold <= 0 && !FaceChrome.ready && PolkitModel.faceSlotResolved(presentation)) hold = 800
-    return hold
+    return FaceChrome.holdMs(state)
+  }
+
+  function armFacePlayback(state) {
+    var expected = PolkitModel.faceSlotResolved(presentation)
+    var action = Playback.playbackAction(state, FaceChrome.ready, root.faceResultHoldMs(state), expected, FaceChrome.failure !== "")
+    if (action === "immediate") return false
+    facePlaybackEpoch += 1
+    if (state === "recognized") {
+      faceState = "recognized"
+      missHold = false
+      root.resultHold = true
+    } else {
+      faceState = "notRecognized"
+      missHold = true
+    }
+    return true
+  }
+
+  function completeFacePlayback() {
+    if (resultHold) {
+      resultHold = false
+      missHold = false
+      closing = true
+      closeTimer.restart()
+      return
+    }
+    if (missHold) {
+      missHold = false
+      faceState = "scanning"
+      Qt.callLater(refocus)
+    }
+  }
+
+  function settleFacePlayback() {
+    if (!resultHold && !missHold) return
+    var state = resultHold ? "recognized" : faceState
+    var expected = PolkitModel.faceSlotResolved(presentation)
+    if (FaceChrome.ready) {
+      if (Playback.playbackAction(state, true, root.faceResultHoldMs(state), expected) === "immediate") completeFacePlayback()
+      return
+    }
+    if (expected && FaceChrome.sourceUrl !== "" && FaceChrome.failure === "") return
+    completeFacePlayback()
   }
 
   function noteFaceMiss() {
     if (!PolkitModel.shouldNoteFaceMiss(presentation, faceState)) return
-    var hold = root.faceResultHoldMs("notRecognized")
-    if (hold <= 0) return
-    faceState = "notRecognized"
-    missHold = true
-    missTimer.interval = hold
-    missTimer.restart()
+    root.armFacePlayback("notRecognized")
   }
 
   function resetSnapshot() {
@@ -165,8 +203,6 @@ Item {
 
   function beginFlow() {
     closeTimer.stop()
-    successTimer.stop()
-    missTimer.stop()
     missHold = false
     resultHold = false
     faceState = "scanning"
@@ -199,7 +235,7 @@ Item {
     passwordInput.text = ""
     submitted = false
     resultHold = false
-    successTimer.stop()
+    missHold = false
     closing = true
     closeTimer.restart()
     if (flow) flow.cancelAuthenticationRequest()
@@ -214,6 +250,11 @@ Item {
     Qt.callLater(refocus)
   }
 
+  Connections {
+    target: FaceChrome
+    function onRevisionChanged() { root.settleFacePlayback() }
+  }
+
   Timer {
     id: closeTimer
     interval: 300
@@ -224,29 +265,8 @@ Item {
     }
   }
 
-  // A successful face match closes the dialog. Hold it open just long enough
-  // for the card to finish, then close exactly as before. PAM has already
-  // succeeded by this point, so this delays pixels, not authorization.
-  Timer {
-    id: successTimer
-    repeat: false
-    onTriggered: {
-      root.resultHold = false
-      root.closing = true
-      closeTimer.restart()
-    }
-  }
-
-  Timer {
-    id: missTimer
-    repeat: false
-    onTriggered: {
-      root.missHold = false
-      root.faceState = "scanning"
-      Qt.callLater(root.refocus)
-    }
-  }
-
+  // A successful face match closes the dialog after the card has played.
+  // PAM has already succeeded, so this delays pixels, not authorization.
   Timer {
     id: errorTimer
     interval: 1200
@@ -312,25 +332,14 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
-      if (PolkitModel.shouldHoldFaceSuccess(presentation)) {
-        var hold = root.faceResultHoldMs("recognized")
-        if (hold > 0) {
-          root.faceState = "recognized"
-          root.missHold = false
-          root.resultHold = true
-          missTimer.stop()
-          successTimer.interval = hold
-          successTimer.restart()
-          return
-        }
-      }
+      if (PolkitModel.shouldHoldFaceSuccess(presentation) && root.armFacePlayback("recognized")) return
       root.closing = true
       closeTimer.restart()
     }
 
     function onAuthenticationRequestCancelled() {
-      successTimer.stop()
       root.resultHold = false
+      root.missHold = false
       root.closing = true
       closeTimer.restart()
     }
@@ -406,8 +415,11 @@ Item {
           anchors.horizontalCenter: parent.horizontalCenter
           width: Math.min(parent.width, Style.space(116))
           height: width
+          visible: parent.visible
           cardState: root.faceState
-          active: root.dialogVisible
+          playbackEpoch: root.facePlaybackEpoch
+          active: root.dialogVisible && parent.visible
+          onResultPlayed: root.completeFacePlayback()
           accent: root.accent
           foreground: root.foreground
           errorColor: Color.polkit.textError
