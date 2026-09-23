@@ -88,6 +88,7 @@ assertEqual(playback.playbackAction('cancelled', true, 900, true), 'immediate', 
 assert(/onFrameSwapped/.test(canvasQml) && /creditSwap\(/.test(canvasQml), 'the hold advances on frameSwapped, not on animation ticks')
 assert(/animationTicks \+= 1/.test(canvasQml), 'animation ticks are counted apart from presented swaps')
 assert(/presentedSwaps \+= 1/.test(canvasQml), 'presented swaps are counted apart from animation ticks')
+assert(/face hold played/.test(canvasQml) && /swaps/.test(canvasQml) && /ticks/.test(canvasQml), 'a finished hold logs swap and tick counts')
 assert(!/creditSwap[\s\S]{0,80}onTriggered/.test(canvasQml) && !/onTriggered:[\s\S]{0,120}creditSwap/.test(canvasQml), 'a FrameAnimation tick does not credit the hold')
 assert(/canvas\.available/.test(canvasQml), 'a lost canvas context is not a presented frame')
 assert(/running:\s*root\.active && root\.painting && root\.visible/.test(canvasQml), 'the frame clock keeps requesting paint after resume')

@@ -78,6 +78,7 @@ Item {
     canvas.requestPaint()
     if (!root.resultLatched && Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) {
       root.resultLatched = true
+      console.log("face hold played", root.cardState, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed))
       root.resultPlayed()
     }
   }
