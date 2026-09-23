@@ -36,36 +36,77 @@ Item {
   // Surfaces bump this when a new result should play, including a repeat of
   // the same state string. PAM time is not part of the cycle.
   property int playbackEpoch: 0
+  // The lock bumps this when the surface must commit a new buffer after resume.
+  property int presentEpoch: 0
   property bool resultLatched: false
 
   signal resultPlayed()
 
-  readonly property bool presenting: root.active && root.painting && root.visible
+  // The 2D context is dropped across suspend. A swap while it is gone is
+  // not a frame of this card.
+  readonly property bool presenting: root.active && root.painting && root.visible && canvas.available
+  // The QQuickWindow, which emits frameSwapped. QsWindow.window is
+  // Quickshell's wrapper: it has no frameSwapped, and on a session lock
+  // surface it is null.
+  readonly property var hostWindow: root.Window.window
+
+  // Milliseconds of the last frameSwapped that counted. A result cycle
+  // starts this at 0 so the first presented frame does not include the
+  // gap since the previous swap.
+  property real lastSwapMs: 0
+  property int animationTicks: 0
+  property int presentedSwaps: 0
 
   function beginCycle() {
     elapsed = 0
+    lastSwapMs = 0
     resultLatched = false
     canvas.requestPaint()
   }
 
+  function notePresentedFrame() {
+    root.presentedSwaps += 1
+    if (!root.presenting) {
+      root.lastSwapMs = 0
+      return
+    }
+    var now = Date.now()
+    var gap = root.lastSwapMs > 0 ? now - root.lastSwapMs : 0
+    root.lastSwapMs = now
+    var next = Playback.creditSwap(root.elapsed, gap, true)
+    if (next !== root.elapsed) {
+      root.clock += next - root.elapsed
+      root.elapsed = next
+    }
+    canvas.requestPaint()
+    if (!root.resultLatched && Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) {
+      root.resultLatched = true
+      console.log("face hold played", root.cardState, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed))
+      root.resultPlayed()
+    }
+  }
+
   onCardStateChanged: beginCycle()
   onPlaybackEpochChanged: beginCycle()
+  onPresentEpochChanged: canvas.requestPaint()
   onPresentingChanged: {
+    root.lastSwapMs = 0
     if (root.presenting) canvas.requestPaint()
   }
 
+  // Ticks keep the draw requested. They do not move the hold: after resume
+  // they run while the lock surface is still showing its pre-suspend buffer.
   FrameAnimation {
-    running: root.presenting
+    running: root.active && root.painting && root.visible
     onTriggered: {
-      var next = Playback.advancePresented(root.elapsed, frameTime, root.presenting)
-      root.clock += next - root.elapsed
-      root.elapsed = next
-      if (!root.resultLatched && Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) {
-        root.resultLatched = true
-        root.resultPlayed()
-      }
+      root.animationTicks += 1
       canvas.requestPaint()
     }
+  }
+
+  Connections {
+    target: root.hostWindow
+    function onFrameSwapped() { root.notePresentedFrame() }
   }
 
   Canvas {
@@ -86,6 +127,10 @@ Item {
       Painter.paint(ctx, side,
         FaceChrome.frame(side, root.cardState, root.clock, root.elapsed),
         { accent: root.accent, foreground: root.foreground, errorColor: root.errorColor })
+    }
+
+    onAvailableChanged: {
+      if (available) requestPaint()
     }
 
     onWidthChanged: requestPaint()

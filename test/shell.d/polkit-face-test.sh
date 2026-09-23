@@ -362,6 +362,37 @@ assert(
   /property bool resultHold/.test(agentQml) && /dialogVisible:.*resultHold/.test(agentQml),
   'an instant match keeps the dialog visible while the card finishes'
 )
+assert(!polkit.polkitCardVisible(true, true, false), 'a polkit card does not render while the session is locked')
+assert(!polkit.polkitCardVisible(true, false, true), 'a request resolved under the lock stays hidden after unlock')
+assert(polkit.polkitCardVisible(true, false, false), 'a pending request renders once the session is unlocked')
+assert(!polkit.shouldArmFaceHold(true), 'a face result under the lock does not arm a hold')
+assert(polkit.shouldArmFaceHold(false), 'a face result on the unlocked session still plays')
+assert(polkit.shouldRestartFaceOnUnlock(false, true, false), 'a request still pending at unlock starts its card over')
+assert(!polkit.shouldRestartFaceOnUnlock(false, true, true), 'a request already resolved under the lock does not replay')
+assert(!polkit.shouldRestartFaceOnUnlock(false, false, false), 'an idle agent does not open a card at unlock')
+assert(!polkit.shouldRestartFaceOnUnlock(true, true, false), 'a pending request does not restart while still locked')
+assert(
+  !/sessionLockedSeen/.test(agentQml),
+  'an agent created under an existing lock still restarts a pending card at unlock'
+)
+assert(
+  /cardVisible:/.test(agentQml) && /visible:\s*root\.cardVisible/.test(agentQml),
+  'the polkit window follows cardVisible, not the raw dialog flag'
+)
+assert(/LockCover\.covered/.test(agentQml), 'polkit reads the lock cover instead of the shell')
+assert(!/property\s+\S+\s+shell\b/.test(agentQml), 'polkit still does not declare shell')
+assert(
+  /resolvedUnderLock = true/.test(agentQml) && /shouldArmFaceHold\(root\.sessionLocked\)/.test(agentQml),
+  'success while locked records the request and does not arm playback'
+)
+assert(
+  /function refocus\(\) \{[\s\S]*?if \(!root\.cardVisible\) return/.test(agentQml),
+  'refocus waits until the polkit card is actually shown'
+)
+assert(
+  /onSessionLockedChanged:[\s\S]*?facePlaybackEpoch \+= 1[\s\S]*?Qt\.callLater\(root\.refocus\)/.test(agentQml),
+  'a pending request shown when the lock lifts takes focus'
+)
 assert(
   /showPasswordRow:.*!root\.resultHold/.test(agentQml),
   'the password row does not replace a held match'

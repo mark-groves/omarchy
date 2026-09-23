@@ -30,6 +30,8 @@ Item {
   // canvas, after presented frames, and does not change the PAM result.
   property bool faceHolding: false
   property int facePlaybackEpoch: 0
+  // Bumped when the lock surface has to commit a buffer again after resume.
+  property int lockPresentEpoch: 0
   // What the shared face card should be showing. Lock previously bound nothing
   // face-related into the view, so a scan and a miss were both silent.
   property string faceState: "scanning"
@@ -58,6 +60,8 @@ Item {
   property bool strandedLockResolved: false
 
   readonly property bool locked: lockRequested || sessionLock.locked || sessionLock.secure
+
+  onLockedChanged: LockCover.covered = locked
   readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating
   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
   readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
@@ -205,6 +209,19 @@ Item {
     root.monitorDpmsKnown = false
     if (!wakeProcess.running) wakeProcess.running = true
     if (lockRequested) armBlankTimer()
+    // A resume that does not change the lid or the output list never hits
+    // the lid or screens handlers. Those were the only commits, so the
+    // pre-suspend buffer stayed up and a later face hold could not finish.
+    root.rearmLockPresentation()
+  }
+
+  // After resume the lock surface can keep its pre-suspend buffer while Qt
+  // still ticks animations. A new commit is what makes Hyprland deliver
+  // frame callbacks again, which is the clock the face hold follows.
+  // Each output has its own surface, and ids inside the surface component
+  // are out of scope here, so every LockView updates its own window.
+  function rearmLockPresentation() {
+    root.lockPresentEpoch += 1
   }
 
   function runBlank() {
@@ -420,6 +437,7 @@ Item {
         faceConfigured: root.faceConfigured
         faceState: root.faceState
         facePlaybackEpoch: root.facePlaybackEpoch
+        lockPresentEpoch: root.lockPresentEpoch
         faceScanning: root.faceAuthenticating || root.faceHolding
         onFaceResultPlayed: root.completeFacePlayback()
         authenticatingPassword: root.authenticatingPassword
@@ -587,8 +605,12 @@ Item {
         faceRetryTimer.stop()
         faceAuthenticating = false
         if (facePam.active) facePam.abort()
-      } else if (wasClosed && root.lockRequested && root.faceConfigured) {
-        root.startFace()
+      } else if (wasClosed && root.lockRequested) {
+        // Resume does not run system-wake. runWake commits a new buffer so
+        // the lock surface leaves the pre-suspend frame. Start a scan only
+        // when face is configured.
+        root.runWake()
+        if (root.faceConfigured) root.startFace()
       }
     }
   }
@@ -703,6 +725,7 @@ Item {
       // for, so the blank state has to be given up here or a visible lock
       // wallpaper stays frozen until the next keypress.
       root.displaysBlank = false
+      root.rearmLockPresentation()
       root.requestSessionLock()
 
       // A monitor still coming up has no workspace, so cannot answer yet.
@@ -789,6 +812,7 @@ Item {
   onPluginRegistryChanged: FaceChrome.pluginRegistry = pluginRegistry
 
   Component.onCompleted: {
+    LockCover.covered = locked
     if (pluginRegistry) FaceChrome.pluginRegistry = pluginRegistry
     refreshBackground()
     refreshFingerprintStatus()

@@ -204,6 +204,26 @@ function shouldHoldFaceSuccess(presentation) {
   return isFaceAuthRequest(presentation) && !!presentation && presentation.kind === "face"
 }
 
+// The session lock covers every other surface. A polkit card opened under it
+// is what shows up as a stray "authenticating" card the moment the lock drops.
+function polkitCardVisible(dialogVisible, sessionLocked, resolvedUnderLock) {
+  return !!dialogVisible && !sessionLocked && !resolvedUnderLock
+}
+
+// A result that lands while the card cannot be seen must not arm a hold.
+// PAM has already decided, and playing it after unlock is a card for a
+// request the user never had in front of them.
+function shouldArmFaceHold(sessionLocked) {
+  return !sessionLocked
+}
+
+// The request is still in progress when the lock lifts. Restart the card so
+// the scan and the result each play from a presented frame, not from ticks
+// that ran underneath the lock.
+function shouldRestartFaceOnUnlock(sessionLocked, agentActive, resolvedUnderLock) {
+  return !sessionLocked && !!agentActive && !resolvedUnderLock
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     promptLooksFingerprint: promptLooksFingerprint,
@@ -225,6 +245,9 @@ if (typeof module !== "undefined") {
     isFaceAuthRequest: isFaceAuthRequest,
     faceSlotResolved: faceSlotResolved,
     shouldNoteFaceMiss: shouldNoteFaceMiss,
-    shouldHoldFaceSuccess: shouldHoldFaceSuccess
+    shouldHoldFaceSuccess: shouldHoldFaceSuccess,
+    polkitCardVisible: polkitCardVisible,
+    shouldArmFaceHold: shouldArmFaceHold,
+    shouldRestartFaceOnUnlock: shouldRestartFaceOnUnlock
   }
 }

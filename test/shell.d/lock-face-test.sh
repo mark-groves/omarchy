@@ -61,8 +61,28 @@ assert(
 const lidHandler = serviceQml.match(/id:\s*laptopClosedProc[\s\S]*?onExited:\s*\{[\s\S]*?\n    \}/)
 assert(lidHandler, 'lock has a laptopClosedProc onExited handler')
 assert(
-  /wasClosed/.test(lidHandler[0]) && /else if \(wasClosed && root\.lockRequested && root\.faceConfigured\)/.test(lidHandler[0]),
+  /wasClosed/.test(lidHandler[0]) && /else if \(wasClosed && root\.lockRequested\)/.test(lidHandler[0]),
   'an already-open lid poll does not start a new Howdy scan'
+)
+assert(
+  /if \(root\.faceConfigured\) root\.startFace\(\)/.test(lidHandler[0]),
+  'opening the lid starts a face scan only when face is configured'
+)
+assert(
+  /function runWake\(\) \{[\s\S]*?root\.rearmLockPresentation\(\)/.test(serviceQml),
+  'every wake commits a new lock buffer, including a resume without a lid or output change'
+)
+assert(
+  /onWakeRequested:\s*root\.runWake\(\)/.test(serviceQml),
+  'a pointer or key wake goes through runWake'
+)
+assert(
+  /root\.runWake\(\)/.test(lidHandler[0]),
+  'opening the lid wakes the panel and commits a new lock buffer'
+)
+assert(
+  /LockCover\.covered = locked/.test(serviceQml),
+  'lock publishes the session cover for polkit without handing over the shell'
 )
 assert(
   !/else if \(root\.lockRequested && root\.faceConfigured\) \{\s*root\.startFace\(\)/.test(lidHandler[0]),

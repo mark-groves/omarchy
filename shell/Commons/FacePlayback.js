@@ -24,6 +24,24 @@ function advancePresented(elapsedMs, frameTimeSeconds, presenting) {
   return elapsed + presentedStepMs(frameTimeSeconds)
 }
 
+// A FrameAnimation tick is not a presented frame. After resume Qt's animation
+// driver keeps ticking on its internal timer while the lock surface is not
+// swapping buffers, and those ticks finish a 1050 ms hold on a frozen card.
+// Credit only the gap between frameSwapped signals. A gap longer than one
+// frame is the surface catching up, not time the user saw.
+function presentedSwapMs(gapMs) {
+  var ms = Number(gapMs)
+  if (!isFinite(ms) || ms <= 0 || ms > maxPresentedStepMs) return 0
+  return ms
+}
+
+function creditSwap(elapsedMs, gapMs, presenting) {
+  var elapsed = Number(elapsedMs)
+  if (!isFinite(elapsed) || elapsed < 0) elapsed = 0
+  if (!presenting) return elapsed
+  return elapsed + presentedSwapMs(gapMs)
+}
+
 function isHeldState(state) {
   return state === "recognized" || state === "notRecognized"
 }
@@ -58,6 +76,8 @@ if (typeof module !== "undefined") {
     maxPresentedStepMs: maxPresentedStepMs,
     presentedStepMs: presentedStepMs,
     advancePresented: advancePresented,
+    presentedSwapMs: presentedSwapMs,
+    creditSwap: creditSwap,
     isHeldState: isHeldState,
     playbackAction: playbackAction,
     resultComplete: resultComplete
