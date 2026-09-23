@@ -186,7 +186,6 @@ Item {
     blur: 1.0
     blurMax: 48
     blurMultiplier: 0.6
-    brightness: root.darkSurface ? 0.08 : 0
     opacity: root.darkSurface ? 0.95 : 0.45
   }
 
@@ -200,7 +199,6 @@ Item {
     blurEnabled: true
     blur: 0.55
     blurMax: 12
-    brightness: root.darkSurface ? 0.05 : 0
     opacity: root.darkSurface ? 1 : 0.5
   }
 
