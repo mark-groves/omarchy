@@ -164,8 +164,8 @@ assert(
   'lock paints the shared card above the password field'
 )
 assert(
-  /width:\s*Style\.space\(116\)/.test(viewQml),
-  'the lock card is the 116 px mesh size, not the 26 px in-field glyph slot'
+  /width:\s*Style\.space\(FaceChrome\.cardSide\)/.test(viewQml),
+  'the lock card is the shared large card size, not the 26 px in-field glyph slot'
 )
 assert(
   /Look at the camera/.test(viewQml) && /or type your password/.test(viewQml),
