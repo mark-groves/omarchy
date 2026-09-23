@@ -37,12 +37,22 @@ Item {
   property bool laptopClosed: false
   property int shakeOffset: 0
 
+  // LockCover is a host singleton the lock service writes. Polkit does not
+  // take a shell property: that injection is the host, and this file owns
+  // the password field.
+  readonly property bool sessionLocked: LockCover.covered
+  // Set when a request finishes while the session lock is covering this card.
+  // Unlock must not reveal a prompt that already completed underneath it.
+  property bool resolvedUnderLock: false
+  property bool sessionLockedSeen: false
+
   property var pluginRegistry: null
   property var failedSlotUrls: ({})
   property int failedSlotRevision: 0
   property string lastChromeLog: ""
 
   readonly property bool dialogVisible: polkitAgent.isActive || closing || resultHold
+  readonly property bool cardVisible: PolkitModel.polkitCardVisible(dialogVisible, sessionLocked, resolvedUnderLock)
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
   readonly property bool waitingOnPam: dialogVisible && !responseRequired && !submitted && !errorFlash
   readonly property int registryRevision: root.pluginRegistry ? root.pluginRegistry.registryRevision : 0
@@ -128,6 +138,7 @@ Item {
   }
 
   function armFacePlayback(state) {
+    if (!PolkitModel.shouldArmFaceHold(root.sessionLocked)) return false
     var expected = PolkitModel.faceSlotResolved(presentation)
     var action = Playback.playbackAction(state, FaceChrome.ready, root.faceResultHoldMs(state), expected, FaceChrome.failure !== "")
     if (action === "immediate") return false
@@ -203,6 +214,7 @@ Item {
 
   function beginFlow() {
     closeTimer.stop()
+    resolvedUnderLock = false
     missHold = false
     resultHold = false
     faceState = "scanning"
@@ -248,6 +260,26 @@ Item {
     errorTimer.restart()
     shakeAnimation.restart()
     Qt.callLater(refocus)
+  }
+
+  onSessionLockedChanged: {
+    var wasLocked = root.sessionLockedSeen
+    root.sessionLockedSeen = root.sessionLocked
+    if (root.sessionLocked) {
+      // A hold already on screen cannot finish while this window is hidden.
+      // The PAM result stands; don't bring the card back at unlock.
+      if (root.resultHold) {
+        root.resolvedUnderLock = true
+        root.resultHold = false
+        root.missHold = false
+      }
+      return
+    }
+    if (!PolkitModel.shouldRestartFaceOnUnlock(wasLocked, root.sessionLocked, polkitAgent.isActive, root.resolvedUnderLock)) return
+    root.faceState = "scanning"
+    root.missHold = false
+    root.resultHold = false
+    root.facePlaybackEpoch += 1
   }
 
   Connections {
@@ -332,6 +364,12 @@ Item {
     }
 
     function onAuthenticationSucceeded() {
+      if (!PolkitModel.shouldArmFaceHold(root.sessionLocked)) {
+        root.resolvedUnderLock = true
+        root.resultHold = false
+        root.missHold = false
+        return
+      }
       if (PolkitModel.shouldHoldFaceSuccess(presentation) && root.armFacePlayback("recognized")) return
       root.closing = true
       closeTimer.restart()
@@ -340,6 +378,10 @@ Item {
     function onAuthenticationRequestCancelled() {
       root.resultHold = false
       root.missHold = false
+      if (root.sessionLocked) {
+        root.resolvedUnderLock = true
+        return
+      }
       root.closing = true
       closeTimer.restart()
     }
@@ -347,7 +389,7 @@ Item {
 
   PanelWindow {
     id: panel
-    visible: root.dialogVisible
+    visible: root.cardVisible
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-polkit"
@@ -418,7 +460,7 @@ Item {
           visible: parent.visible
           cardState: root.faceState
           playbackEpoch: root.facePlaybackEpoch
-          active: root.dialogVisible && parent.visible
+          active: root.cardVisible && parent.visible
           onResultPlayed: root.completeFacePlayback()
           accent: root.accent
           foreground: root.foreground

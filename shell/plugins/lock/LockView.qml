@@ -13,6 +13,7 @@ Item {
   // "scanning" | "recognized" | "notRecognized", driven by the lock service.
   property string faceState: "scanning"
   property int facePlaybackEpoch: 0
+  property int lockPresentEpoch: 0
   property bool faceScanning: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
@@ -152,6 +153,7 @@ Item {
         visible: faceCard.visible
         cardState: root.faceState
         playbackEpoch: root.facePlaybackEpoch
+        presentEpoch: root.lockPresentEpoch
         active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
         onResultPlayed: root.faceResultPlayed()
         accent: Color.lock.borderActive

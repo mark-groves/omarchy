@@ -20,7 +20,32 @@ assertEqual(playback.presentedStepMs(0), 0, 'a zero frame credits nothing')
 assertEqual(playback.presentedStepMs(-1), 0, 'a negative frame credits nothing')
 
 assertEqual(playback.advancePresented(100, 10, false), 100, 'a hold does not advance while frames are not presented')
-assertEqual(playback.advancePresented(0, 10, true), playback.maxPresentedStepMs, 'the first presented frame after wake credits one step')
+assertEqual(playback.advancePresented(0, 10, true), playback.maxPresentedStepMs, 'the capped wake helper still bounds one step')
+assertEqual(playback.presentedSwapMs(8000), 0, 'a multi-second gap between swaps is not presented time')
+assertEqual(playback.presentedSwapMs(16), 16, 'a real swap interval is presented time')
+assertEqual(playback.creditSwap(100, 16, false), 100, 'a swap does not count while the card is not presenting')
+
+let tickElapsed = 0
+let ticks = 0
+for (let t = 0; t < 1050; t += 16) {
+  ticks += 1
+  tickElapsed = playback.creditSwap(tickElapsed, 0, true)
+}
+assert(ticks > 60, 'the wake evidence is a full hold of animation ticks')
+assertEqual(tickElapsed, 0, 'animation ticks with no frameSwapped gap cannot finish a hold')
+assert(!playback.resultComplete('recognized', tickElapsed, 1050), 'a 1050 ms recognized hold stays open without swaps')
+
+let swapElapsed = playback.creditSwap(0, 8000, true)
+assertEqual(swapElapsed, 0, 'the first swap after resume does not spend the frozen gap')
+let swapCount = 1
+let previous = 0
+for (let t = 16; swapElapsed < 1050 && swapCount < 200; t += 16) {
+  swapElapsed = playback.creditSwap(swapElapsed, t - previous, true)
+  previous = t
+  swapCount += 1
+}
+assert(playback.resultComplete('recognized', swapElapsed, 1050), 'recognized completes from frameSwapped intervals')
+assert(swapCount > 10, 'the hold takes more than one presented frame')
 
 let elapsed = 0
 let steps = 0
@@ -60,8 +85,12 @@ assertEqual(playback.playbackAction('recognized', true, 0, true), 'immediate', '
 assertEqual(playback.playbackAction('scanning', true, 900, true), 'immediate', 'scanning is not a result hold')
 assertEqual(playback.playbackAction('cancelled', true, 900, true), 'immediate', 'cancel is not a result hold')
 
-assert(/advancePresented\(root\.elapsed, frameTime, root\.presenting\)/.test(canvasQml), 'the canvas credits only its own presented frames')
-assert(/running:\s*root\.presenting/.test(canvasQml), 'the frame clock stops when the canvas is not presenting')
+assert(/onFrameSwapped/.test(canvasQml) && /creditSwap\(/.test(canvasQml), 'the hold advances on frameSwapped, not on animation ticks')
+assert(/animationTicks \+= 1/.test(canvasQml), 'animation ticks are counted apart from presented swaps')
+assert(/presentedSwaps \+= 1/.test(canvasQml), 'presented swaps are counted apart from animation ticks')
+assert(!/creditSwap[\s\S]{0,80}onTriggered/.test(canvasQml) && !/onTriggered:[\s\S]{0,120}creditSwap/.test(canvasQml), 'a FrameAnimation tick does not credit the hold')
+assert(/canvas\.available/.test(canvasQml), 'a lost canvas context is not a presented frame')
+assert(/running:\s*root\.active && root\.painting && root\.visible/.test(canvasQml), 'the frame clock keeps requesting paint after resume')
 assert(/signal resultPlayed\(\)/.test(canvasQml), 'the canvas tells the surface when the result has played')
 assert(/resultLatched/.test(canvasQml), 'a result completes once per cycle')
 assert(/playbackEpoch/.test(canvasQml), 'a repeated result starts a new presented cycle')
