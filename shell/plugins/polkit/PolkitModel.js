@@ -220,8 +220,8 @@ function shouldArmFaceHold(sessionLocked) {
 // The request is still in progress when the lock lifts. Restart the card so
 // the scan and the result each play from a presented frame, not from ticks
 // that ran underneath the lock.
-function shouldRestartFaceOnUnlock(wasLocked, sessionLocked, agentActive, resolvedUnderLock) {
-  return !!wasLocked && !sessionLocked && !!agentActive && !resolvedUnderLock
+function shouldRestartFaceOnUnlock(sessionLocked, agentActive, resolvedUnderLock) {
+  return !sessionLocked && !!agentActive && !resolvedUnderLock
 }
 
 if (typeof module !== "undefined") {

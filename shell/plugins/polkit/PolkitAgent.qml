@@ -44,7 +44,6 @@ Item {
   // Set when a request finishes while the session lock is covering this card.
   // Unlock must not reveal a prompt that already completed underneath it.
   property bool resolvedUnderLock: false
-  property bool sessionLockedSeen: false
 
   property var pluginRegistry: null
   property var failedSlotUrls: ({})
@@ -264,9 +263,9 @@ Item {
     Qt.callLater(refocus)
   }
 
+  // Only transitions reach this, so an unlock here always follows a lock,
+  // including one that was already up when this agent was created.
   onSessionLockedChanged: {
-    var wasLocked = root.sessionLockedSeen
-    root.sessionLockedSeen = root.sessionLocked
     if (root.sessionLocked) {
       // A hold already on screen cannot finish while this window is hidden.
       // The PAM result stands; don't bring the card back at unlock.
@@ -277,7 +276,7 @@ Item {
       }
       return
     }
-    if (!PolkitModel.shouldRestartFaceOnUnlock(wasLocked, root.sessionLocked, polkitAgent.isActive, root.resolvedUnderLock)) return
+    if (!PolkitModel.shouldRestartFaceOnUnlock(root.sessionLocked, polkitAgent.isActive, root.resolvedUnderLock)) return
     root.faceState = "scanning"
     root.missHold = false
     root.resultHold = false

@@ -367,9 +367,14 @@ assert(!polkit.polkitCardVisible(true, false, true), 'a request resolved under t
 assert(polkit.polkitCardVisible(true, false, false), 'a pending request renders once the session is unlocked')
 assert(!polkit.shouldArmFaceHold(true), 'a face result under the lock does not arm a hold')
 assert(polkit.shouldArmFaceHold(false), 'a face result on the unlocked session still plays')
-assert(polkit.shouldRestartFaceOnUnlock(true, false, true, false), 'a request still pending at unlock starts its card over')
-assert(!polkit.shouldRestartFaceOnUnlock(true, false, true, true), 'a request already resolved under the lock does not replay')
-assert(!polkit.shouldRestartFaceOnUnlock(true, false, false, false), 'an idle agent does not open a card at unlock')
+assert(polkit.shouldRestartFaceOnUnlock(false, true, false), 'a request still pending at unlock starts its card over')
+assert(!polkit.shouldRestartFaceOnUnlock(false, true, true), 'a request already resolved under the lock does not replay')
+assert(!polkit.shouldRestartFaceOnUnlock(false, false, false), 'an idle agent does not open a card at unlock')
+assert(!polkit.shouldRestartFaceOnUnlock(true, true, false), 'a pending request does not restart while still locked')
+assert(
+  !/sessionLockedSeen/.test(agentQml),
+  'an agent created under an existing lock still restarts a pending card at unlock'
+)
 assert(
   /cardVisible:/.test(agentQml) && /visible:\s*root\.cardVisible/.test(agentQml),
   'the polkit window follows cardVisible, not the raw dialog flag'
