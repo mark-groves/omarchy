@@ -24,3 +24,17 @@ Discovery scans enabled third-party manifests for the kind plus the card's key. 
 The card stays password-sized and paints the first-party glyph and hint (`CARD.face` keeps U+F0208 and "Look at the camera"), even when a `polkit-chrome` plugin is enabled. Howdy still runs from `/etc/pam.d/polkit-1`. Missing chrome is a normal state, not a failed agent.
 
 The published sibling is [mark-groves/omarchy-polkit-face](https://github.com/mark-groves/omarchy-polkit-face). Install with `omarchy plugin add https://github.com/mark-groves/omarchy-polkit-face --enable`. That command never uses sudo.
+
+## Face card paint contract
+
+A face chrome's entry point is a JavaScript module that exports `frame(size, spec)` and `holdMs(state)`. `FaceChrome` evaluates it and hands it only numbers: `spec` is `{ state, clock, elapsed, host }`. The module returns draw ops, which `FaceCardPainter.js` replays on a host-owned canvas as hostile input. Non-finite values are dropped; alpha, glow and line width are clamped; coordinates are bounded; ops, path commands and glow ops are capped (6000, 600 and 2000). Holds are clamped to 2 s.
+
+The card is `FaceChrome.cardSide` (220) logical px on the lock screen, the polkit card and the sudo face overlay.
+
+`spec.host` is the op level the host paints. Level 1 is stroke paths, rects and vertical gradients in roles 0 (accent), 1 (text) and 2 (error). Level 2 adds:
+
+- **Glow**: an optional trailing value on any paint op (`[0, role, alpha, width, cmds, glow]`, `[1, …, h, glow]`, `[2, …, yTo, glow]`). The op is also drawn at that alpha on a half-resolution glow layer, which two GPU `MultiEffect` blurs (a tight halo and a wide bloom) lay under the sharp strokes. `alpha` 0 with `glow` > 0 lights only the bloom. On the software scene graph there is no bloom, and glow-only ops are drawn as faint halos instead.
+- **Blend**: `[3, mode]` switches later ops between normal (0) and additive "lighter" (1) compositing. Additive is ignored on a light surface.
+- **Roles 3 to 5**, derived from the active theme in `FaceTheme.js`, so a theme switch recolours them: 3 is hot (the accent pushed toward the text colour), 4 is the theme palette colour furthest in hue from the accent, and 5 is the next most distinct. A theme without a usable palette gets hues rotated off its accent. The error colour is never reused.
+
+A level-1 host ignores the trailing glow and the blend op, and paints roles above 2 in the accent, so a level-2 frame still draws there. A module that sees no `spec.host` should draw its level-1 frame.

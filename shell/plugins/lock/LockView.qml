@@ -135,9 +135,8 @@ Item {
     }
 
     // Host-owned. The chrome plugin supplies numbers and never sees this
-    // item or the field it sits above. Sized like the polkit card so the
-    // mesh, sweep, and instrument arcs actually paint — the old 26 px
-    // in-field slot collapsed to a static-looking glyph.
+    // item or the field it sits above. The same large card as polkit, so
+    // the instrument has room for its detail and its bloom.
     Column {
       id: faceCard
       objectName: "faceCard"
@@ -151,7 +150,7 @@ Item {
       FaceChromeCanvas {
         objectName: "faceCardIndicator"
         anchors.horizontalCenter: parent.horizontalCenter
-        width: Style.space(116)
+        width: Style.space(FaceChrome.cardSide)
         height: width
         visible: faceCard.visible
         cardState: root.faceState
@@ -162,6 +161,7 @@ Item {
         accent: Color.lock.borderActive
         foreground: Color.lock.text
         errorColor: Color.lock.textError
+        surface: Color.lock.background
       }
 
       Text {
