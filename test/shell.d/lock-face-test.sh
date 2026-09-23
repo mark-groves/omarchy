@@ -69,7 +69,15 @@ assert(
   'opening the lid starts a face scan only when face is configured'
 )
 assert(
-  /root\.runWake\(\)/.test(lidHandler[0]) && /root\.rearmLockPresentation\(\)/.test(lidHandler[0]),
+  /function runWake\(\) \{[\s\S]*?root\.rearmLockPresentation\(\)/.test(serviceQml),
+  'every wake commits a new lock buffer, including a resume without a lid or output change'
+)
+assert(
+  /onWakeRequested:\s*root\.runWake\(\)/.test(serviceQml),
+  'a pointer or key wake goes through runWake'
+)
+assert(
+  /root\.runWake\(\)/.test(lidHandler[0]),
   'opening the lid wakes the panel and commits a new lock buffer'
 )
 assert(

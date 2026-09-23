@@ -209,6 +209,10 @@ Item {
     root.monitorDpmsKnown = false
     if (!wakeProcess.running) wakeProcess.running = true
     if (lockRequested) armBlankTimer()
+    // A resume that does not change the lid or the output list never hits
+    // the lid or screens handlers. Those were the only commits, so the
+    // pre-suspend buffer stayed up and a later face hold could not finish.
+    root.rearmLockPresentation()
   }
 
   // After resume the lock surface can keep its pre-suspend buffer while Qt
@@ -603,11 +607,10 @@ Item {
         faceAuthenticating = false
         if (facePam.active) facePam.abort()
       } else if (wasClosed && root.lockRequested) {
-        // Resume does not run system-wake. Without a new buffer the lock
-        // surface stays on the pre-suspend frame and the face hold ticks
-        // invisibly. Wake and commit first; start a scan only for face.
+        // Resume does not run system-wake. runWake commits a new buffer so
+        // the lock surface leaves the pre-suspend frame. Start a scan only
+        // when face is configured.
         root.runWake()
-        root.rearmLockPresentation()
         if (root.faceConfigured) root.startFace()
       }
     }
