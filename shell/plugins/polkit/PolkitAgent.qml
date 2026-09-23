@@ -227,7 +227,9 @@ Item {
   }
 
   function refocus() {
-    if (!dialogVisible) return
+    // dialogVisible stays true while the card is hidden under the lock.
+    // Focusing then does not stick, so wait until the window is shown.
+    if (!root.cardVisible) return
     if (root.showPasswordRow) passwordInput.forceActiveFocus()
     else keyCatcher.forceActiveFocus()
   }
@@ -280,6 +282,10 @@ Item {
     root.missHold = false
     root.resultHold = false
     root.facePlaybackEpoch += 1
+    // beginFlow's focus ran while this window was hidden. Ask again now
+    // that the card is allowed to show, including a password row that
+    // became required under the lock.
+    Qt.callLater(root.refocus)
   }
 
   Connections {

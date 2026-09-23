@@ -381,6 +381,14 @@ assert(
   'success while locked records the request and does not arm playback'
 )
 assert(
+  /function refocus\(\) \{[\s\S]*?if \(!root\.cardVisible\) return/.test(agentQml),
+  'refocus waits until the polkit card is actually shown'
+)
+assert(
+  /onSessionLockedChanged:[\s\S]*?facePlaybackEpoch \+= 1[\s\S]*?Qt\.callLater\(root\.refocus\)/.test(agentQml),
+  'a pending request shown when the lock lifts takes focus'
+)
+assert(
   /showPasswordRow:.*!root\.resultHold/.test(agentQml),
   'the password row does not replace a held match'
 )
