@@ -74,6 +74,9 @@ Item {
   }
 
   onPasswordTextChanged: syncPasswordText()
+  onLockPresentEpochChanged: {
+    if (root.Window.window) root.Window.window.update()
+  }
   onInputEnabledChanged: {
     if (inputEnabled) Qt.callLater(forcePasswordFocus)
   }

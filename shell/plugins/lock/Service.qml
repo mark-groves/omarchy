@@ -218,11 +218,10 @@ Item {
   // After resume the lock surface can keep its pre-suspend buffer while Qt
   // still ticks animations. A new commit is what makes Hyprland deliver
   // frame callbacks again, which is the clock the face hold follows.
+  // Each output has its own surface, and ids inside the surface component
+  // are out of scope here, so every LockView updates its own window.
   function rearmLockPresentation() {
     root.lockPresentEpoch += 1
-    var win = lockSurface
-    if (lockSurface.QsWindow && lockSurface.QsWindow.window) win = lockSurface.QsWindow.window
-    if (win && win.update) win.update()
   }
 
   function runBlank() {

@@ -91,6 +91,30 @@ assert(/presentedSwaps \+= 1/.test(canvasQml), 'presented swaps are counted apar
 assert(/face hold played/.test(canvasQml) && /swaps/.test(canvasQml) && /ticks/.test(canvasQml), 'a finished hold logs swap and tick counts')
 assert(!/creditSwap[\s\S]{0,80}onTriggered/.test(canvasQml) && !/onTriggered:[\s\S]{0,120}creditSwap/.test(canvasQml), 'a FrameAnimation tick does not credit the hold')
 assert(/canvas\.available/.test(canvasQml), 'a lost canvas context is not a presented frame')
+assert(
+  /readonly property var hostWindow:\s*root\.Window\.window/.test(canvasQml) && !/\.QsWindow\.window/.test(canvasQml),
+  'swaps are counted on the QQuickWindow, not the Quickshell wrapper that has no frameSwapped'
+)
+assert(/onPresentingChanged:\s*\{\s*root\.lastSwapMs = 0/.test(canvasQml), 'a gap from before presenting resumed is not credited')
+assert(
+  /onLockPresentEpochChanged:\s*\{\s*if \(root\.Window\.window\) root\.Window\.window\.update\(\)/.test(lockViewQml),
+  'each lock surface commits a new frame on its own window when the lock re-arms'
+)
+{
+  const surfaceStart = lockQml.indexOf('WlSessionLockSurface {')
+  assert(surfaceStart > 0, 'lock declares its session lock surface')
+  let depth = 0
+  let surfaceEnd = surfaceStart
+  for (let i = lockQml.indexOf('{', surfaceStart); i < lockQml.length; i++) {
+    if (lockQml[i] === '{') depth += 1
+    else if (lockQml[i] === '}' && --depth === 0) { surfaceEnd = i; break }
+  }
+  const outside = lockQml.slice(0, surfaceStart) + lockQml.slice(surfaceEnd + 1)
+  assert(
+    !/\blockSurface\b/.test(outside),
+    'lock service code does not reach into the surface component, whose ids are out of scope and throw'
+  )
+}
 assert(/running:\s*root\.active && root\.painting && root\.visible/.test(canvasQml), 'the frame clock keeps requesting paint after resume')
 assert(/signal resultPlayed\(\)/.test(canvasQml), 'the canvas tells the surface when the result has played')
 assert(/resultLatched/.test(canvasQml), 'a result completes once per cycle')

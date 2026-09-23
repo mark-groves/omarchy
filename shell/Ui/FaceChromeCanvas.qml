@@ -45,7 +45,10 @@ Item {
   // The 2D context is dropped across suspend. A swap while it is gone is
   // not a frame of this card.
   readonly property bool presenting: root.active && root.painting && root.visible && canvas.available
-  readonly property var hostWindow: root.QsWindow.window
+  // The QQuickWindow, which emits frameSwapped. QsWindow.window is
+  // Quickshell's wrapper: it has no frameSwapped, and on a session lock
+  // surface it is null.
+  readonly property var hostWindow: root.Window.window
 
   // Milliseconds of the last frameSwapped that counted. A result cycle
   // starts this at 0 so the first presented frame does not include the
@@ -87,6 +90,7 @@ Item {
   onPlaybackEpochChanged: beginCycle()
   onPresentEpochChanged: canvas.requestPaint()
   onPresentingChanged: {
+    root.lastSwapMs = 0
     if (root.presenting) canvas.requestPaint()
   }
 
