@@ -103,9 +103,9 @@ if [[ ${1:-} == "-y" ]] || omarchy-update-confirm; then
   omarchy-update-aur-pkgs
   omarchy_security_revoke_sudo_timestamp
 
-  # Hooks and mise execute user-controlled code. Give each a cold credential
-  # boundary and run mise last so it cannot wait for a legitimate hook sudo.
-  # Only the unprivileged reboot prompt follows them.
+  # Hooks, mise, and official Grok Bot / Cursor product updates execute
+  # user-controlled or vendor-downloaded code. Give each a cold credential
+  # boundary. Only the unprivileged reboot prompt follows them.
   PATH="$OMARCHY_PATH/default/omarchy/sudo-no-update:$user_path" "$OMARCHY_PATH/bin/omarchy-hook" post-update
   omarchy_security_revoke_sudo_timestamp
   PATH="$OMARCHY_PATH/default/omarchy/sudo-no-update:$user_path" "$OMARCHY_PATH/bin/omarchy-update-mise"
