@@ -75,9 +75,9 @@ expected_steps() {
     omarchy-update-analyze-logs \
     omarchy-update-status \
     omarchy-update-restart \
-    omarchy-update-aur-pkgs \
     omarchy-hook \
     omarchy-update-mise \
+    omarchy-update-aur-pkgs \
     omarchy-update-grok-bot \
     omarchy-update-cursor \
     omarchy-update-stay-awake \
