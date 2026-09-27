@@ -884,7 +884,7 @@ Item {
     checkStrandedLock()
   }
 
-  IpcHandler {
+  ShellIpc {
     target: "lock"
 
     function lock(): string {
