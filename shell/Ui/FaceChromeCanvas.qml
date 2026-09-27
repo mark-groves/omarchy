@@ -36,7 +36,8 @@ Item {
   readonly property bool darkSurface: FaceTheme.luminance(String(root.surface)) < 0.5
   readonly property var paintPalette: ({
     accent: root.accent, foreground: root.foreground, errorColor: root.errorColor,
-    roles: root.roleColors, additive: root.darkSurface, glowFallback: !root.glowOn
+    roles: root.roleColors, additive: root.darkSurface,
+    glowFallback: root.glowEnabled && !root.gpuEffects
   })
 
   readonly property bool painting: FaceChrome.ready && root.known

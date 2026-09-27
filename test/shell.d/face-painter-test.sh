@@ -100,6 +100,8 @@ assertDeepEqual(theme.roles('#88c0d0', '#eceff4', '#bf616a', nord), roles, 'role
 const canvasQml = fs.readFileSync(path.join(root, 'shell/Ui/FaceChromeCanvas.qml'), 'utf8')
 assert(/FaceTheme\.roles\([\s\S]*?Color\.palette\)/.test(canvasQml), 'the card derives its roles from the live theme palette')
 assert(/MultiEffect/.test(canvasQml) && /source:\s*glowCanvas/.test(canvasQml), 'the bloom is a host-owned GPU effect over the glow layer')
+assert(/glowFallback:\s*root\.glowEnabled && !root\.gpuEffects/.test(canvasQml),
+  'bloom off paints the sharp layer; only a software renderer fakes the glow')
 const colorQml = fs.readFileSync(path.join(root, 'shell/Commons/Color.qml'), 'utf8')
 assert(/palette = named/.test(colorQml), 'a theme load replaces the palette whole, so bindings re-evaluate')
 const chromeQml = fs.readFileSync(path.join(root, 'shell/Commons/FaceChrome.qml'), 'utf8')
