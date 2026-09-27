@@ -24,7 +24,9 @@ function recordingContext() {
   for (const name of ['reset', 'beginPath', 'moveTo', 'lineTo', 'arc', 'quadraticCurveTo', 'stroke', 'fillRect', 'scale']) {
     ctx[name] = (...args) => log.push([name, ctx.globalCompositeOperation, ctx.strokeStyle, ctx.fillStyle, ...args])
   }
-  ctx.createLinearGradient = () => ({ addColorStop() {} })
+  ctx.createLinearGradient = () => ({
+    addColorStop(at, color) { log.push(['colorStop', ctx.globalCompositeOperation, color, at]) }
+  })
   return ctx
 }
 
@@ -75,6 +77,18 @@ assert(ctx.log.some(e => e[0] === 'fillRect'), 'a glowing rect lights the glow l
 ctx = recordingContext()
 painter.paintGlow(ctx, 100, [[0, 0, 1, 1, line, 5]], palette, 1)
 assert(/,1\.000\)$/.test(ctx.log.find(e => e[0] === 'stroke')[2]), 'glow is clamped like alpha')
+
+ctx = recordingContext()
+painter.paintGlow(ctx, 100, [[2, 0, 0, 0, 0, 0, 10, 10, 0, 10, 0.8]], palette, 1)
+const clearStops = ctx.log.filter(e => e[0] === 'colorStop')
+assert(clearStops.length === 2 && clearStops.every(e => /,0\.800\)$/.test(e[2])),
+  'a glow-only gradient lights the bloom at its glow alpha')
+
+ctx = recordingContext()
+painter.paintGlow(ctx, 100, [[2, 0, 1, 0, 0, 0, 10, 10, 0, 10, 0.5]], palette, 1)
+const fadeStops = ctx.log.filter(e => e[0] === 'colorStop')
+assert(/,0\.500\)$/.test(fadeStops[0][2]) && /,0\.000\)$/.test(fadeStops[1][2]),
+  'a glowing gradient keeps its fade and peaks at the glow alpha')
 
 const many = []
 for (let i = 0; i < painter.MAX_GLOW_OPS + 500; i++) many.push([0, 0, 1, 1, line, 1])

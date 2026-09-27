@@ -183,9 +183,25 @@ function replay(ctx, size, op, rgb, glowLayer, fallback) {
     var y0 = coord(op[8], size)
     var y1 = coord(op[9], size)
     if (gx === null || gy === null || gw === null || gh === null || y0 === null || y1 === null) return
+    var a0 = alpha(op[2])
+    var a1 = alpha(op[3])
+    // Glow stands in for alpha, as it does for a path or a rect. Scale a fade
+    // so its brighter stop is the glow value. A glow-only gradient has no
+    // stop alpha to scale, and still has to light the bloom.
+    if (glowLayer) {
+      var peak = a0 > a1 ? a0 : a1
+      if (peak <= 0) {
+        a0 = g
+        a1 = g
+      } else {
+        var scale = g / peak
+        a0 *= scale
+        a1 *= scale
+      }
+    }
     var grad = ctx.createLinearGradient(0, y0, 0, y1)
-    grad.addColorStop(0, rgba(op[1], alpha(op[2]) * g, rgb))
-    grad.addColorStop(1, rgba(op[1], alpha(op[3]) * g, rgb))
+    grad.addColorStop(0, rgba(op[1], a0, rgb))
+    grad.addColorStop(1, rgba(op[1], a1, rgb))
     ctx.fillStyle = grad
     ctx.fillRect(gx, gy, gw, gh)
   }
