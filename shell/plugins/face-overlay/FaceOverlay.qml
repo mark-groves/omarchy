@@ -170,7 +170,7 @@ Item {
     onFileChanged: reload()
   }
 
-  IpcHandler {
+  ShellIpc {
     target: "omarchy.face-overlay"
     function show(payloadJson: string): string { return root.open(payloadJson) }
     function close(): string { return root.close() }
