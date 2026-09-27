@@ -32,7 +32,7 @@ Item {
   )
 
   readonly property int pad: Style.space(16)
-  readonly property int cardSide: Style.space(116)
+  readonly property int cardSide: Style.space(FaceChrome.cardSide)
   readonly property bool painting: FaceChrome.ready && root.opened && !root.suppress
 
   onSuppressChanged: {
@@ -223,6 +223,7 @@ Item {
           accent: Color.polkit.accent
           foreground: Color.polkit.text
           errorColor: Color.polkit.textError
+          surface: card.color
         }
 
         Text {

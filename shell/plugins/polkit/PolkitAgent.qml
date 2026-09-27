@@ -460,7 +460,7 @@ Item {
         FaceChromeCanvas {
           id: faceCanvas
           anchors.horizontalCenter: parent.horizontalCenter
-          width: Math.min(parent.width, Style.space(116))
+          width: Math.min(parent.width, Style.space(FaceChrome.cardSide))
           height: width
           visible: parent.visible
           cardState: root.faceState
@@ -470,6 +470,7 @@ Item {
           accent: root.accent
           foreground: root.foreground
           errorColor: Color.polkit.textError
+          surface: root.background
         }
 
         Text {

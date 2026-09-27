@@ -12,7 +12,7 @@ var CHROME_KIND = "polkit-chrome"
 
 var CARD = {
   password: { glyph: "\uf023", hint: "Enter password", square: false, slot: "", extraSpace: 0 },
-  face: { glyph: "\uDB80\uDE08", hint: "Look at the camera", square: false, slot: "polkitFace", extraSpace: 150 },
+  face: { glyph: "\uDB80\uDE08", hint: "Look at the camera", square: false, slot: "polkitFace", extraSpace: 254 },
   fingerprint: { glyph: "\uDB80\uDE37", hint: "", square: true, slot: "polkitFingerprint", extraSpace: 0 }
 }
 

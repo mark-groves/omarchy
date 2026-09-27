@@ -154,7 +154,7 @@ assertEqual(filled.kind, 'face', 'open lid waiting on face still picks the face 
 assertEqual(filled.chromeKind, 'face', 'chrome kind stays on the configured face step')
 assertEqual(filled.slot.pluginId, 'markgroves.polkit-face', 'enabled chrome plugin fills the face slot')
 assertEqual(filled.slot.url, 'file:///plugins/markgroves.polkit-face/FaceCardFrame.js', 'slot url stays inside the plugin dir')
-assertEqual(filled.extraSpace, 150, 'filled face slot adds room for the shared face card')
+assertEqual(filled.extraSpace, 254, 'filled face slot adds room for the shared face card')
 assertEqual(filled.hint, 'Look at the camera', 'first-party face hint stays when the slot paints')
 assertEqual(filled.chromeHint, 'Look at the camera', 'the resolved slot keeps the face hint')
 
@@ -162,7 +162,7 @@ const duringError = polkit.cardPresentationFor(faceSteps, false, false, source(p
 assertEqual(duringError.kind, 'password', 'a miss still shows the password card')
 assertEqual(duringError.chromeKind, 'face', 'chrome kind does not follow waitingOnPam')
 assertEqual(duringError.slot.pluginId, 'markgroves.polkit-face', 'the face slot stays resolved through the error flash')
-assertEqual(duringError.extraSpace, 150, 'geometry does not collapse while the slot stays resolved')
+assertEqual(duringError.extraSpace, 254, 'geometry does not collapse while the slot stays resolved')
 assertEqual(duringError.hint, 'Enter password', 'the password row keeps its own hint')
 assertEqual(duringError.chromeHint, 'Look at the camera', 'the held face card keeps the face hint')
 
@@ -408,11 +408,11 @@ assert(
 
 const painter = fs.readFileSync(path.join(root, 'shell/Commons/FaceCardPainter.js'), 'utf8')
 assert(
-  /function paint\(ctx, size, ops, palette\)/.test(painter),
+  /function paint\(ctx, size, ops, palette\)/.test(painter) && /function paintGlow\(ctx, size, ops, palette, scale\)/.test(painter),
   'the host owns the painter and takes ops, not a plugin item'
 )
 assert(
-  /MAX_OPS/.test(painter) && /MAX_CMDS/.test(painter) && /isFinite/.test(painter),
+  /MAX_OPS/.test(painter) && /MAX_CMDS/.test(painter) && /MAX_GLOW_OPS/.test(painter) && /isFinite/.test(painter),
   'the painter treats a returned frame as hostile input'
 )
 

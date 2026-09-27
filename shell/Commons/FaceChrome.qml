@@ -9,7 +9,7 @@ import Quickshell.Io
 //
 // The plugin is handed nothing. Not an Item, not a window, not a drawing
 // context, not a QtObject belonging to the shell, not even the theme. It
-// receives three values and returns numbers.
+// receives four values and returns numbers.
 //
 // That is the whole isolation story, and it is narrow on purpose. Measured on
 // Quickshell 0.3.1 / Qt 6.11.2, every softer boundary leaks: a plugin Item
@@ -34,6 +34,15 @@ QtObject {
   // PolkitModel.resolveChromeSlot("face"): enabled third-party
   // `polkit-chrome` with a `polkitFace` entry, lowest id wins.
   property var pluginRegistry: null
+
+  // Logical side of the face card on every surface (lock, polkit, the sudo
+  // overlay), before Style.space scaling.
+  readonly property int cardSide: 220
+
+  // The op level this host paints: 2 adds glow, additive blending and roles
+  // 3..5 (FaceCardPainter.js). Handed to the plugin as a plain number so it
+  // can degrade on an older host.
+  readonly property int opLevel: 2
 
   property var api: null
   property string failure: ""
@@ -151,7 +160,7 @@ QtObject {
   function frame(size, state, clock, elapsed) {
     if (!root.api) return []
     try {
-      var ops = root.api.frame(size, { state: state, clock: clock, elapsed: elapsed })
+      var ops = root.api.frame(size, { state: state, clock: clock, elapsed: elapsed, host: root.opLevel })
       return ops && ops.length !== undefined ? ops : []
     } catch (e) {
       root.reject("threw while painting: " + e)
