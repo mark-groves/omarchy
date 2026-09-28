@@ -22,7 +22,8 @@ Item {
   property color foreground: Color.polkit.text
   property color errorColor: Color.polkit.textError
   // What the card is composited over. Additive light only reads on a dark
-  // surface; on a light theme the card paints normally and glows less.
+  // surface; on a light theme the card paints normally, and its bloom is a
+  // coloured halo that needs nearly full opacity to read against the light.
   property color surface: Color.polkit.background
   // The GPU bloom behind the strokes. Off paints exactly the sharp layer.
   property bool glowEnabled: true
@@ -308,7 +309,7 @@ Item {
         blur: 1.0
         blurMax: 48
         blurMultiplier: 0.6
-        opacity: root.darkSurface ? 0.95 : 0.45
+        opacity: root.darkSurface ? 0.95 : 0.85
       }
 
       MultiEffect {
@@ -318,7 +319,7 @@ Item {
         blurEnabled: true
         blur: 0.55
         blurMax: 12
-        opacity: root.darkSurface ? 1 : 0.5
+        opacity: 1
       }
     }
   }
