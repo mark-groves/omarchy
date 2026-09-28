@@ -454,7 +454,7 @@ Item {
         enabled: false
 
         Behavior on opacity {
-          NumberAnimation { duration: 160 }
+          NumberAnimation { duration: Style.duration(160) }
         }
 
         FaceChromeCanvas {
@@ -508,7 +508,7 @@ Item {
         enabled: visible
 
         Behavior on opacity {
-          NumberAnimation { duration: 160 }
+          NumberAnimation { duration: Style.duration(160) }
         }
 
         OpticalGlyph {
@@ -546,7 +546,7 @@ Item {
         spacing: Style.space(14)
 
         Behavior on opacity {
-          NumberAnimation { duration: 160 }
+          NumberAnimation { duration: Style.duration(160) }
         }
 
         Text {
