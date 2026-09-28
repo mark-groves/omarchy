@@ -27,12 +27,35 @@ function advancePresented(elapsedMs, frameTimeSeconds, presenting) {
 // A FrameAnimation tick is not a presented frame. After resume Qt's animation
 // driver keeps ticking on its internal timer while the lock surface is not
 // swapping buffers, and those ticks finish a 1050 ms hold on a frozen card.
-// Credit only the gap between frameSwapped signals. A gap longer than one
-// frame is the surface catching up, not time the user saw.
+// Credit only the gap between frameSwapped signals. A slow renderer's frame
+// was still on screen for its whole gap; a gap past maxSwapGapMs is the
+// surface catching up after a freeze, not time the user saw.
+var maxSwapGapMs = 250
+
 function presentedSwapMs(gapMs) {
   var ms = Number(gapMs)
-  if (!isFinite(ms) || ms <= 0 || ms > maxPresentedStepMs) return 0
+  if (!isFinite(ms) || ms <= 0 || ms > maxSwapGapMs) return 0
   return ms
+}
+
+// Wall-clock ceilings. A hold is display only: however slowly the card
+// renders, it must not keep a recognized unlock waiting or the polkit
+// password row hidden. Once a frame of the result has been presented the
+// hold ends by presentedCeilingMs of wall time. A surface that is presenting
+// but has swapped nothing, as after resume, gets the longer stallCeilingMs.
+var ceilingSlackMs = 1000
+var stallSlackMs = 4000
+
+function presentedCeilingMs(holdMs) {
+  var hold = Number(holdMs)
+  if (!isFinite(hold) || hold <= 0) return 0
+  return hold + ceilingSlackMs
+}
+
+function stallCeilingMs(holdMs) {
+  var hold = Number(holdMs)
+  if (!isFinite(hold) || hold <= 0) return 0
+  return hold + stallSlackMs
 }
 
 function creditSwap(elapsedMs, gapMs, presenting) {
@@ -74,9 +97,12 @@ function resultComplete(state, elapsedMs, holdMs) {
 if (typeof module !== "undefined") {
   module.exports = {
     maxPresentedStepMs: maxPresentedStepMs,
+    maxSwapGapMs: maxSwapGapMs,
     presentedStepMs: presentedStepMs,
     advancePresented: advancePresented,
     presentedSwapMs: presentedSwapMs,
+    presentedCeilingMs: presentedCeilingMs,
+    stallCeilingMs: stallCeilingMs,
     creditSwap: creditSwap,
     isHeldState: isHeldState,
     playbackAction: playbackAction,

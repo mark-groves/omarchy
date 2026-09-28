@@ -23,6 +23,15 @@ assertEqual(playback.advancePresented(100, 10, false), 100, 'a hold does not adv
 assertEqual(playback.advancePresented(0, 10, true), playback.maxPresentedStepMs, 'the capped wake helper still bounds one step')
 assertEqual(playback.presentedSwapMs(8000), 0, 'a multi-second gap between swaps is not presented time')
 assertEqual(playback.presentedSwapMs(16), 16, 'a real swap interval is presented time')
+assertEqual(playback.presentedSwapMs(200), 200, 'a slow renderer\'s frame was on screen for its whole gap')
+assertEqual(playback.presentedSwapMs(playback.maxSwapGapMs + 1), 0, 'a gap past one slow frame is a freeze, not presented time')
+let slowElapsed = 0
+for (let i = 0; i < 20 && !playback.resultComplete('recognized', slowElapsed, 1900); i++) slowElapsed = playback.creditSwap(slowElapsed, 200, true)
+assert(playback.resultComplete('recognized', slowElapsed, 1900), 'a 5 fps renderer still finishes the hold on presented frames')
+assertEqual(playback.presentedCeilingMs(1900), 2900, 'a presented hold ends by one second past its length in wall time')
+assert(playback.stallCeilingMs(1900) > playback.presentedCeilingMs(1900), 'a card that has swapped nothing gets the longer ceiling')
+assertEqual(playback.presentedCeilingMs(0), 0, 'no hold, no ceiling')
+assert(playback.presentedCeilingMs(2000) <= 3000 && playback.stallCeilingMs(2000) <= 6000, 'the ceilings bound the longest plugin hold')
 assertEqual(playback.creditSwap(100, 16, false), 100, 'a swap does not count while the card is not presenting')
 
 let tickElapsed = 0
@@ -91,6 +100,20 @@ assert(/presentedSwaps \+= 1/.test(canvasQml), 'presented swaps are counted apar
 assert(/face hold played/.test(canvasQml) && /swaps/.test(canvasQml) && /ticks/.test(canvasQml), 'a finished hold logs swap and tick counts')
 assert(!/creditSwap[\s\S]{0,80}onTriggered/.test(canvasQml) && !/onTriggered:[\s\S]{0,120}creditSwap/.test(canvasQml), 'a FrameAnimation tick does not credit the hold')
 assert(/canvas\.available/.test(canvasQml), 'a lost canvas context is not a presented frame')
+assert(!/Canvas\.Cooperative/.test(canvasQml) && (canvasQml.match(/renderStrategy: Canvas\.Threaded/g) || []).length === 2,
+  'both card layers rasterise off the thread that presents frames')
+assert(/inFlightSince > 0 && now - layer\.inFlightSince < root\.paintStallMs/.test(canvasQml) && /onPainted: root\.layerPainted\(canvas\)/.test(canvasQml),
+  'each layer keeps one frame in flight instead of queueing every request')
+assert(/running: root\.holding && root\.presenting && root\.cyclePresented/.test(canvasQml)
+  && /running: root\.holding && root\.presenting && !root\.cyclePresented/.test(canvasQml)
+  && (canvasQml.match(/onTriggered: root\.finishResult\(/g) || []).length === 2,
+  'wall-clock ceilings end a hold only while the card is presenting')
+assert(/presentedCeilingMs\(root\.holdMs\)/.test(canvasQml) && /stallCeilingMs\(root\.holdMs\)/.test(canvasQml),
+  'the ceilings follow the plugin hold')
+assert(/if \(root\.resultLatched \|\| !Playback\.isHeldState\(root\.cardState\)\) return/.test(canvasQml),
+  'a hold plays once, whichever of frames or ceiling ends it')
+assert(/slowPaintMs/.test(canvasQml) && /sharp: 0\.5/.test(canvasQml) && /root\.resetQuality\(\)/.test(canvasQml),
+  'a slow raster steps the card down a quality level and each showing starts at full quality')
 assert(
   /readonly property var hostWindow:\s*root\.Window\.window/.test(canvasQml) && !/\.QsWindow\.window/.test(canvasQml),
   'swaps are counted on the QQuickWindow, not the Quickshell wrapper that has no frameSwapped'

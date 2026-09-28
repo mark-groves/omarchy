@@ -22,7 +22,7 @@ function recordingContext() {
   const log = []
   const ctx = { log, globalCompositeOperation: 'source-over' }
   for (const name of ['reset', 'beginPath', 'moveTo', 'lineTo', 'arc', 'quadraticCurveTo', 'stroke', 'fillRect', 'scale']) {
-    ctx[name] = (...args) => log.push([name, ctx.globalCompositeOperation, ctx.strokeStyle, ctx.fillStyle, ...args])
+    ctx[name] = (...args) => log.push([name, ctx.globalCompositeOperation, ctx.strokeStyle, ctx.fillStyle, ...args, ctx.lineCap])
   }
   ctx.createLinearGradient = () => ({
     addColorStop(at, color) { log.push(['colorStop', ctx.globalCompositeOperation, color, at]) }
@@ -55,6 +55,20 @@ ctx = recordingContext()
 painter.paint(ctx, 100, [[0, 9, 1, 1, line], [0, 1.5, 1, 1, line]], palette)
 const accentStyle = 'rgba(136,192,208,1.000)'
 assert(ctx.log.filter(e => e[0] === 'stroke').every(e => e[2] === accentStyle), 'an unknown role paints in the accent')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 1, 1, line], [0, 0, 1, 3, line]], palette)
+const capped = ctx.log.filter(e => e[0] === 'stroke')
+assertEqual(capped[0][capped[0].length - 1], 'square', 'a thin stroke skips the costly round cap')
+assertEqual(capped[1][capped[1].length - 1], 'round', 'a wide stroke keeps its round cap')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 0.001, 1, line], [1, 0, 0.002, 0, 0, 4, 4]], palette)
+assertEqual(ctx.log.filter(e => e[0] === 'stroke' || e[0] === 'fillRect').length, 0, 'an op below one 8-bit step of alpha is not rasterised')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 1, 1, line]], palette, 0.5)
+assert(ctx.log.some(e => e[0] === 'scale' && e[4] === 0.5), 'the sharp layer can rasterise below card size')
 
 ctx = recordingContext()
 painter.paint(ctx, 100, [[0, 0, 0, 1, line, 0.8]], palette)
