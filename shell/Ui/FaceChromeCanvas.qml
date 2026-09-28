@@ -135,7 +135,8 @@ Item {
   function requestLayer(layer) {
     var now = Date.now()
     if (layer.inFlightSince > 0 && now - layer.inFlightSince < root.paintStallMs) {
-      layer.pending = true
+      // The bloom source only follows a sharp frame; a busy one skips it.
+      if (layer === canvas) layer.pending = true
       return false
     }
     layer.pending = false
@@ -147,9 +148,7 @@ Item {
   function layerPainted(layer) {
     if (layer === canvas && layer.inFlightSince > 0) root.notePaintLatency(Date.now() - layer.inFlightSince)
     layer.inFlightSince = 0
-    if (!layer.pending) return
-    if (layer === canvas) root.repaint()
-    else root.requestLayer(layer)
+    if (layer.pending) root.repaint()
   }
 
   function repaint() {
@@ -263,7 +262,8 @@ Item {
         ctx.reset()
         return
       }
-      Painter.paintGlow(ctx, canvas.side, root.currentOps(canvas.side), root.paintPalette, root.glowScale)
+      // The frame the sharp layer last drew: one plugin call serves both.
+      Painter.paintGlow(ctx, canvas.side, root.frameOps, root.paintPalette, root.glowScale)
     }
     onPainted: root.layerPainted(glowCanvas)
 
