@@ -102,7 +102,7 @@ assert(!/creditSwap[\s\S]{0,80}onTriggered/.test(canvasQml) && !/onTriggered:[\s
 assert(/canvas\.available/.test(canvasQml), 'a lost canvas context is not a presented frame')
 assert(!/Canvas\.Cooperative/.test(canvasQml) && (canvasQml.match(/renderStrategy: Canvas\.Threaded/g) || []).length === 2,
   'both card layers rasterise off the thread that presents frames')
-assert(/inFlightSince > 0 && now - layer\.inFlightSince < root\.paintStallMs/.test(canvasQml) && /onPainted: root\.layerPainted\(canvas\)/.test(canvasQml),
+assert(/inFlightSince > 0 && now - layer\.inFlightSince < root\.paintStallMs/.test(canvasQml) && /onPainted: root\.layerPainted\(sharpLayer\)/.test(canvasQml),
   'each layer keeps one frame in flight instead of queueing every request')
 assert(/running: root\.holding && root\.presenting && root\.cyclePresented/.test(canvasQml)
   && /running: root\.holding && root\.presenting && !root\.cyclePresented/.test(canvasQml)

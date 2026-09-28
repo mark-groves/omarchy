@@ -127,7 +127,11 @@ assertDeepEqual(theme.roles('#88c0d0', '#eceff4', '#bf616a', nord), roles, 'role
 
 const canvasQml = fs.readFileSync(path.join(root, 'shell/Ui/FaceChromeCanvas.qml'), 'utf8')
 assert(/FaceTheme\.roles\([\s\S]*?Color\.palette\)/.test(canvasQml), 'the card derives its roles from the live theme palette')
-assert(/MultiEffect/.test(canvasQml) && /source:\s*glowCanvas/.test(canvasQml), 'the bloom is a host-owned GPU effect over the glow layer')
+assert(/MultiEffect/.test(canvasQml) && /source:\s*glowLayer/.test(canvasQml), 'the bloom is a host-owned GPU effect over the glow layer')
+assert(/model: root\.glowOn \? \[root\.layerKey\] : \[\]/.test(canvasQml) && /model: \[root\.layerKey\]/.test(canvasQml)
+  && /layerKey: root\.side \+ ":" \+ root\.qualityLevel/.test(canvasQml),
+  'both layers and the bloom are rebuilt, not resized, when the card size or quality level changes')
+assert(!/MultiEffect[\s\S]{0,40}source:\s*root\.glowCanvas/.test(canvasQml), 'no bloom outlives the glow source it was sized for')
 assert(/glowFallback:\s*root\.glowEnabled && !root\.gpuEffects/.test(canvasQml),
   'bloom off paints the sharp layer; only a software renderer fakes the glow')
 const colorQml = fs.readFileSync(path.join(root, 'shell/Commons/Color.qml'), 'utf8')
