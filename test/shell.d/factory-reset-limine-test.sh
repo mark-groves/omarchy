@@ -187,3 +187,75 @@ if run_reset_function verify_limine_hashes "$root" /boot 2>/dev/null; then
   fail "an entry with no rebuilt UKI blocks the reset"
 fi
 pass "hash verification covers exactly this installation's rebuilt entry"
+
+# ------------------------------------------------ first-boot provisioning
+
+if ! unshare --user --map-root-user --mount true 2>/dev/null; then
+  skip "no unprivileged mount namespace; skipping first-boot boot entry checks"
+  exit 0
+fi
+
+# Only the boot entry functions: the script's top level draws its UI.
+awk '
+  /^(esp_path|limine_entries_stale|reset_limine_config)\(\) \{/ { copying = 1 }
+  copying { print }
+  /^}/ { copying = 0 }
+' "$ROOT/bin/omarchy-provision-owner" >"$test_tmp/provision-functions"
+[[ $(grep -c '^[a-z_]*() {' "$test_tmp/provision-functions") == 3 ]] ||
+  fail "the first-boot boot entry functions can be loaded"
+
+# omarchy-provision-owner reads /etc/machine-id directly, so give it this
+# test's identity in a private mount namespace.
+run_provision_function() {
+  local root="$1"
+  shift
+  printf '%s\n' "$NEW_ID" >"$test_tmp/machine-id"
+  unshare --user --map-root-user --mount bash -c '
+    set -euo pipefail
+    test_tmp=$1 root=$2
+    shift 2
+    mount --bind "$test_tmp/machine-id" /etc/machine-id
+    source "$test_tmp/provision-functions"
+    esp_path() { echo "$root/boot"; }
+    log_step() { :; }
+    OMARCHY_PATH="$root/usr/share/omarchy"
+    "$@"
+  ' _ "$test_tmp" "$root" "$@"
+}
+
+# Prints the verdict, so a broken harness cannot pass for "not stale".
+staleness() {
+  run_provision_function "$1" bash -c 'true' >/dev/null || fail "the first-boot harness runs"
+  run_provision_function "$1" eval 'if limine_entries_stale; then echo stale; else echo fresh; fi'
+}
+
+root="$test_tmp/first-boot"
+make_root "$root"
+{
+  printf 'default_entry: 2\n'
+  omarchy_entry "$NEW_ID"
+  windows_entry
+  foreign_entry
+} >"$root/boot/limine.conf"
+
+[[ $(staleness "$root") == fresh ]] ||
+  fail "first boot leaves entries alone when this machine already owns one"
+pass "other systems' machine-ids do not make first boot rebuild the boot entries"
+
+run_provision_function "$root" reset_limine_config ||
+  fail "first boot rebuilds a shared limine.conf"
+conf="$root/boot/limine.conf"
+[[ $(grep -m1 '^/' "$conf") == "/+Omarchy" ]] && entry_for "$conf" "$NEW_ID" | grep -q '^/+Omarchy$' ||
+  fail "first boot keeps this machine's entry first, where default_entry points"
+! grep -q 'stalehash' "$conf" || fail "first boot drops this machine's stale kernel entries"
+[[ $(awk '/^\/Windows$/,/bootmgfw/' "$conf") == "$windows_before" ]] ||
+  fail "first boot keeps the Windows entry"
+entry_for "$conf" "$FOREIGN_ID" | grep -q 'foreignhash' && [[ -f $root/boot/$FOREIGN_ID/marker ]] ||
+  fail "first boot keeps another installation's entry and directory"
+pass "a first-boot rebuild keeps other systems' entries and empties only this machine's"
+
+printf 'default_entry: 2\n' >"$root/boot/limine.conf"
+{ windows_entry; foreign_entry; } >>"$root/boot/limine.conf"
+[[ $(staleness "$root") == stale ]] ||
+  fail "first boot repairs a machine left without an entry of its own"
+pass "a machine without an entry of its own still gets one at first boot"
