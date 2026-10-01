@@ -132,6 +132,8 @@ assert(/model: root\.glowOn \? \[root\.layerKey\] : \[\]/.test(canvasQml) && /mo
   && /layerKey: root\.side \+ ":" \+ root\.qualityLevel/.test(canvasQml),
   'both layers and the bloom are rebuilt, not resized, when the card size or quality level changes')
 assert(!/MultiEffect[\s\S]{0,40}source:\s*root\.glowCanvas/.test(canvasQml), 'no bloom outlives the glow source it was sized for')
+assert(/paintGlow\(ctx, root\.side, root\.currentOps\(root\.side\)/.test(canvasQml) && !/root\.frameOps, root\.paintPalette/.test(canvasQml),
+  'the glow layer reads the current frame whichever layer paints first')
 assert(/glowFallback:\s*root\.glowEnabled && !root\.gpuEffects/.test(canvasQml),
   'bloom off paints the sharp layer; only a software renderer fakes the glow')
 const colorQml = fs.readFileSync(path.join(root, 'shell/Commons/Color.qml'), 'utf8')

@@ -290,8 +290,10 @@ Item {
             ctx.reset()
             return
           }
-          // The frame the sharp layer last drew: one plugin call serves both.
-          Painter.paintGlow(ctx, root.side, root.frameOps, root.paintPalette, width / root.side)
+          // Qt polishes the most recently requested layer first, so this often
+          // paints before the sharp layer. The frame key keeps it to one plugin
+          // call either way.
+          Painter.paintGlow(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
         }
         onPainted: root.layerPainted(glowLayer)
 
