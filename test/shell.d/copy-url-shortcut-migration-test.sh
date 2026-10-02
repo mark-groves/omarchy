@@ -249,3 +249,14 @@ HOME="$home" PATH="$stub_bin:$PATH" OMARCHY_PATH="$ROOT" bash -euo pipefail "$RO
 jq -e --arg pinned "$pinned_id" '.extensions.commands["linux:Alt+Shift+L"].extension == $pinned' "$brave_origin_preferences" >/dev/null ||
   fail "Brave Origin rerun migration rebinds the Copy URL shortcut in a Brave Origin profile"
 pass "Brave Origin rerun migration repairs Brave Origin profiles"
+
+# Profiles the first repair fixed keep its backup, which the original reads as
+# a repair still to verify, so the rerun must not ask for those browsers again.
+write_stale_preferences
+run_migration || fail "first repair before the rerun scenario"
+[[ -f $preferences.omarchy-copy-url-repair.bak ]] || fail "rerun scenario has a backup from the first repair"
+open_browser
+HOME="$home" PATH="$stub_bin:$PATH" OMARCHY_PATH="$ROOT" bash -euo pipefail "$ROOT/migrations/1788604821.sh" >/dev/null 2>&1 ||
+  fail "Brave Origin rerun migration leaves profiles the first repair fixed alone"
+close_browser
+pass "Brave Origin rerun migration leaves profiles the first repair fixed alone"
