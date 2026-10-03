@@ -45,6 +45,13 @@ var MAX_CMDS = 600
 var MAX_GLOW_OPS = 2000
 var ROLE_COUNT = 6
 var FALLBACK_HALO = 0.18
+// Round caps are most of the raster cost of a frame: a card is a few
+// thousand short subpaths, each capped twice. A square cap keeps the stroke
+// the same length and differs only at the corners, which under two pixels
+// do not show, so only wider strokes pay for a round one.
+var ROUND_CAP_WIDTH = 2
+// Below one 8-bit step an op changes no pixel, and still costs a raster.
+var MIN_ALPHA = 1 / 255
 
 function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v) }
 
@@ -154,9 +161,12 @@ function replay(ctx, size, op, rgb, glowLayer, fallback) {
     var cmds = op[4]
     if (!cmds || !cmds.length) return
     var pa = glowLayer ? g : (halo > 0 ? halo : alpha(op[2]))
-    if (pa <= 0) return
+    if (pa < MIN_ALPHA) return
     ctx.strokeStyle = rgba(op[1], pa, rgb)
-    ctx.lineWidth = width(op[3], size)
+    var lw = width(op[3], size)
+    ctx.lineWidth = lw
+    var cap = lw >= ROUND_CAP_WIDTH ? "round" : "square"
+    if (ctx.lineCap !== cap) ctx.lineCap = cap
     ctx.beginPath()
     if (replayPath(ctx, size, cmds)) ctx.stroke()
     return
@@ -169,7 +179,7 @@ function replay(ctx, size, op, rgb, glowLayer, fallback) {
     var rh = coord(op[6], size)
     if (rx === null || ry === null || rw === null || rh === null) return
     var ra = glowLayer ? g : alpha(op[2])
-    if (ra <= 0) return
+    if (ra < MIN_ALPHA) return
     ctx.fillStyle = rgba(op[1], ra, rgb)
     ctx.fillRect(rx, ry, rw, rh)
     return
@@ -211,13 +221,20 @@ function blendMode(op, additive) {
   return additive && Number(op[1]) === 1 ? "lighter" : "source-over"
 }
 
+function applyScale(ctx, scale) {
+  var s = Number(scale)
+  if (isFinite(s) && s > 0 && s !== 1) ctx.scale(s, s)
+}
+
 // `ops` is whatever the plugin returned. It is treated as hostile input.
 // palette: { accent, foreground, errorColor, roles?: [6 colours], additive?, glowFallback? }
-function paint(ctx, size, ops, palette) {
+// `scale` maps card coordinates onto a canvas drawn smaller than the card.
+function paint(ctx, size, ops, palette, scale) {
   ctx.reset()
   ctx.lineCap = "round"
   ctx.lineJoin = "round"
   if (!ops || !ops.length || !palette) return 0
+  applyScale(ctx, scale)
   var rgb = resolveRoles(palette)
   var additive = !!palette.additive
   var fallback = !!palette.glowFallback
@@ -239,8 +256,7 @@ function paintGlow(ctx, size, ops, palette, scale) {
   ctx.lineCap = "round"
   ctx.lineJoin = "round"
   if (!ops || !ops.length || !palette) return 0
-  var s = Number(scale)
-  if (isFinite(s) && s > 0 && s !== 1) ctx.scale(s, s)
+  applyScale(ctx, scale)
   var rgb = resolveRoles(palette)
   ctx.globalCompositeOperation = palette.additive ? "lighter" : "source-over"
   var n = Math.min(ops.length, MAX_OPS)

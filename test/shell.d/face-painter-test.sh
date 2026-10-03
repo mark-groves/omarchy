@@ -22,7 +22,7 @@ function recordingContext() {
   const log = []
   const ctx = { log, globalCompositeOperation: 'source-over' }
   for (const name of ['reset', 'beginPath', 'moveTo', 'lineTo', 'arc', 'quadraticCurveTo', 'stroke', 'fillRect', 'scale']) {
-    ctx[name] = (...args) => log.push([name, ctx.globalCompositeOperation, ctx.strokeStyle, ctx.fillStyle, ...args])
+    ctx[name] = (...args) => log.push([name, ctx.globalCompositeOperation, ctx.strokeStyle, ctx.fillStyle, ...args, ctx.lineCap])
   }
   ctx.createLinearGradient = () => ({
     addColorStop(at, color) { log.push(['colorStop', ctx.globalCompositeOperation, color, at]) }
@@ -55,6 +55,20 @@ ctx = recordingContext()
 painter.paint(ctx, 100, [[0, 9, 1, 1, line], [0, 1.5, 1, 1, line]], palette)
 const accentStyle = 'rgba(136,192,208,1.000)'
 assert(ctx.log.filter(e => e[0] === 'stroke').every(e => e[2] === accentStyle), 'an unknown role paints in the accent')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 1, 1, line], [0, 0, 1, 3, line]], palette)
+const capped = ctx.log.filter(e => e[0] === 'stroke')
+assertEqual(capped[0][capped[0].length - 1], 'square', 'a thin stroke skips the costly round cap')
+assertEqual(capped[1][capped[1].length - 1], 'round', 'a wide stroke keeps its round cap')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 0.001, 1, line], [1, 0, 0.002, 0, 0, 4, 4]], palette)
+assertEqual(ctx.log.filter(e => e[0] === 'stroke' || e[0] === 'fillRect').length, 0, 'an op below one 8-bit step of alpha is not rasterised')
+
+ctx = recordingContext()
+painter.paint(ctx, 100, [[0, 0, 1, 1, line]], palette, 0.5)
+assert(ctx.log.some(e => e[0] === 'scale' && e[4] === 0.5), 'the sharp layer can rasterise below card size')
 
 ctx = recordingContext()
 painter.paint(ctx, 100, [[0, 0, 0, 1, line, 0.8]], palette)
@@ -113,7 +127,13 @@ assertDeepEqual(theme.roles('#88c0d0', '#eceff4', '#bf616a', nord), roles, 'role
 
 const canvasQml = fs.readFileSync(path.join(root, 'shell/Ui/FaceChromeCanvas.qml'), 'utf8')
 assert(/FaceTheme\.roles\([\s\S]*?Color\.palette\)/.test(canvasQml), 'the card derives its roles from the live theme palette')
-assert(/MultiEffect/.test(canvasQml) && /source:\s*glowCanvas/.test(canvasQml), 'the bloom is a host-owned GPU effect over the glow layer')
+assert(/MultiEffect/.test(canvasQml) && /source:\s*glowLayer/.test(canvasQml), 'the bloom is a host-owned GPU effect over the glow layer')
+assert(/model: root\.glowOn \? \[root\.layerKey\] : \[\]/.test(canvasQml) && /model: \[root\.layerKey\]/.test(canvasQml)
+  && /layerKey: root\.side \+ ":" \+ root\.qualityLevel/.test(canvasQml),
+  'both layers and the bloom are rebuilt, not resized, when the card size or quality level changes')
+assert(!/MultiEffect[\s\S]{0,40}source:\s*root\.glowCanvas/.test(canvasQml), 'no bloom outlives the glow source it was sized for')
+assert(/paintGlow\(ctx, root\.side, root\.currentOps\(root\.side\)/.test(canvasQml) && !/root\.frameOps, root\.paintPalette/.test(canvasQml),
+  'the glow layer reads the current frame whichever layer paints first')
 assert(/glowFallback:\s*root\.glowEnabled && !root\.gpuEffects/.test(canvasQml),
   'bloom off paints the sharp layer; only a software renderer fakes the glow')
 const colorQml = fs.readFileSync(path.join(root, 'shell/Commons/Color.qml'), 'utf8')

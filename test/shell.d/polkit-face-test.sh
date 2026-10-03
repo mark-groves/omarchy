@@ -408,7 +408,7 @@ assert(
 
 const painter = fs.readFileSync(path.join(root, 'shell/Commons/FaceCardPainter.js'), 'utf8')
 assert(
-  /function paint\(ctx, size, ops, palette\)/.test(painter) && /function paintGlow\(ctx, size, ops, palette, scale\)/.test(painter),
+  /function paint\(ctx, size, ops, palette, scale\)/.test(painter) && /function paintGlow\(ctx, size, ops, palette, scale\)/.test(painter),
   'the host owns the painter and takes ops, not a plugin item'
 )
 assert(

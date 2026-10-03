@@ -22,7 +22,8 @@ Item {
   property color foreground: Color.polkit.text
   property color errorColor: Color.polkit.textError
   // What the card is composited over. Additive light only reads on a dark
-  // surface; on a light theme the card paints normally and glows less.
+  // surface; on a light theme the card paints normally, and its bloom is a
+  // coloured halo that needs nearly full opacity to read against the light.
   property color surface: Color.polkit.background
   // The GPU bloom behind the strokes. Off paints exactly the sharp layer.
   property bool glowEnabled: true
@@ -64,7 +65,10 @@ Item {
 
   // The 2D context is dropped across suspend. A swap while it is gone is
   // not a frame of this card.
-  readonly property bool presenting: root.active && root.painting && root.visible && canvas.available
+  readonly property bool presenting: root.shown && root.canvas !== null && root.canvas.available
+  // Shown to the user, whatever state its layers are in. A layer rebuild
+  // interrupts presenting but not this.
+  readonly property bool shown: root.active && root.painting && root.visible
   // The QQuickWindow, which emits frameSwapped. QsWindow.window is
   // Quickshell's wrapper: it has no frameSwapped, and on a session lock
   // surface it is null.
@@ -90,15 +94,87 @@ Item {
     return root.frameOps
   }
 
+  // Rasterising a frame of a few thousand antialiased segments costs tens
+  // to hundreds of milliseconds on the CPU, whatever the scene graph backend.
+  // Both layers rasterise on Qt's canvas thread so the window keeps
+  // presenting and the password field keeps taking keys. That thread queues
+  // every requested frame, so each layer keeps at most one in flight: a slow
+  // raster drops frames instead of piling them up.
+  readonly property int paintStallMs: 500
+
+  // When a frame takes longer than slowPaintMs to reach the screen, the card
+  // steps down a quality level: the sharp layer rasterises smaller and is
+  // scaled up on the GPU, and the bloom source repaints less often. Each
+  // time the card starts presenting it starts again at full quality.
+  readonly property var qualityLevels: [
+    { sharp: 1, glowEvery: 1 },
+    { sharp: 0.75, glowEvery: 2 },
+    { sharp: 0.5, glowEvery: 3 }
+  ]
+  readonly property int slowPaintMs: 60
+  readonly property int qualitySamples: 6
+  property int qualityLevel: 0
+  property real paintLatencyMs: 0
+  property int paintSamples: 0
+  property int sharpDispatches: 0
+  readonly property real sharpScale: root.qualityLevels[root.qualityLevel].sharp
+  readonly property int glowEvery: root.qualityLevels[root.qualityLevel].glowEvery
+
+  function resetQuality() {
+    root.qualityLevel = 0
+    root.paintLatencyMs = 0
+    root.paintSamples = 0
+  }
+
+  function notePaintLatency(ms) {
+    root.paintSamples += 1
+    root.paintLatencyMs = root.paintSamples === 1 ? ms : root.paintLatencyMs * 0.7 + ms * 0.3
+    if (root.paintSamples < root.qualitySamples || root.paintLatencyMs <= root.slowPaintMs) return
+    if (root.qualityLevel >= root.qualityLevels.length - 1) return
+    root.qualityLevel += 1
+    root.paintSamples = 0
+    console.log("face card paint", Math.round(root.paintLatencyMs), "ms, quality level", root.qualityLevel)
+  }
+
+  function requestLayer(layer) {
+    if (!layer) return false
+    var now = Date.now()
+    if (layer.inFlightSince > 0 && now - layer.inFlightSince < root.paintStallMs) {
+      // The bloom source only follows a sharp frame; a busy one skips it.
+      if (layer === root.canvas) layer.pending = true
+      return false
+    }
+    layer.pending = false
+    layer.inFlightSince = now
+    layer.requestPaint()
+    return true
+  }
+
+  function layerPainted(layer) {
+    if (layer === root.canvas && layer.inFlightSince > 0) root.notePaintLatency(Date.now() - layer.inFlightSince)
+    layer.inFlightSince = 0
+    if (layer.pending) root.repaint()
+  }
+
   function repaint() {
-    canvas.requestPaint()
-    if (root.glowOn) glowCanvas.requestPaint()
+    if (!root.requestLayer(root.canvas)) return
+    root.sharpDispatches += 1
+    if (root.glowOn && root.sharpDispatches % root.glowEvery === 0) root.requestLayer(root.glowCanvas)
+  }
+
+  function finishResult(why) {
+    if (root.resultLatched || !Playback.isHeldState(root.cardState)) return
+    root.resultLatched = true
+    console.log("face hold played", root.cardState, "by", why, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed))
+    root.resultPlayed()
   }
 
   function beginCycle() {
     elapsed = 0
     lastSwapMs = 0
     resultLatched = false
+    cyclePresented = false
+    if (stallCeiling.running) stallCeiling.restart()
     root.repaint()
   }
 
@@ -111,17 +187,35 @@ Item {
     var now = Date.now()
     var gap = root.lastSwapMs > 0 ? now - root.lastSwapMs : 0
     root.lastSwapMs = now
+    root.cyclePresented = true
     var next = Playback.creditSwap(root.elapsed, gap, true)
     if (next !== root.elapsed) {
       root.clock += next - root.elapsed
       root.elapsed = next
     }
     root.repaint()
-    if (!root.resultLatched && Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) {
-      root.resultLatched = true
-      console.log("face hold played", root.cardState, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed))
-      root.resultPlayed()
-    }
+    if (Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) root.finishResult("frames")
+  }
+
+  // True once this cycle has presented a frame.
+  property bool cyclePresented: false
+  readonly property bool holding: Playback.isHeldState(root.cardState) && !root.resultLatched && root.holdMs > 0
+
+  // The wall-clock ceilings (FacePlayback.js). Each pauses, and restarts in
+  // full, while the card is not presenting, so a blank or suspended panel
+  // still cannot spend a hold.
+  Timer {
+    id: presentedCeiling
+    interval: Math.max(1, Playback.presentedCeilingMs(root.holdMs))
+    running: root.holding && root.presenting && root.cyclePresented
+    onTriggered: root.finishResult("ceiling")
+  }
+
+  Timer {
+    id: stallCeiling
+    interval: Math.max(1, Playback.stallCeilingMs(root.holdMs))
+    running: root.holding && root.presenting && !root.cyclePresented
+    onTriggered: root.finishResult("stall ceiling")
   }
 
   onCardStateChanged: beginCycle()
@@ -130,6 +224,12 @@ Item {
   onPresentingChanged: {
     root.lastSwapMs = 0
     if (root.presenting) root.repaint()
+  }
+  onShownChanged: {
+    if (!root.shown) return
+    root.resetQuality()
+    console.log("face card shown: scene graph api", root.GraphicsInfo.api, "bloom", root.glowOn ? "gpu" : "off",
+      "surface", String(root.surface), root.darkSurface ? "dark" : "light")
   }
 
   // Ticks keep the draw requested. They do not move the hold: after resume
@@ -147,86 +247,119 @@ Item {
     function onFrameSwapped() { root.notePresentedFrame() }
   }
 
-  // The glow layer: ops that carry a glow value, at half resolution, blurred
-  // on the GPU twice (a tight halo and a wide bloom) and laid under the
-  // sharp strokes. Every item here is host-owned; the plugin only chose
-  // numbers.
-  readonly property real glowScale: 0.5
+  // The glow layer: ops that carry a glow value, at half the sharp layer's
+  // resolution, blurred on the GPU twice (a tight halo and a wide bloom) and
+  // laid under the sharp strokes. Every item here is host-owned; the plugin
+  // only chose numbers.
+  readonly property real glowScale: 0.5 * root.sharpScale
   readonly property bool glowOn: root.painting && root.glowEnabled && root.gpuEffects
 
-  Canvas {
-    id: glowCanvas
-    width: Math.max(1, Math.round(canvas.side * root.glowScale))
-    height: width
-    renderTarget: Canvas.Image
-    renderStrategy: Canvas.Cooperative
-    visible: false
+  // Nothing here is resized while live. A MultiEffect keeps the size its
+  // source had when it started, so a smaller bloom source after a quality
+  // step is drawn shrunk into its top-left corner, and a larger one spills
+  // past the card. Both layers, and the bloom with them, are rebuilt
+  // whenever the card's side or its quality level changes.
+  readonly property int side: Math.min(root.width, root.height)
+  readonly property string layerKey: root.side + ":" + root.qualityLevel
+  property Canvas canvas: null
+  property Canvas glowCanvas: null
 
-    onPaint: {
-      var ctx = getContext("2d")
-      if (!root.glowOn || canvas.side <= 0) {
-        ctx.reset()
-        return
+  Repeater {
+    model: root.glowOn ? [root.layerKey] : []
+    delegate: Item {
+      width: root.side
+      height: root.side
+
+      Canvas {
+        id: glowLayer
+        width: Math.max(1, Math.round(root.side * root.glowScale))
+        height: width
+        renderTarget: Canvas.Image
+        renderStrategy: Canvas.Threaded
+        visible: false
+
+        property real inFlightSince: 0
+        property bool pending: false
+
+        Component.onCompleted: root.glowCanvas = glowLayer
+        Component.onDestruction: if (root.glowCanvas === glowLayer) root.glowCanvas = null
+
+        onPaint: {
+          var ctx = getContext("2d")
+          if (!root.glowOn || root.side <= 0) {
+            ctx.reset()
+            return
+          }
+          // Qt polishes the most recently requested layer first, so this often
+          // paints before the sharp layer. The frame key keeps it to one plugin
+          // call either way.
+          Painter.paintGlow(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
+        }
+        onPainted: root.layerPainted(glowLayer)
+
+        onAvailableChanged: {
+          inFlightSince = 0
+          if (available) root.requestLayer(glowLayer)
+        }
       }
-      Painter.paintGlow(ctx, canvas.side, root.currentOps(canvas.side), root.paintPalette, root.glowScale)
-    }
 
-    onAvailableChanged: {
-      if (available) requestPaint()
-    }
-  }
-
-  MultiEffect {
-    id: bloomWide
-    width: canvas.side
-    height: canvas.side
-    source: glowCanvas
-    visible: root.glowOn
-    autoPaddingEnabled: true
-    blurEnabled: true
-    blur: 1.0
-    blurMax: 48
-    blurMultiplier: 0.6
-    opacity: root.darkSurface ? 0.95 : 0.45
-  }
-
-  MultiEffect {
-    id: bloomTight
-    width: canvas.side
-    height: canvas.side
-    source: glowCanvas
-    visible: root.glowOn
-    autoPaddingEnabled: true
-    blurEnabled: true
-    blur: 0.55
-    blurMax: 12
-    opacity: root.darkSurface ? 1 : 0.5
-  }
-
-  Canvas {
-    id: canvas
-    anchors.fill: parent
-    renderTarget: Canvas.Image
-    renderStrategy: Canvas.Cooperative
-    visible: root.painting
-
-    readonly property int side: Math.min(width, height)
-
-    onPaint: {
-      var ctx = getContext("2d")
-      if (!root.painting || side <= 0) {
-        ctx.reset()
-        return
+      MultiEffect {
+        anchors.fill: parent
+        source: glowLayer
+        autoPaddingEnabled: true
+        blurEnabled: true
+        blur: 1.0
+        blurMax: 48
+        blurMultiplier: 0.6
+        opacity: root.darkSurface ? 0.95 : 0.85
       }
-      Painter.paint(ctx, side, root.currentOps(side), root.paintPalette)
-    }
 
-    onAvailableChanged: {
-      if (available) root.repaint()
+      MultiEffect {
+        anchors.fill: parent
+        source: glowLayer
+        autoPaddingEnabled: true
+        blurEnabled: true
+        blur: 0.55
+        blurMax: 12
+        opacity: 1
+      }
     }
+  }
 
-    onWidthChanged: root.repaint()
-    onHeightChanged: root.repaint()
+  Repeater {
+    model: [root.layerKey]
+    delegate: Canvas {
+      id: sharpLayer
+      width: Math.max(1, Math.round(root.side * root.sharpScale))
+      height: width
+      scale: root.side > 0 ? root.side / width : 1
+      transformOrigin: Item.TopLeft
+      smooth: true
+      renderTarget: Canvas.Image
+      renderStrategy: Canvas.Threaded
+      visible: root.painting
+
+      property real inFlightSince: 0
+      property bool pending: false
+
+      Component.onCompleted: root.canvas = sharpLayer
+      Component.onDestruction: if (root.canvas === sharpLayer) root.canvas = null
+
+      onPaint: {
+        var ctx = getContext("2d")
+        if (!root.painting || root.side <= 0) {
+          ctx.reset()
+          return
+        }
+        Painter.paint(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
+      }
+      onPainted: root.layerPainted(sharpLayer)
+
+      onAvailableChanged: {
+        inFlightSince = 0
+        if (available) root.repaint()
+      }
+    }
   }
 
   Connections {
