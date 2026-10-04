@@ -24,7 +24,7 @@ Panel {
 
   property bool cursorActive: false
 
-  // Countdowns and "as of" ages read this instead of Date.now() so the
+  // Countdowns and "last updated" ages read this instead of Date.now() so the
   // panel keeps telling the truth while it sits open.
   property double nowMs: Date.now()
 
@@ -419,7 +419,11 @@ Panel {
 
   function otherTrouble(item) {
     var status = String(item && item.usageStatusText || "")
-    return status !== "" && !needsSignIn(item) ? status : ""
+    return status !== "" && status !== "Limits paused" && !needsSignIn(item) ? status : ""
+  }
+
+  function pausedWithoutLimits(item) {
+    return !!item && item.usageStatusText === "Limits paused" && limitWindows(item).length === 0
   }
 
   // Sign an account that's already here in again, following along in the
@@ -499,10 +503,12 @@ Panel {
   // titled after its model, and a name like "Opus 5 (1M context)" would parse
   // as a one-minute window.
   function limitWindow(label, percent, resetAt, title, extras) {
+    var reset = new Date(String(resetAt || "")).getTime()
+    var expired = isFinite(reset) && reset <= root.nowMs
     var window = {
       title: String(title || "") !== "" ? String(title) : windowTitle(label),
-      percent: Number(percent),
-      resetAt: String(resetAt || "")
+      percent: expired ? 0 : Number(percent),
+      resetAt: expired ? "" : String(resetAt || "")
     }
     extras = extras || {}
     if (extras.periodStartedAt)
@@ -1372,6 +1378,12 @@ Panel {
       wrapMode: Text.WordWrap
     }
 
+    UnavailableUsage {
+      visible: !section.multi && root.pausedWithoutLimits(section.provider)
+      width: parent.width
+      record: section.provider
+    }
+
     Column {
       visible: !section.multi && section.windows.length > 0
       width: parent.width
@@ -1477,6 +1489,11 @@ Panel {
         Column {
           width: parent.width
           spacing: Style.space(12)
+
+          UnavailableUsage {
+            width: parent.width
+            record: accountBlock.modelData
+          }
 
           Repeater {
             model: root.displayWindows({ limits: accountBlock.modelData.limits || [] })
@@ -1862,16 +1879,38 @@ Panel {
     }
   }
 
+  // With no measured windows, leave a place to discover how to get usage.
+  component UnavailableUsage: Item {
+    id: unavailable
+    property var record: null
+    visible: root.pausedWithoutLimits(record)
+    implicitHeight: unavailableLabel.implicitHeight
+
+    Text {
+      id: unavailableLabel
+      text: "Usage unavailable"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    HoverHandler { id: unavailableHover }
+
+    PanelToolTip {
+      visible: unavailableHover.hovered && unavailable.visible
+      text: unavailable.record ? String(unavailable.record.authHelpText || "Usage has not been updated yet.") : ""
+    }
+  }
+
   // One line per limit window: title, meter, percentage, and reset. A
   // model-scoped allowance on the same clock ("Fable" on Weekly) is a marker
   // on this row's meter, named in the row's tooltip.
   component CompactLimit: Item {
     id: compact
     property var window: null
-    // Numbers kept past a failed check dim, and say how old they are on hover.
+    // The age of numbers kept past a failed check is shown only on hover.
     property bool stale: false
     property real fetchedAt: 0
-    opacity: stale ? 0.5 : 1.0
     readonly property var scoped: window && window.scoped ? window.scoped : []
     readonly property bool alarming: window && window.percent >= 0.9
     readonly property real resetMs: root.resetMsFor(window)
@@ -1890,8 +1929,8 @@ Panel {
         }
         if (compact.stale)
           lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000
-            ? "As of " + root.formatDuration(root.nowMs - compact.fetchedAt) + " ago"
-            : "Last known")
+            ? "Last updated " + root.formatDuration(root.nowMs - compact.fetchedAt) + " ago"
+            : compact.fetchedAt > 0 ? "Last updated less than a minute ago" : "Last updated time unavailable")
         for (var i = 0; i < compact.scoped.length; i++)
           lines.push(compact.scoped[i].title + ": " + root.formatLimitPercent(compact.scoped[i].percent) + " of its "
             + String(compact.window ? compact.window.title : "").toLowerCase() + " allowance")
