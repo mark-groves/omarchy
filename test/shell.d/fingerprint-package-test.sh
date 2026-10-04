@@ -67,7 +67,15 @@ if [[ ${LOCK_SETUP_UNKNOWN:-0} != "1" ]]; then
   touch "$TEST_LOCK_PAM"
 fi
 STUB
-chmod +x "$scratch/bin/omarchy-apply-lock"
+cat > "$scratch/bin/omarchy-pam-pair-add" <<'STUB'
+#!/bin/bash
+echo pam-pair-add >> "$CALL_LOG"
+STUB
+cat > "$scratch/bin/omarchy-apply-polkit-pam" <<'STUB'
+#!/bin/bash
+echo apply-polkit-pam >> "$CALL_LOG"
+STUB
+chmod +x "$scratch/bin/omarchy-apply-lock" "$scratch/bin/omarchy-pam-pair-add" "$scratch/bin/omarchy-apply-polkit-pam"
 
 export TEST_LOCK_PAM="$scratch/omarchy-lock-fingerprint"
 setup_script="$scratch/omarchy-setup-security-fingerprint"
@@ -79,7 +87,7 @@ run_setup() {
   if OMARCHY_PATH="$scratch" "$setup_script" > "$scratch/output" 2>&1; then
     fail "setup stops on the simulated enrollment or installation failure"
   fi
-  if grep -Eq '^(pam |apply-lock$|Unexpected privileged call)' "$CALL_LOG"; then
+  if grep -Eq '^(pam |pam-pair-add$|apply-polkit-pam$|apply-lock$|Unexpected privileged call)' "$CALL_LOG"; then
     fail "setup does not change PAM or lock recovery after failed enrollment"
   fi
 }
