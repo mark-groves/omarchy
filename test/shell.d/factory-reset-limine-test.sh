@@ -164,7 +164,9 @@ printf 'running limine\n' >"$root/boot/EFI/limine/limine_x64.efi"
 } >"$root/boot/limine.conf"
 cp -r "$root/boot" "$test_tmp/failed-esp-before"
 
-if stage_esp "$root" "fail 'limine.conf hash does not match the rebuilt file'" 2>/dev/null; then
+# log fails too: errexit still applies in the cleanup trap, so a failing
+# message must not stop the restore or the backup's removal.
+if stage_esp "$root" "log() { return 1; }; fail 'limine.conf hash does not match the rebuilt file'" 2>/dev/null; then
   fail "the simulated staging failure aborts the reset"
 fi
 diff -r "$test_tmp/failed-esp-before" "$root/boot" >/dev/null ||

@@ -171,15 +171,16 @@ cleanup() {
 
   # A reset that failed after touching the ESP, before the factory root took
   # over, puts the running system's boot files back while the ESP is mounted.
+  # errexit still applies in this trap, so nothing here may stop the cleanup.
   if [[ -n ${esp_restore:-} ]]; then
     if restore_esp "$esp_restore" "$esp_backup" "${esp_new_id:-}"; then
-      log "Restored this system's boot files"
-      rm -rf "$esp_backup"
+      log "Restored this system's boot files" || true
+      rm -rf "$esp_backup" || true
     else
-      log "Could not restore this system's boot files; copies are in $esp_backup"
+      log "Could not restore this system's boot files; copies are in $esp_backup" || true
     fi
   elif [[ -n ${esp_backup:-} ]]; then
-    rm -rf "$esp_backup"
+    rm -rf "$esp_backup" || true
   fi
 
   if mountpoint -q "$ESP_MNT" 2>/dev/null; then
@@ -559,10 +560,12 @@ rebuild_next_boot_platform() {
 }
 
 # Once the factory root is in place it is what boots, so the boot files
-# rebuild_next_boot left on the ESP stand and the ESP can be released.
+# rebuild_next_boot left on the ESP stand and the ESP can be released. The
+# reset is staged by now: a leftover directory or mount only costs space
+# until the reboot, so neither may report the reset as failed.
 commit_next_boot() {
-  commit_esp_staging "$ESP_MNT" "$esp_old_id" "$esp_new_id"
-  umount "$ESP_MNT"
+  commit_esp_staging "$ESP_MNT" "$esp_old_id" "$esp_new_id" || true
+  umount "$ESP_MNT" 2>/dev/null || true
 }
 
 # Both the staged system and the retained baseline must lose the old hashes.
