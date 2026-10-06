@@ -189,7 +189,9 @@ cleanup() {
   rmdir "$ESP_MNT" 2>/dev/null || true
 
   if mountpoint -q "$TOP_MNT" 2>/dev/null; then
-    if [[ -d $TOP_MNT/$NEXT_NAME && ${swap_done:-0} == 0 ]]; then
+    # Never delete the staged root while there is no @: after a root switch
+    # that could not be undone, it is one of the two systems left to recover.
+    if [[ -d $TOP_MNT/$NEXT_NAME && ${swap_done:-0} == 0 && -d $TOP_MNT/@ ]]; then
       btrfs subvolume delete --recursive "$TOP_MNT/$NEXT_NAME" >/dev/null 2>&1 || true
     fi
     umount -R "$TOP_MNT" 2>/dev/null || true
@@ -725,13 +727,11 @@ stage_full_reset() {
   log "Activating the factory system"
   local old="@omarchy-old-$(date +%s)"
   mv "$top/@" "$top/$old"
-  # Until the factory root is at @ the reset is not committed: cleanup has the
-  # platform's boot package roll its boot state back to the old root and
-  # revokes the throwaway slot, so the old root goes back to @ first.
+  # Until the factory root is at @ the reset is not committed: cleanup restores
+  # the old root's boot files, or has the platform's boot package roll them
+  # back, and revokes the throwaway slot, so the old root goes back to @ first.
   if ! mv "$next" "$top/@"; then
     if mv "$top/$old" "$top/@"; then
-      [[ $RESET_BOOT == "platform" ]] ||
-        fail "could not activate the factory system; the current root is back at @, but its boot files were already rebuilt from the factory system: run 'sudo limine-update' before rebooting (see $LOG_FILE)"
       fail "could not activate the factory system; the current root is back at @ (see $LOG_FILE)"
     fi
     # Neither root is at @. Keep the staged one as well for recovery.
