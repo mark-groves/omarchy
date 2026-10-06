@@ -1073,16 +1073,22 @@ esp_path() {
   echo "${esp:-/boot}"
 }
 
-# Stale only if this machine has no entry of its own (e.g. a failed earlier
-# rebuild left the entry-less template). Other machine-ids are not stale: a
-# shared ESP holds other systems' entries, and the factory reset already
-# re-keyed this system's entry to the identity it boots with.
+# Stale only if this machine has no bootable entry of its own: none at all,
+# or the bare header reset_limine_config leaves when the rebuild after it
+# failed. Other machine-ids are not stale: a shared ESP holds other systems'
+# entries, and the factory reset already re-keyed this system's entry to the
+# identity it boots with.
 limine_entries_stale() {
   local esp machine_id
   esp=$(esp_path)
   machine_id=$(cat /etc/machine-id 2>/dev/null || true)
   [[ -f $esp/limine.conf && -n $machine_id ]] || return 1
-  ! grep -q "machine-id=$machine_id" "$esp/limine.conf"
+  ! awk -v id="$machine_id" '
+    /^\/[^\/]/ { mine = 0 }
+    $0 ~ ("^comment: machine-id=" id "([[:space:]]|$)") { mine = 1 }
+    mine && /^[[:space:]]*[a-z_]*path:/ { bootable = 1 }
+    END { exit !bootable }
+  ' "$esp/limine.conf"
 }
 
 # Only this machine's own entry is emptied for limine-update to rebuild in

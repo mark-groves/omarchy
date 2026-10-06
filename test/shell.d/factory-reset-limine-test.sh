@@ -324,6 +324,11 @@ entry_for "$conf" "$FOREIGN_ID" | grep -q 'foreignhash' && [[ -f $root/boot/$FOR
   fail "first boot keeps another installation's entry and directory"
 pass "a first-boot rebuild keeps other systems' entries and empties only this machine's"
 
+# The rebuild's limine-update failed here: only this machine's header is left.
+[[ $(staleness "$root") == stale ]] ||
+  fail "first boot retries a rebuild that left this machine's entry without kernels"
+pass "a machine whose entry lost its kernels gets them back at the next first boot"
+
 printf 'default_entry: 2\n' >"$root/boot/limine.conf"
 { windows_entry; foreign_entry; } >>"$root/boot/limine.conf"
 [[ $(staleness "$root") == stale ]] ||
