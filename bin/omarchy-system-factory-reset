@@ -167,6 +167,20 @@ cleanup() {
   if [[ ${reset_committed:-0} == 0 && ${RESET_BOOT_PREPARED:-0} == 1 ]]; then
     reset_boot_op reset-rollback || echo "Error: $RESET_BOOT_ERROR (see $LOG_FILE)" >&2
   fi
+
+  # A staging that failed after touching the ESP puts the running system's
+  # boot files back first, while the ESP is still mounted in the staged root.
+  if [[ -n ${esp_restore:-} ]]; then
+    if restore_esp "$esp_restore" "$esp_backup" "${esp_new_id:-}"; then
+      log "Restored this system's boot files"
+      rm -rf "$esp_backup"
+    else
+      log "Could not restore this system's boot files; copies are in $esp_backup"
+    fi
+  elif [[ -n ${esp_backup:-} ]]; then
+    rm -rf "$esp_backup"
+  fi
+
   if mountpoint -q "$TOP_MNT" 2>/dev/null; then
     if [[ -d $TOP_MNT/$NEXT_NAME && ${swap_done:-0} == 0 ]]; then
       btrfs subvolume delete --recursive "$TOP_MNT/$NEXT_NAME" >/dev/null 2>&1 || true
@@ -319,8 +333,8 @@ install_provisioning_units() {
 # the previous identity's entry is emptied and re-keyed to the new machine-id:
 # limine-update then refills it in place, where default_entry points.
 # limine-entry-tool appends a new OS entry after all the others, so starting
-# a fresh one instead would move this system behind them. Only the previous
-# identity's machine-id directory is removed.
+# a fresh one instead would move this system behind them. The previous
+# identity's machine-id directory stays until commit_esp_staging.
 reset_limine_config() {
   local root="$1" esp="$2" old_id="$3" template="" candidate
   local conf="$root$esp/limine.conf"
@@ -367,9 +381,42 @@ reset_limine_config() {
 
   { cat "$template"; [[ -z $entries ]] || printf '%s\n' "$entries"; } >"$conf.new"
   mv "$conf.new" "$conf"
+}
 
-  if [[ $old_id =~ ^[0-9a-f]{32}$ && $old_id != "$machine_id" ]]; then
-    rm -rf "${root:?}$esp/$old_id"
+# limine-update rewrites limine.conf, the bootloader binaries and the UKIs,
+# and the UKIs carry one name across machine identities, so the rebuild
+# overwrites the running system's own. Copy them all, so that a staging that
+# fails before its entry verifies leaves this system booting as it did, and a
+# retry starts again from this system's own entry.
+backup_esp() {
+  local esp="$1" backup="$2" path
+  install -d "$backup/EFI"
+  for path in limine.conf EFI/Linux EFI/limine EFI/BOOT; do
+    if [[ -e $esp/$path ]]; then
+      cp -r "$esp/$path" "$backup/$path"
+    fi
+  done
+}
+
+# Plain cp: FAT keeps no owners, so preserving them would fail. Files the
+# rebuild added are left in place; the restored limine.conf references none.
+restore_esp() {
+  local esp="$1" backup="$2" new_id="$3"
+  cp -r "$backup/." "$esp/" || return 1
+  if [[ $new_id =~ ^[0-9a-f]{32}$ ]]; then
+    rm -rf "${esp:?}/$new_id"
+  fi
+}
+
+# The rebuilt entry verified, so the ESP changes stand: disarm the restore
+# (the cleanup trap then just discards the backup) and drop the previous
+# identity's machine-id directory, whose kernels and snapshot UKIs nothing
+# references any more.
+commit_esp_staging() {
+  local esp="$1" old_id="$2" new_id="$3"
+  esp_restore=""
+  if [[ $old_id =~ ^[0-9a-f]{32}$ && $old_id != "$new_id" ]]; then
+    rm -rf "${esp:?}/$old_id"
   fi
 }
 
@@ -459,7 +506,18 @@ rebuild_next_boot() {
   fi
 
   # The running system's identity is the one the reset replaces.
-  reset_limine_config "$next" "$esp_mount" "$(cat /etc/machine-id 2>/dev/null || true)"
+  local old_id new_id
+  old_id=$(cat /etc/machine-id 2>/dev/null || true)
+  new_id=$(cat "$next/etc/machine-id" 2>/dev/null || true)
+
+  # From here until the rebuilt entry verifies, the cleanup trap restores
+  # this copy of the ESP's boot files on any failure.
+  esp_backup=$(mktemp -d /var/tmp/omarchy-system-factory-reset-esp.XXXXXX)
+  backup_esp "$next$esp_mount" "$esp_backup"
+  esp_new_id=$new_id
+  esp_restore="$next$esp_mount"
+
+  reset_limine_config "$next" "$esp_mount" "$old_id"
 
   log "Rebuilding boot files from the factory system (this can take a minute)"
   if ! chroot "$next" /usr/bin/limine-update >>"$LOG_FILE" 2>&1; then
@@ -467,6 +525,7 @@ rebuild_next_boot() {
   fi
 
   verify_limine_hashes "$next" "$esp_mount"
+  commit_esp_staging "$next$esp_mount" "$old_id" "$new_id"
 
   for dir in run dev sys proc; do
     umount -R "$next/$dir" 2>/dev/null || true

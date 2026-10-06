@@ -121,9 +121,79 @@ entry_for "$conf" "$NEW_ID" | grep -q '^/+Omarchy$' ||
   fail "the Windows entry survives unchanged"
 [[ $(awk '/^\/\+Other Linux$/,/foreignhash/' "$conf") == "$(grep -v '^$' <<<"$foreign_before")" ]] ||
   fail "another installation's entry survives unchanged"
-[[ ! -e $root/boot/$OLD_ID ]] || fail "the previous identity's boot directory is removed"
+[[ -f $root/boot/$OLD_ID/initramfs ]] ||
+  fail "the previous identity's boot directory stays until the rebuilt entry verifies"
+run_reset_function commit_esp_staging "$root/boot" "$OLD_ID" "$NEW_ID" ||
+  fail "a verified staging commits"
+[[ ! -e $root/boot/$OLD_ID ]] || fail "committing removes the previous identity's boot directory"
 [[ -f $root/boot/$FOREIGN_ID/marker ]] || fail "another installation's boot directory survives"
 pass "a shared ESP keeps other systems' entries and directories while this entry is re-keyed in place"
+
+# ------------------------------------------------- failed staging and retry
+
+# Stages against an ESP the way rebuild_next_boot does, with the production
+# cleanup trap armed; $2 is what happens after limine-update rewrote the ESP.
+stage_esp() {
+  local root="$1" outcome="$2"
+  run_reset_function eval "
+    trap cleanup EXIT
+    TOP_MNT=$test_tmp/no-top-mount
+    esp_backup=\$(mktemp -d $test_tmp/esp-backup.XXXXXX)
+    backup_esp $root/boot \$esp_backup
+    esp_new_id=$NEW_ID
+    esp_restore=$root/boot
+    reset_limine_config $root /boot $OLD_ID
+    printf 'factory uki\n' >$root/boot/EFI/Linux/omarchy_linux-omarchy.efi
+    printf 'factory limine\n' >$root/boot/EFI/limine/limine_x64.efi
+    mkdir -p $root/boot/$NEW_ID
+    $outcome
+  "
+}
+
+root="$test_tmp/failed"
+make_root "$root"
+mkdir -p "$root/boot/EFI/limine"
+printf 'running uki\n' >"$root/boot/EFI/Linux/omarchy_linux-omarchy.efi"
+printf 'running limine\n' >"$root/boot/EFI/limine/limine_x64.efi"
+{
+  printf 'default_entry: 2\n'
+  omarchy_entry "$OLD_ID"
+  windows_entry
+  foreign_entry
+} >"$root/boot/limine.conf"
+cp -r "$root/boot" "$test_tmp/failed-esp-before"
+
+if stage_esp "$root" "fail 'limine.conf hash does not match the rebuilt file'" 2>/dev/null; then
+  fail "the simulated staging failure aborts the reset"
+fi
+diff -r "$test_tmp/failed-esp-before" "$root/boot" >/dev/null ||
+  fail "a failed staging restores the running system's limine.conf, UKI, bootloader and directories"
+! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a restored backup is discarded"
+pass "a failed staging leaves the running system's boot files as they were"
+
+run_reset_function reset_limine_config "$root" /boot "$OLD_ID" ||
+  fail "a retry rewrites the restored limine.conf"
+[[ $(grep -c '^/+Omarchy$' "$root/boot/limine.conf") == 1 ]] &&
+  [[ $(grep -m1 '^/' "$root/boot/limine.conf") == "/+Omarchy" ]] &&
+  entry_for "$root/boot/limine.conf" "$NEW_ID" | grep -q '^/+Omarchy$' ||
+  fail "a retry re-keys the running system's own entry, still first"
+pass "a retry after a failed staging starts from the running system's own entry"
+
+root="$test_tmp/verified"
+make_root "$root"
+mkdir -p "$root/boot/EFI/limine"
+printf 'running uki\n' >"$root/boot/EFI/Linux/omarchy_linux-omarchy.efi"
+printf 'running limine\n' >"$root/boot/EFI/limine/limine_x64.efi"
+{ omarchy_entry "$OLD_ID"; windows_entry; } >"$root/boot/limine.conf"
+stage_esp "$root" "commit_esp_staging $root/boot $OLD_ID $NEW_ID" ||
+  fail "a verified staging completes"
+[[ $(cat "$root/boot/EFI/Linux/omarchy_linux-omarchy.efi") == "factory uki" ]] &&
+  entry_for "$root/boot/limine.conf" "$NEW_ID" | grep -q '^/+Omarchy$' ||
+  fail "a verified staging keeps the rebuilt boot files"
+[[ ! -e $root/boot/$OLD_ID && -d $root/boot/$NEW_ID ]] ||
+  fail "a verified staging hands the ESP over to the new identity"
+! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a committed backup is discarded"
+pass "a verified staging keeps its changes and discards the backup"
 
 # ------------------------------------------------------- Omarchy-only ESP
 
