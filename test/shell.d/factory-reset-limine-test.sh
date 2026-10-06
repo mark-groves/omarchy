@@ -204,7 +204,7 @@ function_body() {
 }
 ! function_body rebuild_next_boot | grep -q commit_ &&
   function_body commit_next_boot | grep -q commit_esp_staging &&
-  function_body stage_full_reset | awk '/swap_done=1/ { swapped = 1 } /commit_next_boot/ { found = 1; exit !swapped } END { exit !found }' ||
+  function_body stage_full_reset | awk '/swap_done=1/ { swapped = 1 } /commit_next_boot/ { found = 1; ordered = swapped; exit } END { exit !(found && ordered) }' ||
   fail "boot-file recovery stays armed until the factory root is switched in"
 pass "boot-file recovery stays armed until the factory root is switched in"
 
