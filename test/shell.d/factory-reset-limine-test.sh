@@ -138,6 +138,7 @@ stage_esp() {
   run_reset_function eval "
     trap cleanup EXIT
     TOP_MNT=$test_tmp/no-top-mount
+    ESP_MNT=$test_tmp/no-esp-mount
     esp_backup=\$(mktemp -d $test_tmp/esp-backup.XXXXXX)
     backup_esp $root/boot \$esp_backup
     esp_new_id=$NEW_ID
@@ -194,6 +195,18 @@ stage_esp "$root" "commit_esp_staging $root/boot $OLD_ID $NEW_ID" ||
   fail "a verified staging hands the ESP over to the new identity"
 ! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a committed backup is discarded"
 pass "a verified staging keeps its changes and discards the backup"
+
+# Until the factory root is in place, the running root is still what boots,
+# so a failed unmount or rename must still restore the running system's files.
+function_body() {
+  awk -v name="$1" '$0 ~ ("^" name "\\(\\) \\{") { copying = 1 } copying { print } copying && /^}/ { exit }' \
+    "$ROOT/bin/omarchy-system-factory-reset"
+}
+! function_body rebuild_next_boot | grep -q commit_ &&
+  function_body commit_next_boot | grep -q commit_esp_staging &&
+  function_body stage_full_reset | awk '/swap_done=1/ { swapped = 1 } /commit_next_boot/ { found = 1; exit !swapped } END { exit !found }' ||
+  fail "boot-file recovery stays armed until the factory root is switched in"
+pass "boot-file recovery stays armed until the factory root is switched in"
 
 # ------------------------------------------------------- Omarchy-only ESP
 

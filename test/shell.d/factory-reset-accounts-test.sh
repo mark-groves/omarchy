@@ -50,6 +50,7 @@ systemd-id128() { printf '%032d\n' 1; }
 install_provisioning_units() { :; }
 encrypted_install() { return 1; }
 rebuild_next_boot() { touch "$TOP_MNT/rebuilt"; }
+commit_next_boot() { :; }
 sync() { :; }
 
 userdel() {

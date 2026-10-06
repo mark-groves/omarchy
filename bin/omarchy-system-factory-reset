@@ -34,6 +34,7 @@ PROVISIONING_DIR=/var/lib/omarchy/provisioning
 PACKAGED_PATH=/usr/bin/omarchy-system-factory-reset
 OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
 TOP_MNT=/run/omarchy-system-factory-reset/top
+ESP_MNT=/run/omarchy-system-factory-reset/esp
 NEXT_NAME=@omarchy-reset-next
 LOG_FILE=/var/log/omarchy-system-factory-reset.log
 
@@ -168,8 +169,8 @@ cleanup() {
     reset_boot_op reset-rollback || echo "Error: $RESET_BOOT_ERROR (see $LOG_FILE)" >&2
   fi
 
-  # A staging that failed after touching the ESP puts the running system's
-  # boot files back first, while the ESP is still mounted in the staged root.
+  # A reset that failed after touching the ESP, before the factory root took
+  # over, puts the running system's boot files back while the ESP is mounted.
   if [[ -n ${esp_restore:-} ]]; then
     if restore_esp "$esp_restore" "$esp_backup" "${esp_new_id:-}"; then
       log "Restored this system's boot files"
@@ -180,6 +181,11 @@ cleanup() {
   elif [[ -n ${esp_backup:-} ]]; then
     rm -rf "$esp_backup"
   fi
+
+  if mountpoint -q "$ESP_MNT" 2>/dev/null; then
+    umount -R "$ESP_MNT" 2>/dev/null || true
+  fi
+  rmdir "$ESP_MNT" 2>/dev/null || true
 
   if mountpoint -q "$TOP_MNT" 2>/dev/null; then
     if [[ -d $TOP_MNT/$NEXT_NAME && ${swap_done:-0} == 0 ]]; then
@@ -408,10 +414,10 @@ restore_esp() {
   fi
 }
 
-# The rebuilt entry verified, so the ESP changes stand: disarm the restore
-# (the cleanup trap then just discards the backup) and drop the previous
-# identity's machine-id directory, whose kernels and snapshot UKIs nothing
-# references any more.
+# The factory root is now the one that boots, so the ESP changes stand:
+# disarm the restore (the cleanup trap then just discards the backup) and
+# drop the previous identity's machine-id directory, whose kernels and
+# snapshot UKIs nothing references any more.
 commit_esp_staging() {
   local esp="$1" old_id="$2" new_id="$3"
   esp_restore=""
@@ -469,7 +475,12 @@ rebuild_next_boot() {
   fi
   [[ -e $esp_device ]] || fail "ESP device $esp_device not found"
 
-  mount "$esp_device" "$next$esp_mount"
+  # The ESP stays mounted outside the staged root until the root switch, so
+  # the cleanup trap can still restore it after the bind into the chroot is
+  # gone.
+  mkdir -p "$ESP_MNT"
+  mount "$esp_device" "$ESP_MNT"
+  mount --bind "$ESP_MNT" "$next$esp_mount"
 
   local dir
   for dir in proc sys dev run; do
@@ -506,18 +517,16 @@ rebuild_next_boot() {
   fi
 
   # The running system's identity is the one the reset replaces.
-  local old_id new_id
-  old_id=$(cat /etc/machine-id 2>/dev/null || true)
-  new_id=$(cat "$next/etc/machine-id" 2>/dev/null || true)
+  esp_old_id=$(cat /etc/machine-id 2>/dev/null || true)
+  esp_new_id=$(cat "$next/etc/machine-id" 2>/dev/null || true)
 
-  # From here until the rebuilt entry verifies, the cleanup trap restores
+  # From here until the factory root takes over, the cleanup trap restores
   # this copy of the ESP's boot files on any failure.
   esp_backup=$(mktemp -d /var/tmp/omarchy-system-factory-reset-esp.XXXXXX)
-  backup_esp "$next$esp_mount" "$esp_backup"
-  esp_new_id=$new_id
-  esp_restore="$next$esp_mount"
+  backup_esp "$ESP_MNT" "$esp_backup"
+  esp_restore=$ESP_MNT
 
-  reset_limine_config "$next" "$esp_mount" "$old_id"
+  reset_limine_config "$next" "$esp_mount" "$esp_old_id"
 
   log "Rebuilding boot files from the factory system (this can take a minute)"
   if ! chroot "$next" /usr/bin/limine-update >>"$LOG_FILE" 2>&1; then
@@ -525,7 +534,6 @@ rebuild_next_boot() {
   fi
 
   verify_limine_hashes "$next" "$esp_mount"
-  commit_esp_staging "$next$esp_mount" "$old_id" "$new_id"
 
   for dir in run dev sys proc; do
     umount -R "$next/$dir" 2>/dev/null || true
@@ -548,6 +556,13 @@ rebuild_next_boot_platform() {
   reset_boot_op reset-verify "$next" || fail "$RESET_BOOT_ERROR (see $LOG_FILE)"
 
   [[ -z ${RESET_LUKS_DEVICE:-} ]] || add_reset_luks_slot
+}
+
+# Once the factory root is in place it is what boots, so the boot files
+# rebuild_next_boot left on the ESP stand and the ESP can be released.
+commit_next_boot() {
+  commit_esp_staging "$ESP_MNT" "$esp_old_id" "$esp_new_id"
+  umount "$ESP_MNT"
 }
 
 # Both the staged system and the retained baseline must lose the old hashes.
@@ -723,6 +738,7 @@ stage_full_reset() {
   # From here the old root is gone, so the reset's unlock must survive.
   reset_committed=1
   swap_done=1
+  commit_next_boot
   sync
 
   # The boot package that prepared the reset gets the key on standard input,
