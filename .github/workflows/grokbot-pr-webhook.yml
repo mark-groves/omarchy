@@ -1,0 +1,45 @@
+# Fork-only: notify the Grok Bot webhook when a pull request is opened or marked ready for review.
+name: Grok Bot PR webhook
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post pull request event
+        env:
+          WEBHOOK_URL: ${{ secrets.GROKBOT_PR_WEBHOOK_URL }}
+          WEBHOOK_KEY: ${{ secrets.GROKBOT_PR_WEBHOOK_KEY }}
+          REPO: ${{ github.repository }}
+          PR: ${{ toJSON(github.event.pull_request.number) }}
+          ACTION: ${{ github.event.action }}
+          URL: ${{ github.event.pull_request.html_url }}
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
+        run: |
+          if [[ -z $WEBHOOK_URL || -z $WEBHOOK_KEY ]]; then
+            echo "::notice::GROKBOT_PR_WEBHOOK_URL or GROKBOT_PR_WEBHOOK_KEY is unset; skipping webhook"
+          else
+            body=$(jq -n \
+              --arg repo "$REPO" \
+              --argjson pr "$PR" \
+              --arg action "$ACTION" \
+              --arg url "$URL" \
+              --arg title "$TITLE" \
+              --arg author "$AUTHOR" \
+              --argjson draft "$DRAFT" \
+              '{repo:$repo, pr:$pr, action:$action, url:$url, title:$title, author:$author, draft:$draft}')
+            curl --fail-with-body --retry 3 --max-time 20 \
+              --request POST \
+              --header "Authorization: Bearer $WEBHOOK_KEY" \
+              --header "Content-Type: application/json" \
+              --data "$body" \
+              "$WEBHOOK_URL"
+          fi
