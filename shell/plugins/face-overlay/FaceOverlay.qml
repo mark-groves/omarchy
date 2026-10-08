@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "FaceOverlayModel.js" as Model
 
@@ -194,8 +195,8 @@ Item {
       width: card.borderLeft + root.pad + root.cardSide + root.pad + card.borderRight
       height: card.borderTop + root.pad + root.cardSide + Style.space(10) + hintMetrics.height + root.pad + card.borderBottom
       anchors.centerIn: parent
-      color: Util.alpha(Color.background, 0.97)
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      color: Util.alpha(Commons.Color.background, 0.97)
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       radius: Style.cornerRadius
       opacity: root.painting ? 1 : 0
       enabled: false
@@ -220,9 +221,9 @@ Item {
           onResultPlayed: {
             if (root.awaitingPlayback) root.hideCard()
           }
-          accent: Color.polkit.accent
-          foreground: Color.polkit.text
-          errorColor: Color.polkit.textError
+          accent: Commons.Color.polkit.accent
+          foreground: Commons.Color.polkit.text
+          errorColor: Commons.Color.polkit.textError
           surface: card.color
         }
 
@@ -232,7 +233,7 @@ Item {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           text: root.hintText()
-          color: root.cardState === "notRecognized" ? Color.polkit.textError : Color.popups.text
+          color: root.cardState === "notRecognized" ? Commons.Color.polkit.textError : Commons.Color.popups.text
           opacity: 0.86
           font.family: Style.font.family
           font.pixelSize: Style.font.body

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import qs.Commons
+import qs.Commons as Commons
 import "../Commons/FaceCardPainter.js" as Painter
 import "../Commons/FacePlayback.js" as Playback
 import "../Commons/FaceTheme.js" as FaceTheme
@@ -18,13 +19,13 @@ Item {
   property string cardState: "scanning"
   property bool active: true
 
-  property color accent: Color.polkit.accent
-  property color foreground: Color.polkit.text
-  property color errorColor: Color.polkit.textError
+  property color accent: Commons.Color.polkit.accent
+  property color foreground: Commons.Color.polkit.text
+  property color errorColor: Commons.Color.polkit.textError
   // What the card is composited over. Additive light only reads on a dark
   // surface; on a light theme the card paints normally, and its bloom is a
   // coloured halo that needs nearly full opacity to read against the light.
-  property color surface: Color.polkit.background
+  property color surface: Commons.Color.polkit.background
   // The GPU bloom behind the strokes. Off paints exactly the sharp layer.
   property bool glowEnabled: true
   // The software scene graph draws no shader effects, so there the painter
@@ -33,7 +34,7 @@ Item {
 
   // Role colours 3..5 follow the theme: see FaceTheme.js.
   readonly property var roleColors: FaceTheme.roles(String(root.accent), String(root.foreground),
-    String(root.errorColor), Color.palette)
+    String(root.errorColor), Commons.Color.palette)
   readonly property bool darkSurface: FaceTheme.luminance(String(root.surface)) < 0.5
   readonly property var paintPalette: ({
     accent: root.accent, foreground: root.foreground, errorColor: root.errorColor,
