@@ -22,9 +22,3 @@ if ! cmp -s /etc/pacman.conf "$pacman_config"; then
   sudo cp -a /etc/pacman.conf /etc/pacman.conf.bak
   sudo install -m 644 -o root -g root "$pacman_config" /etc/pacman.conf
 fi
-
-# Migrations run after the upgrade. Explicitly select OPR now, including when
-# Arch's installed build has an equal or higher version number.
-if omarchy-pkg-present quickshell; then
-  sudo pacman -S --noconfirm omarchy/quickshell
-fi
