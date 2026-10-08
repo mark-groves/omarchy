@@ -40,9 +40,11 @@ QtObject {
   readonly property int cardSide: 220
 
   // The op level this host paints: 2 adds glow, additive blending and roles
-  // 3..5 (FaceCardPainter.js). Handed to the plugin as a plain number so it
-  // can degrade on an older host.
-  readonly property int opLevel: 2
+  // 3..5 (FaceCardPainter.js); 3 paints the card on a dark glass panel with
+  // every role resolved against it (FaceTheme.glass), so a plugin can design
+  // for lit-on-dark on any theme. Handed to the plugin as a plain number so
+  // it can degrade on an older host.
+  readonly property int opLevel: 3
 
   property var api: null
   property string failure: ""

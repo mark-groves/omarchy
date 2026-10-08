@@ -32,12 +32,20 @@ Item {
   // falls back to faint halos on the sharp layer instead of a bloom.
   readonly property bool gpuEffects: root.GraphicsInfo.api !== GraphicsInfo.Software
 
+  // From op level 3 the card carries its own dark glass panel, so the
+  // instrument is lit on dark on every theme, and a light card no longer
+  // turns its bloom into a haze. The panel and all six roles are resolved
+  // against it from the theme: see FaceTheme.glass.
+  readonly property bool glass: FaceChrome.opLevel >= 3
+  readonly property var glassTheme: FaceTheme.glass(String(root.accent), String(root.foreground),
+    String(root.errorColor), String(Commons.Color.background), Commons.Color.palette)
+
   // Role colours 3..5 follow the theme: see FaceTheme.js.
-  readonly property var roleColors: FaceTheme.roles(String(root.accent), String(root.foreground),
-    String(root.errorColor), Commons.Color.palette)
-  readonly property bool darkSurface: FaceTheme.luminance(String(root.surface)) < 0.5
+  readonly property var roleColors: root.glass ? root.glassTheme.roles
+    : FaceTheme.roles(String(root.accent), String(root.foreground), String(root.errorColor), Commons.Color.palette)
+  readonly property bool darkSurface: root.glass || FaceTheme.luminance(String(root.surface)) < 0.5
   readonly property var paintPalette: ({
-    accent: root.accent, foreground: root.foreground, errorColor: root.errorColor,
+    accent: root.roleColors[0], foreground: root.roleColors[1], errorColor: root.roleColors[2],
     roles: root.roleColors, additive: root.darkSurface,
     glowFallback: root.glowEnabled && !root.gpuEffects
   })
@@ -259,6 +267,21 @@ Item {
   // only chose numbers.
   readonly property real glowScale: 0.5 * root.qualityLevels[root.qualityLevel].sharp
   readonly property bool glowOn: root.painting && root.glowEnabled && root.gpuEffects
+
+  // The glass: the panel colour, a faint sheen toward the top, and an edge
+  // in the panel's own accent-tinted tone.
+  Rectangle {
+    anchors.fill: parent
+    visible: root.glass && root.painting
+    radius: Math.round(root.side * 0.045)
+    border.width: Math.max(1, Math.round(root.side / 220))
+    border.color: root.glassTheme.edge
+    gradient: Gradient {
+      GradientStop { position: 0; color: Qt.tint(root.glassTheme.panel, Qt.alpha(root.glassTheme.edge, 0.55)) }
+      GradientStop { position: 0.45; color: root.glassTheme.panel }
+      GradientStop { position: 1; color: root.glassTheme.panel }
+    }
+  }
 
   // Nothing here is resized while live. A MultiEffect keeps the size its
   // source had when it started, so a smaller bloom source after a quality

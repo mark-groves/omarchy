@@ -160,3 +160,67 @@ function roles(accent, foreground, error, palette) {
     third ? third.hex : rotated(accent, -0.18)
   ]
 }
+
+// WCAG relative luminance and contrast, for lifting colours off the glass.
+function relLum(rgb) {
+  var c = [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255]
+  for (var i = 0; i < 3; i++) c[i] = c[i] <= 0.03928 ? c[i] / 12.92 : Math.pow((c[i] + 0.055) / 1.055, 2.4)
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+function contrast(a, b) {
+  var la = relLum(a), lb = relLum(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+// Raise a colour's lightness, keeping its hue, until it reads against `bg`.
+function liftOver(rgb, bg, target) {
+  var hsl = toHsl(rgb)
+  var out = rgb
+  while (contrast(out, bg) < target && hsl[2] < 0.94) {
+    hsl[2] = Math.min(0.94, hsl[2] + 0.02)
+    out = fromHsl(hsl)
+  }
+  return out
+}
+
+// The dark glass a level-3 card is painted on, and the six roles resolved
+// against it. Every colour comes from the theme: the panel is the theme's
+// darker base (its background on a dark theme, its text colour on a light
+// one) tinted toward the accent and deepened; the ink is its lighter base;
+// the accent, error and palette hues are lifted until they read on the glass.
+// So a light theme gets the same lit-on-dark instrument as a dark one, in its
+// own colours.
+function glass(accent, foreground, error, background, palette) {
+  var a = parseHex(accent) || [128, 128, 128]
+  var f = parseHex(foreground) || [200, 200, 200]
+  var b = parseHex(background) || f
+  var e = parseHex(error) || a
+  var darkBase = relLum(b) <= relLum(f) ? b : f
+  var lightBase = relLum(b) <= relLum(f) ? f : b
+
+  var baseL = toHsl(darkBase)[2]
+  var tinted = toHsl(mixRgb(darkBase, a, 0.14))
+  tinted[1] = Math.min(tinted[1], 0.32)
+  tinted[2] = Math.min(baseL, Math.max(0.05, Math.min(0.1, tinted[2] * 0.8)))
+  var panel = fromHsl(tinted)
+  var edgeHsl = toHsl(mixRgb(darkBase, a, 0.3))
+  edgeHsl[2] = Math.max(0.16, Math.min(0.24, edgeHsl[2]))
+  var edge = fromHsl(edgeHsl)
+
+  var ink = liftOver(lightBase, panel, 11)
+  var lit = liftOver(a, panel, 6)
+  var err = liftOver(e, panel, 5)
+
+  var list = candidates(palette, accent, error)
+  var second = pickDistinct(list, null, 0.06)
+  var third = second ? pickDistinct(list, second.hue, 0.06) : null
+  var s2 = liftOver(parseHex(second ? second.hex : rotated(toHex(lit), 0.42)), panel, 5)
+  var s3 = liftOver(parseHex(third ? third.hex : rotated(toHex(lit), -0.18)), panel, 5)
+
+  return {
+    panel: toHex(panel),
+    edge: toHex(edge),
+    roles: [toHex(lit), toHex(ink), toHex(err), hotFrom(toHex(lit), toHex(ink)), toHex(s2), toHex(s3)]
+  }
+}
