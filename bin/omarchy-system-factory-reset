@@ -400,20 +400,32 @@ reset_limine_config() {
 # overwrites the running system's own. Copy them all, so that a staging that
 # fails before its entry verifies leaves this system booting as it did, and a
 # retry starts again from this system's own entry.
+esp_boot_paths() {
+  printf '%s\n' limine.conf EFI/Linux EFI/limine EFI/BOOT
+}
+
 backup_esp() {
   local esp="$1" backup="$2" path
   install -d "$backup/EFI"
-  for path in limine.conf EFI/Linux EFI/limine EFI/BOOT; do
+  for path in $(esp_boot_paths); do
     if [[ -e $esp/$path ]]; then
       cp -r "$esp/$path" "$backup/$path"
     fi
   done
 }
 
-# Plain cp: FAT keeps no owners, so preserving them would fail. Files the
-# rebuild added are left in place; the restored limine.conf references none.
+# Whatever the rebuild added, such as the UKI of a kernel only the factory
+# snapshot has, goes first: on a nearly full ESP the originals need its space.
+# Plain cp: FAT keeps no owners, so preserving them would fail.
 restore_esp() {
-  local esp="$1" backup="$2" new_id="$3"
+  local esp="$1" backup="$2" new_id="$3" path
+  local -a present
+  mapfile -t present < <(cd "$esp" && find $(esp_boot_paths) 2>/dev/null)
+  for path in "${present[@]}"; do
+    if [[ ! -e $backup/$path ]]; then
+      rm -rf "${esp:?}/$path" || return 1
+    fi
+  done
   cp -r "$backup/." "$esp/" || return 1
   if [[ $new_id =~ ^[0-9a-f]{32}$ ]]; then
     rm -rf "${esp:?}/$new_id"

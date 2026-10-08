@@ -149,7 +149,9 @@ stage_esp() {
     reset_limine_config $root /boot $OLD_ID
     printf 'factory uki\n' >$root/boot/EFI/Linux/omarchy_linux-omarchy.efi
     printf 'factory limine\n' >$root/boot/EFI/limine/limine_x64.efi
-    mkdir -p $root/boot/$NEW_ID
+    printf 'factory-only kernel\n' >$root/boot/EFI/Linux/omarchy_linux-lts.efi
+    mkdir -p $root/boot/EFI/BOOT $root/boot/$NEW_ID
+    printf 'factory fallback\n' >$root/boot/EFI/BOOT/BOOTX64.EFI
     $outcome
   "
 }
@@ -173,7 +175,7 @@ if stage_esp "$root" "log() { return 1; }; fail 'limine.conf hash does not match
   fail "the simulated staging failure aborts the reset"
 fi
 diff -r "$test_tmp/failed-esp-before" "$root/boot" >/dev/null ||
-  fail "a failed staging restores the running system's limine.conf, UKI, bootloader and directories"
+  fail "a failed staging restores the running system's limine.conf, UKI, bootloader and directories, and drops what the rebuild added"
 ! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a restored backup is discarded"
 pass "a failed staging leaves the running system's boot files as they were"
 
