@@ -165,6 +165,7 @@ Item {
   }
 
   function layerPainted(layer) {
+    if (layer === root.canvas && root.painting) root.glassLit = true
     if (layer === root.canvas && layer.inFlightSince > 0) root.notePaintLatency(Date.now() - layer.inFlightSince)
     layer.inFlightSince = 0
     if (layer.pending) root.repaint()
@@ -239,7 +240,12 @@ Item {
     root.lastSwapMs = 0
     if (root.presenting) root.repaint()
   }
+  // The glass lights with the first frame of the instrument, so a slow first
+  // raster never shows an empty panel.
+  property bool glassLit: false
+
   onShownChanged: {
+    if (!root.shown) root.glassLit = false
     if (!root.shown) return
     root.resetQuality()
     console.log("face card shown: scene graph api", root.GraphicsInfo.api, "bloom", root.glowOn ? "gpu" : "off",
@@ -273,6 +279,8 @@ Item {
   Rectangle {
     anchors.fill: parent
     visible: root.glass && root.painting
+    opacity: root.glassLit ? 1 : 0
+    Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
     radius: Math.round(root.side * 0.045)
     border.width: Math.max(1, Math.round(root.side / 220))
     border.color: root.glassTheme.edge
