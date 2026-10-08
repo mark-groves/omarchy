@@ -22,3 +22,7 @@ if ! cmp -s /etc/pacman.conf "$pacman_config"; then
   sudo cp -a /etc/pacman.conf /etc/pacman.conf.bak
   sudo install -m 644 -o root -g root "$pacman_config" /etc/pacman.conf
 fi
+
+# Refresh databases and upgrade against the new repository priority. Run this
+# even when the config is already ordered so a failed upgrade can be retried.
+omarchy-update-system-pkgs
