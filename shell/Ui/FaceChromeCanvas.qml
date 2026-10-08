@@ -118,7 +118,12 @@ Item {
   property real paintLatencyMs: 0
   property int paintSamples: 0
   property int sharpDispatches: 0
-  readonly property real sharpScale: root.qualityLevels[root.qualityLevel].sharp
+  // A Canvas rasterises at its item size, not at the screen's pixel ratio, so
+  // on a HiDPI panel a canvas the size of the card is drawn at 1x and scaled
+  // up, and every hairline and readout goes soft. The sharp layer is sized in
+  // device pixels instead; a quality step still shrinks it from there.
+  readonly property real pixelRatio: Math.max(1, root.Screen.devicePixelRatio || 1)
+  readonly property real sharpScale: root.qualityLevels[root.qualityLevel].sharp * root.pixelRatio
   readonly property int glowEvery: root.qualityLevels[root.qualityLevel].glowEvery
 
   function resetQuality() {
@@ -252,7 +257,7 @@ Item {
   // resolution, blurred on the GPU twice (a tight halo and a wide bloom) and
   // laid under the sharp strokes. Every item here is host-owned; the plugin
   // only chose numbers.
-  readonly property real glowScale: 0.5 * root.sharpScale
+  readonly property real glowScale: 0.5 * root.qualityLevels[root.qualityLevel].sharp
   readonly property bool glowOn: root.painting && root.glowEnabled && root.gpuEffects
 
   // Nothing here is resized while live. A MultiEffect keeps the size its
@@ -261,7 +266,7 @@ Item {
   // past the card. Both layers, and the bloom with them, are rebuilt
   // whenever the card's side or its quality level changes.
   readonly property int side: Math.min(root.width, root.height)
-  readonly property string layerKey: root.side + ":" + root.qualityLevel
+  readonly property string layerKey: root.side + ":" + root.qualityLevel + ":" + root.pixelRatio
   property Canvas canvas: null
   property Canvas glowCanvas: null
 
