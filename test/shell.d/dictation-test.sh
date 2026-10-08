@@ -33,6 +33,17 @@ for backend in voxtype superwhisper; do
 printf '%s %s\n' "${0##*/}" "$*" >> "$DICTATION_LOG"
 if [[ $1 == "status" ]]; then echo "${VOXTYPE_STATUS:-idle}"; exit 0; fi
 if [[ -n ${FAIL_SETUP_STEP:-} && $* == "$FAIL_SETUP_STEP" ]]; then exit 7; fi
+if [[ ${0##*/} == "superwhisper" && $1 == "shortcuts" && ${DICTATION_EXIT:-0} == 0 ]]; then
+  if [[ $2 == "show" ]]; then
+    cat "$SHORTCUT_STATE"
+  elif [[ $2 == "set" ]]; then
+    chord=$4
+    [[ $chord != "none" ]] || chord=""
+    updated=$(jq --arg action "$3" --arg chord "$chord" '.shortcuts[$action] = $chord' "$SHORTCUT_STATE")
+    jq -e '.shortcuts | .hold != "RightAlt" and (.hold != "" or .toggle != "")' <<< "$updated" >/dev/null || exit 1
+    printf '%s\n' "$updated" > "$SHORTCUT_STATE"
+  fi
+fi
 exit "${DICTATION_EXIT:-0}"
 SH
 done
@@ -126,12 +137,19 @@ if omarchy-dictation start 2> "$test_tmp/error"; then fail "invalid backend must
 pass "external adapters follow the same protocol and errors propagate"
 
 printf '%s\n' voxtype > "$config"
+export SHORTCUT_STATE="$test_tmp/shortcuts.json"
+printf '%s\n' '{"shortcuts":{"hold":"RightAlt","toggle":"","cancel":"Escape"}}' > "$SHORTCUT_STATE"
 if SETUP_EXIT=1 omarchy-install-dictation-superwhisper > "$test_tmp/output" 2>&1; then fail "failed installation must fail"; fi
 [[ $(cat "$config") == "voxtype" ]] || fail "failed setup must preserve selection"
 if DICTATION_EXIT=7 omarchy-install-dictation-superwhisper > "$test_tmp/output" 2>&1; then fail "failed shortcut setup must fail"; fi
 [[ $(cat "$config") == "voxtype" ]] || fail "failed shortcuts must preserve selection"
 omarchy-install-dictation-superwhisper
 [[ $(omarchy-default-dictation) == "superwhisper" ]] || fail "installer selects Superwhisper"
+jq -e '.shortcuts | .hold == "" and .toggle == "Alt+Space"' "$SHORTCUT_STATE" >/dev/null || fail "installer repairs conflicting hold-only profiles"
+printf '%s\n' '{"shortcuts":{"hold":"RightAlt","toggle":"RightSuper","cancel":"Escape"}}' > "$SHORTCUT_STATE"
+omarchy-install-dictation-superwhisper
+jq -e '.shortcuts | .hold == "" and .toggle == "Alt+Space"' "$SHORTCUT_STATE" >/dev/null || fail "installer repairs conflicting profiles with an existing toggle"
+omarchy-install-dictation-superwhisper
 pass "Superwhisper installer owns setup and saves selection only after success"
 
 DICTATION_INSTALLED=superwhisper
