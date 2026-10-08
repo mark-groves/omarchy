@@ -171,8 +171,11 @@ cleanup() {
 
   # A reset that failed after touching the ESP, before the factory root took
   # over, puts the running system's boot files back while the ESP is mounted.
+  # The staged root still standing apart is what says the switch hasn't
+  # happened: a signal between the rename and commit_next_boot must not put
+  # the old kernel back under the factory root.
   # errexit still applies in this trap, so nothing here may stop the cleanup.
-  if [[ -n ${esp_restore:-} ]]; then
+  if [[ -n ${esp_restore:-} && -d $TOP_MNT/$NEXT_NAME ]]; then
     if restore_esp "$esp_restore" "$esp_backup" "${esp_new_id:-}"; then
       log "Restored this system's boot files" || true
       rm -rf "$esp_backup" || true

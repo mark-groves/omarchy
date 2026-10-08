@@ -132,12 +132,15 @@ pass "a shared ESP keeps other systems' entries and directories while this entry
 # ------------------------------------------------- failed staging and retry
 
 # Stages against an ESP the way rebuild_next_boot does, with the production
-# cleanup trap armed; $2 is what happens after limine-update rewrote the ESP.
+# cleanup trap armed and the staged root in place; $2 is what happens after
+# limine-update rewrote the ESP.
 stage_esp() {
   local root="$1" outcome="$2"
+  mkdir -p "$root/top/@omarchy-reset-next"
   run_reset_function eval "
     trap cleanup EXIT
-    TOP_MNT=$test_tmp/no-top-mount
+    TOP_MNT=$root/top
+    NEXT_NAME=@omarchy-reset-next
     ESP_MNT=$test_tmp/no-esp-mount
     esp_backup=\$(mktemp -d $test_tmp/esp-backup.XXXXXX)
     backup_esp $root/boot \$esp_backup
@@ -197,6 +200,20 @@ stage_esp "$root" "commit_esp_staging $root/boot $OLD_ID $NEW_ID" ||
   fail "a verified staging hands the ESP over to the new identity"
 ! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a committed backup is discarded"
 pass "a verified staging keeps its changes and discards the backup"
+
+root="$test_tmp/signalled"
+make_root "$root"
+mkdir -p "$root/boot/EFI/limine"
+printf 'running uki\n' >"$root/boot/EFI/Linux/omarchy_linux-omarchy.efi"
+{ omarchy_entry "$OLD_ID"; windows_entry; } >"$root/boot/limine.conf"
+if stage_esp "$root" "mv $root/top/@omarchy-reset-next $root/top/@; kill -TERM \$\$" 2>/dev/null; then
+  fail "the simulated signal stops the reset"
+fi
+[[ $(cat "$root/boot/EFI/Linux/omarchy_linux-omarchy.efi") == "factory uki" ]] &&
+  entry_for "$root/boot/limine.conf" "$NEW_ID" | grep -q '^/+Omarchy$' ||
+  fail "a signal after the root switch leaves the factory root its own boot files"
+! compgen -G "$test_tmp/esp-backup.*" >/dev/null || fail "a backup the switch made obsolete is discarded"
+pass "a signal right after the root switch keeps the factory root's boot files"
 
 # Until the factory root is in place, the running root is still what boots,
 # so a failed unmount or rename must still restore the running system's files.
