@@ -219,12 +219,25 @@ o = {
     return configured
   end,
   bind = function(...) table.insert(bindings, {...}) end,
+  bind_hold = function(keys, _, press, _, release, options)
+    table.insert(bindings, { keys, press, options })
+    table.insert(bindings, { keys, release, options })
+  end,
 }
 dofile(root .. "/default/hypr/bindings/dictation.lua")
 assert(#bindings == 0, "unconfigured dictation leaves application keys available")
 configured = true
 dofile(root .. "/default/hypr/bindings/dictation.lua")
 assert(#bindings == 5, "any configured backend receives the same bindings")
+local function binds(keys, command)
+  for _, binding in ipairs(bindings) do
+    if binding[1] == keys and binding[2] == command then return true end
+  end
+end
+for _, keys in ipairs({ "F9", "ALT + Alt_R" }) do
+  assert(binds(keys, "omarchy-dictation start") and binds(keys, "omarchy-dictation stop"),
+    keys .. " starts dictation on press and stops it on release")
+end
 LUA
 pass "dictation shortcuts require a selection without limiting backend names"
 
