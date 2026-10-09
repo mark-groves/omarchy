@@ -160,6 +160,6 @@ assertDeepEqual(glassLib.glass(latte.accent, latte.foreground, latte.red, latte.
 assert(/opLevel: 3/.test(chromeQml), 'the host paints op level 3')
 assert(/root\.glass \? root\.glassTheme\.roles/.test(canvasQml) && /darkSurface: root\.glass \|\|/.test(canvasQml),
   'on glass the roles and the additive light are resolved against the panel')
-assert(/opacity: root\.glassLit \? 1 : 0/.test(canvasQml) && /layer === root\.canvas && root\.painting\) root\.glassLit = true/.test(canvasQml),
-  'the glass lights with the first painted frame, never as an empty panel')
+assert(/opacity: root\.glassLit \? 1 : 0/.test(canvasQml) && /layer === root\.canvas && root\.painting && root\.shown && root\.side > 0\) root\.glassLit = true/.test(canvasQml),
+  'the glass lights with the first painted frame of a shown, sized card, never as an empty panel')
 JS

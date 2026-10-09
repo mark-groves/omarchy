@@ -165,7 +165,7 @@ Item {
   }
 
   function layerPainted(layer) {
-    if (layer === root.canvas && root.painting) root.glassLit = true
+    if (layer === root.canvas && root.painting && root.shown && root.side > 0) root.glassLit = true
     if (layer === root.canvas && layer.inFlightSince > 0) root.notePaintLatency(Date.now() - layer.inFlightSince)
     layer.inFlightSince = 0
     if (layer.pending) root.repaint()
