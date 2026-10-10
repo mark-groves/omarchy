@@ -145,9 +145,11 @@ omarchy-update
   │  no-update authentication, and invalidate again
   ├─ then update Grok Bot and Cursor products from official releases, each
   │  behind a cold sudo boundary
+  ├─ omarchy-update-boot, with no-update authentication, and invalidate again
+  │    └─ the platform's boot package proves the boot files boot the updated system
   ├─ omarchy-update-stay-awake stop
   │    └─ release the sleep inhibitor and restore shell idle state, if changed
-  └─ offer the unprivileged reboot prompt
+  └─ offer the unprivileged reboot prompt, only when the boot files were verified
 ```
 
 Important behavior:
@@ -155,8 +157,8 @@ Important behavior:
 - Protected update entrypoints require the session's canonical `OMARCHY_PATH` to match their own checkout or the packaged `/usr/bin` entrypoint before selecting commands or the sudo wrapper. This preserves intentionally trusted development checkouts while rejecting a command paired with a different source root. System phases use a fixed command search path; user PATH is restored for hooks and mise.
 - Mixed-trust update entrypoints start Bash in privileged mode, discard `BASH_ENV`, `ENV`, and exported-function records before launching helpers, and reject an ordinary `bash path/to/command` invocation. Run them as executables (normally through the `omarchy` CLI); `/usr/bin/bash -p path/to/command` is the explicit interpreter form. This keeps shell startup injection from replacing the no-update sudo boundary.
 - In dev-link mode, `omarchy update` fast-forwards the active checkout from its configured upstream before changing system packages or running migrations.
-- The update asks for the sudo password once, right after confirmation. It first invalidates any existing timestamp so that prompt always belongs to this update, then a background keepalive refreshes the timestamp every minute so long downloads, migrations, hooks, and mise never outlast it. Everything except AUR, Grok Bot, and Cursor shares that one authorization: package prune, snapshot, stay-awake, keyring, system packages, migrations, orphan removal, service restarts, the post-update hook, and mise. Stay-awake sees `OMARCHY_UPDATE_SUDO_SESSION=1`, uses that authorization non-interactively whatever its stdin is, and leaves it to the update instead of revoking it. The authorization runs a command rather than `sudo -v`, so passwordless sudo still needs no prompt. Standalone commands that keep their own cold boundary, such as `omarchy-refresh-pacman`, still revoke if a post-update hook calls them.
-- AUR builds run third-party PKGBUILD code, so they run after hook/mise and never see the update's authorization. The update stops the keepalive, invalidates the timestamp, and runs yay with the no-update wrapper as its sudo command and its credential loop disabled; an AUR install prompts per command without publishing a reusable timestamp. Official Grok Bot and Cursor product updates follow AUR, each behind the same no-update wrapper and a fresh revocation. The timestamp is invalidated again afterwards and on every exit.
+- The update asks for the sudo password once, right after confirmation. It first invalidates any existing timestamp so that prompt always belongs to this update, then a background keepalive refreshes the timestamp every minute so long downloads, migrations, hooks, and mise never outlast it. Everything except AUR, Grok Bot, Cursor, and the boot check shares that one authorization: package prune, snapshot, stay-awake, keyring, system packages, migrations, orphan removal, service restarts, the post-update hook, and mise. Stay-awake sees `OMARCHY_UPDATE_SUDO_SESSION=1`, uses that authorization non-interactively whatever its stdin is, and leaves it to the update instead of revoking it. The authorization runs a command rather than `sudo -v`, so passwordless sudo still needs no prompt. Standalone commands that keep their own cold boundary, such as `omarchy-refresh-pacman`, still revoke if a post-update hook calls them.
+- AUR builds run third-party PKGBUILD code, so they run after hook/mise and never see the update's authorization. The update stops the keepalive, invalidates the timestamp, and runs yay with the no-update wrapper as its sudo command and its credential loop disabled; an AUR install prompts per command without publishing a reusable timestamp. Official Grok Bot and Cursor product updates follow AUR, each behind the same no-update wrapper and a fresh revocation. The boot check follows them the same way. The timestamp is invalidated again afterwards and on every exit.
 - This lifecycle controls authorization created by the protected workflow. `sudo -N` prevents cache updates but can use an existing valid credential, and `sudo -k` revokes the current session's timestamp. It does not isolate the account from unrelated concurrent authentication in another workflow.
 - Sleep inhibition authenticates before detaching, drops the held command back to the caller, and closes both update lock descriptors before the persistent process starts. Cleanup accepts only caller-owned, mode-0600, single-link state and revalidates the recorded PID, process start time, owner, and random token immediately before every signal.
 - Channel switching establishes the same boundary before dev link/unlink, refresh and package operations. It keeps the wrapper first when changing source roots, carries the original user PATH into update hooks and mise, and checks after each package transaction that the wrapper still exists before any further privileged step, since a transaction can replace the running tree with a release that predates it; when it is gone, or the destination otherwise lacks it, the switch stops after the package switch with instructions to run that release's update from a fresh session rather than letting a bare `sudo` or an updater that authenticates without `--no-update` publish a timestamp. Failed and interrupted channel switches revoke on exit.
@@ -176,6 +178,7 @@ Important behavior:
 - A digest mismatch, a failed download, or a failed apply after a completed resolve is fail-hard and exits 1. Origin is the only Cursor product with a vendor-published digest. The editor and Agent CLI pin the artifact URL (`commitSha` or the version in the path) and do not claim a vendor hash.
 - "Newer than installed" reads a version as a release position followed by a build identity. The Agent CLI and Origin end a version with a build hash (`2026.09.08-6caf4ff`, `2026.09.08-22-50-39-8f6b2f8`), and pacman's `vercmp` takes everything after the last hyphen as a pkgrel and orders it, so builds that share a release position sort by their commit hash and a fresh one can read as older. That hits the Agent CLI on any same-day rebuild, and Origin only when two builds share a second. `vendor_version_newer` drops the trailing hash and asks `vercmp` to order what is left, so a strictly older position stays `current` and never downgrades, while the same position with a different version string means the vendor published a new build and the vendor's build wins.
 - This step does not write Cursor's in-app `update.mode`. That remains a follow-up.
+- The boot check is the [lifecycle dispatch](lifecycle-dispatch.md) operation `update-verify`, a no-op on platforms whose boot chain needs no handling of its own, x86 included: nothing runs and nothing asks for root. It is the last sudo-capable step, after AUR packages and the official Grok Bot and Cursor product updates, so it also covers the initramfs rebuilds AUR triggers; since it follows third-party build code, it authenticates through the no-update wrapper like AUR does, which on a platform that implements it without passwordless sudo is one more prompt. When it fails, the update finishes its remaining steps, then exits non-zero without the reboot prompt: the update is not finished. A machine without its platform's boot package at all predates it: the update warns that its boot files were not verified and finishes. There is no check before the packages change: where `omarchy-hw-platform` can't tell the platform, the update installs its packages, and the update then fails verification, without the reboot prompt.
 
 ## Path 2: direct `sudo pacman -Syu` attempt
 
@@ -284,6 +287,32 @@ Channel switching runs the `pre-refresh-pacman` hook once, during its refresh
 step: cold, behind the no-update wrapper, after the package config is re-synced
 and before the refresh transaction. It does not run if the switch fails earlier.
 
+Every platform has its own pacman.conf and mirrorlist for each channel it
+offers (x86_64 stable, rc and edge; aarch64 edge alone, below), and a channel
+change or install finalization copies them into place whole, the same way on
+every platform (`install/helpers/pacman.sh`); a channel change backs up
+the old pair first.
+x86_64's are `default/pacman/pacman-<channel>.conf` and
+`mirrorlist-<channel>`; Snapdragon and other aarch64 machines use
+`default/pacman/aarch64/`, Omarchy's repository ahead of Arch Linux ARM's, as
+x86_64 puts it ahead of Arch's (migration 1791403252 reorders existing
+machines the same way, and a refresh can then move a package Omarchy also
+publishes to Omarchy's build, downgrading it if that build is older); Apple
+Silicon uses `default/pacman/aarch64-apple/`, which puts Omarchy and Asahi ALARM
+ahead of Arch Linux ARM. Omarchy publishes aarch64 packages on edge alone so
+far, and the `omarchy` and `omarchy-settings` packages there for stable and rc
+are the release line, which has no aarch64 support, so ARM platforms have edge
+templates only: switching an ARM machine to stable or rc would replace its
+runtime with one that cannot run it. Adding a stable or rc template once a
+release supports aarch64 is what opens that channel. A channel change refuses a
+channel without both files for the platform before anything changes. On aarch64,
+`omarchy-channel-set` refuses to link a dev checkout without
+`bin/omarchy-hw-platform` and `install/helpers/pacman.sh`, whose own refresh
+would write the x86_64 templates. `omarchy-reinstall-pkgs` resets to the
+platform's default channel (`omarchy_pacman_default_channel`: stable, or edge on
+aarch64) and installs its default packages; install finalization does the same
+when the install's channel has no templates for the platform.
+
 There is no version file at runtime. `omarchy-version` derives the version from
 `pacman -Q` on whichever package is installed, or reports `dev (<hash>)` for a
 linked checkout, and `omarchy-version-channel` sniffs the mirrorlist and
@@ -303,7 +332,7 @@ scripts.
 | `omarchy-update-status` | Hidden helper that refreshes or clears the shell update indicator after rechecking available updates. | **Keep internal/hidden.** Keeps shell status synchronization out of the main pipeline. |
 | `omarchy-update-confirm` | Gum confirmation copy for `omarchy update`. | **Question.** Could be inlined into `omarchy-update`; separate file only helps keep copy isolated. |
 | `omarchy-update-dev` | Fast-forwards the active dev-linked checkout from its configured upstream; no-ops for package-backed installs. | **Keep.** Runs before package updates so a checkout conflict stops the update before system mutation. |
-| `omarchy-update-keyring` | Ensures Omarchy keyring and Arch keyring are current before the main transaction. | **Keep, but review.** It uses targeted `pacman -Sy` for keyring bootstrapping; acceptable for this special case but should remain tightly scoped. |
+| `omarchy-update-keyring` | Ensures Omarchy keyring and Arch keyring (and Arch Linux ARM keyring on aarch64, where installed) are current before the main transaction. | **Keep, but review.** It uses targeted `pacman -Sy` for keyring bootstrapping; acceptable for this special case but should remain tightly scoped. |
 | `omarchy-update-system-pkgs` | Runs `omarchy-update-pacman -Syu --noconfirm` with `--overwrite '/usr/share/omarchy/*'`, capturing stderr to a report file; on failure it execs `omarchy-update-system-pkgs-when-conflicted`. | **Keep for now.** Small leaf command, clear/testable. |
 | `omarchy-update-system-pkgs-when-conflicted` | Hidden conflict handler: quarantines unowned conflicting files under `/var/lib/omarchy/replaced`, retries the upgrade once, restores files the upgrade didn't claim, and hands package-vs-package conflicts to an interactive pacman run (never under `-y`). | **Keep internal/hidden.** Keeps conflict recovery out of the happy path. |
 | `omarchy-update-pkg-prune` | Trims the pacman cache to two versions per package (`paccache -rk2`) before the snapshot, keeping the offline downgrade path while capping snapshot growth. | **Keep internal/hidden.** |
@@ -324,6 +353,7 @@ scripts.
 | `omarchy-update-origin` | If Omarchy's Origin layout is present, parses `downloads.cursor.com/origin/install.sh` as text and verifies the baked `sha=` before install. | **Keep.** Only Cursor product with a vendor-published digest. |
 | `omarchy-update-orphan-pkgs` | Lists orphans and prompts before removal unless passed `-y`, as the update pipeline does; standalone noninteractive mode only reports. | **Keep for now.** Automates cleanup during updates and supports standalone review. |
 | `omarchy-update-analyze-logs` | Scans `/tmp/omarchy-update.log` for known failure patterns, currently initramfs generation. | **Keep/expand.** Useful safety net; should grow only for high-signal checks. |
+| `omarchy-update-boot` | Hidden helper that runs the platform's `update-verify` lifecycle operation through `omarchy-lifecycle-dispatch`, with `sudo` only when the platform implements it. | **Keep internal/hidden.** Keeps platform boot checks out of the pipeline and stubbable in tests. |
 | `omarchy-update-restart` | Restarts components selected by `restart-*-required` markers, always restarts the shell, and prompts for reboot after kernel/Hyprland updates. Internal phase flags let the update finish sudo-capable restarts before user hooks and defer only the unprivileged reboot prompt. | **Keep.** Important final step; may eventually include service-restart checks. |
 | `omarchy-update-firmware` | Manual firmware update command using fwupd. Not part of the normal update pipeline. | **Keep separate.** Firmware is not a routine system update step. |
 | `omarchy-update-time` | Restarts `systemd-timesyncd`. | **Question.** Not really an update command. Consider renaming/moving under system/time maintenance. |

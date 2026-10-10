@@ -18,6 +18,7 @@ steps=(
   omarchy-snapshot
   omarchy-update-stay-awake
   omarchy-update-dev
+  omarchy-update-boot
   omarchy-update-keyring
   omarchy-update-system-pkgs
   omarchy-migrate
@@ -83,6 +84,7 @@ expected_steps() {
     omarchy-update-aur-pkgs \
     omarchy-update-grok-bot \
     omarchy-update-cursor \
+    omarchy-update-boot \
     omarchy-update-stay-awake \
     omarchy-update-restart
 }
