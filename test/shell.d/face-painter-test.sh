@@ -140,4 +140,26 @@ const colorQml = fs.readFileSync(path.join(root, 'shell/Commons/Color.qml'), 'ut
 assert(/palette = named/.test(colorQml), 'a theme load replaces the palette whole, so bindings re-evaluate')
 const chromeQml = fs.readFileSync(path.join(root, 'shell/Commons/FaceChrome.qml'), 'utf8')
 assert(/host:\s*root\.opLevel/.test(chromeQml), 'the plugin is told the op level as a number')
+
+// Op level 3: the card carries its own dark glass, resolved from the theme.
+const glassLib = loadLibrary('shell/Commons/FaceTheme.js', ['glass', 'contrast', 'parseHex', 'relLum'])
+const latte = { background: '#eff1f5', foreground: '#4c4f69', accent: '#1e66f5', red: '#d20f39', yellow: '#df8e1d', magenta: '#ea76cb', green: '#40a02b' }
+const light = glassLib.glass(latte.accent, latte.foreground, latte.red, latte.background, latte)
+const dark = glassLib.glass('#88c0d0', '#eceff4', '#bf616a', '#2e3440', nord)
+for (const [name, g] of [['a light theme', light], ['a dark theme', dark]]) {
+  const panel = glassLib.parseHex(g.panel)
+  assert(glassLib.relLum(panel) < 0.02, name + ' gets a dark glass panel: ' + g.panel)
+  assert(glassLib.contrast(glassLib.parseHex(g.roles[1]), panel) >= 11, name + ': ink reads on the glass')
+  for (const i of [0, 2, 4, 5]) assert(glassLib.contrast(glassLib.parseHex(g.roles[i]), panel) >= 4.5, name + ': role ' + i + ' reads on the glass')
+  assert(g.roles.length === 6 && g.roles.every(c => /^#[0-9a-f]{6}$/.test(c)), name + ': six role colours')
+}
+assert(glassLib.relLum(glassLib.parseHex(dark.panel)) <= glassLib.relLum(glassLib.parseHex('#2e3440')), 'the glass is never lighter than a dark theme background')
+const latte2 = glassLib.glass('#ea76cb', latte.foreground, latte.red, latte.background, latte)
+assert(latte2.panel !== light.panel && latte2.roles[0] !== light.roles[0], 'the glass follows the theme accent')
+assertDeepEqual(glassLib.glass(latte.accent, latte.foreground, latte.red, latte.background, latte), light, 'glass derivation is deterministic')
+assert(/opLevel: 3/.test(chromeQml), 'the host paints op level 3')
+assert(/root\.glass \? root\.glassTheme\.roles/.test(canvasQml) && /darkSurface: root\.glass \|\|/.test(canvasQml),
+  'on glass the roles and the additive light are resolved against the panel')
+assert(/opacity: root\.glassLit \? 1 : 0/.test(canvasQml) && /layer === root\.canvas && root\.painting && root\.shown && root\.side > 0\) root\.glassLit = true/.test(canvasQml),
+  'the glass lights with the first painted frame of a shown, sized card, never as an empty panel')
 JS

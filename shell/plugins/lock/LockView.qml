@@ -189,10 +189,10 @@ Item {
         presentEpoch: root.lockPresentEpoch
         active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
         onResultPlayed: root.faceResultPlayed()
-        accent: Color.lock.borderActive
-        foreground: Color.lock.text
-        errorColor: Color.lock.textError
-        surface: Color.lock.background
+        accent: Commons.Color.lock.borderActive
+        foreground: Commons.Color.lock.text
+        errorColor: Commons.Color.lock.textError
+        surface: Commons.Color.lock.background
       }
 
       Text {
@@ -201,7 +201,7 @@ Item {
         text: root.faceState === "notRecognized"
           ? "Face not recognized"
           : (root.faceState === "recognized" ? "Face recognized" : "Look at the camera")
-        color: root.faceState === "notRecognized" ? Color.lock.textError : Color.lock.text
+        color: root.faceState === "notRecognized" ? Commons.Color.lock.textError : Commons.Color.lock.text
         opacity: 0.86
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -213,7 +213,7 @@ Item {
         text: root.faceState === "notRecognized" ? "Type your password"
           : (root.faceState === "scanning" ? "or type your password" : "")
         visible: text !== ""
-        color: Color.lock.text
+        color: Commons.Color.lock.text
         opacity: 0.44
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
@@ -331,7 +331,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: root.faceConfigured && !root.fingerprintConfigured && !root.faceCardPainting
         text: "󰈈"
-        color: Color.lock.placeholder
+        color: Commons.Color.lock.placeholder
         font.family: Style.font.family
         font.pixelSize: Math.round(root.fieldFontSize * 1.1)
         horizontalAlignment: Text.AlignHCenter
