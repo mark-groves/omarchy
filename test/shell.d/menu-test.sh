@@ -325,6 +325,7 @@ assertDeepEqual(
   [
     'remove.package',
     'remove.ai',
+    'remove.dictation',
     'remove.service',
     'remove.development',
     'remove.theme',
@@ -336,11 +337,18 @@ assertDeepEqual(
     'remove.preinstalls',
     'remove.security'
   ],
-  'menu orders Remove categories like their Install counterparts, followed by Remove-only categories'
+  'menu keeps the Remove category order'
 )
 assert(
   defaultById['setup.security.passwordless-sudo'].action.includes('omarchy-sudo-passwordless'),
   'menu places Passwordless Sudo under Setup > Security'
+)
+assert(
+  defaultById['setup.security.usb-authorization'].action.includes('omarchy-setup-security-usb-authorization')
+    && defaultById['remove.security.usb-authorization'].action.includes('omarchy-remove-security-usb-authorization')
+    && defaultById['setup.security.usb-authorization-boot'].action.includes('omarchy-setup-security-usb-authorization --boot')
+    && defaultById['remove.security.usb-authorization-boot'].action.includes('omarchy-remove-security-usb-authorization --boot-only'),
+  'menu can enable and remove USB device authorization under Security'
 )
 assert(
   !defaultById['trigger.toggle.direct-boot'] && !defaultById['trigger.toggle.passwordless-sudo'],
