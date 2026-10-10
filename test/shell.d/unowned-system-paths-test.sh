@@ -43,6 +43,11 @@ allowed = {
   # upgrade carrying the handler is the one that would hit the conflict, and the
   # handler only helps once it is on disk. Package it the release after.
   "/usr/lib/chromium/initial_preferences",
+  # USB and Thunderbolt approval copy their polkit actions from default/polkit
+  # when that feature is set up. The action exists only for that setup; the
+  # two files are the whole exception.
+  "/usr/share/polkit-1/actions/org.omarchy.usb.policy",
+  "/usr/share/polkit-1/actions/org.omarchy.thunderbolt.policy",
 }
 
 # One-time 3.x upgrade. It runs before this rule existed and cannot be made to
