@@ -402,7 +402,9 @@ var GUARD_READERS = [
   "omarchy-default-editor",
   "omarchy-default-terminal",
   "omarchy-default-dictation",
-  "omarchy-dns"
+  "omarchy-dns",
+  "omarchy-hyprland-corners",
+  "omarchy-hyprland-workspace-layout-default"
 ]
 
 // Package and command presence account for most of what the guards ask, and
