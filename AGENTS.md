@@ -113,6 +113,10 @@ Commands installed by Omarchy's default package set are runtime invariants. Invo
 
 Exceptions are allowed for migration and package-helper scripts where the helper may not be available yet, where the helper itself is being implemented, or where direct package-manager behavior is required.
 
+# Background Work
+
+- Long-running code (the shell, daemons, watchers) reacts to events instead of polling with a timer. Polling is the last resort, for state with no change signal; [`agents/skills/shell-dev.md`](agents/skills/shell-dev.md) lists the event sources and the push-refresh pattern.
+
 # Menu
 
 - The menu definition lives in `default/omarchy/omarchy-menu.jsonc`;
