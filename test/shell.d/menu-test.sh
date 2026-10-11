@@ -376,9 +376,22 @@ assertEqual(
   'omarchy-bar transparent toggle',
   'menu exposes Menu Bar transparency as a toggle'
 )
+const triggerIds = triggerItems.map(item => item.id)
+const appearanceLabels = ['Menu Bar', 'Battery Percentage', 'Workspace Layout', 'Window Gaps', 'Animations', '1-Window Ratio']
+assertEqual(triggerIds.indexOf('trigger.appearance'), triggerIds.indexOf('trigger.toggle') + 1, 'menu places Appearance right after Toggle')
+assertDeepEqual(
+  defaultItems.filter(item => item.parent === 'trigger.appearance').map(item => item.label),
+  appearanceLabels,
+  'menu gathers the look of the desktop under Trigger > Appearance'
+)
+assert(
+  !defaultItems.some(item => item.parent === 'trigger.toggle' && appearanceLabels.includes(item.label)),
+  'menu leaves the appearance entries out of Trigger > Toggle'
+)
+assertEqual(triggerIds.indexOf('trigger.clipboard-history'), triggerIds.indexOf('trigger.emoji') + 1, 'menu places Clipboard History right after Emoji')
 assert(
   !defaultItems.some(item => item.id.startsWith('style.background-intro'))
-    && defaultById['trigger.toggle.animations'].action === 'omarchy-toggle-animations',
+    && defaultById['trigger.appearance.animations'].action === 'omarchy-toggle-animations',
   'menu uses the existing animations toggle without separate background intro controls'
 )
 assertDeepEqual(
