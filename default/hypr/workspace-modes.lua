@@ -287,9 +287,9 @@ local function theme_colors()
   }
 end
 
--- Titlebars come from omarchy-hyprland-titlebars. Hyprland loads a plugin only
--- while the config asks for it, and unloads it at the first reload that does
--- not, so asking only while something floats keeps it out of tiling sessions.
+-- Titlebars come from omarchy-hyprland-titlebars, loaded only while something
+-- floats. Hyprland keeps a plugin loaded after the config stops asking for it,
+-- but resets its options, and the plugin draws nothing until enabled here.
 -- The plugin reloads the config once it is in, which is the pass that finds its
 -- options here.
 local function titlebars()
