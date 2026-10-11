@@ -81,6 +81,7 @@ for command in \
   omarchy-update-grok-bot \
   omarchy-update-cursor \
   omarchy-update-orphan-pkgs \
+  omarchy-update-boot \
   omarchy-hook \
   omarchy-update-analyze-logs \
   omarchy-shell \
