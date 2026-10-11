@@ -365,7 +365,7 @@ assert(
 )
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar').map(item => item.label),
-  ['Hide Bar', 'Show Bar', 'Position Bar', 'Transparent Bar', 'Opaque Bar'],
+  ['Hide Bar', 'Show Bar', 'Position Bar', 'Transparent Bar', 'Opaque Bar', 'Indicators'],
   'menu gathers the Menu Bar under Trigger > Appearance'
 )
 assert(
@@ -391,12 +391,17 @@ assert(
   'menu offers Transparent Bar while the bar is opaque and Opaque Bar while it is transparent'
 )
 assertDeepEqual(
+  defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.indicators').map(item => item.label),
+  ['Battery Percentage'],
+  'menu gathers bar indicator options under Menu Bar > Indicators'
+)
+assertDeepEqual(
   ['top', 'bottom', 'left', 'right'].map(position => defaultById[`trigger.appearance.top-bar.position.${position}`].label),
   ['Top Bar', 'Bottom Bar', 'Left Bar', 'Right Bar'],
   'menu names each position after the bar'
 )
 const triggerIds = triggerItems.map(item => item.id)
-const appearanceLabels = ['Animations', 'Menu Bar', 'Battery Percentage', 'Window Gaps', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
+const appearanceLabels = ['Animations', 'Menu Bar', 'Window Gaps', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
 assertEqual(triggerIds.indexOf('trigger.appearance'), triggerIds.indexOf('trigger.toggle') + 1, 'menu places Appearance right after Toggle')
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance').map(item => item.label),
