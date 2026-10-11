@@ -194,8 +194,8 @@ assert(
 const triggerItems = defaultItems.filter(item => item.parent === 'trigger')
 assertEqual(
   triggerItems[0].id,
-  'trigger.emoji',
-  'menu lists Emoji first under Trigger'
+  'trigger.toggle',
+  'menu lists Toggle first under Trigger'
 )
 assertEqual(
   defaultById['trigger.emoji'].action,
@@ -363,21 +363,40 @@ assert(
   !defaultById['trigger.toggle.direct-boot'] && !defaultById['trigger.toggle.passwordless-sudo'],
   'menu removes the relocated toggles from Trigger > Toggle'
 )
+assertDeepEqual(
+  defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar').map(item => item.label),
+  ['Hide Bar', 'Show Bar', 'Position Bar', 'Transparent Bar', 'Opaque Bar'],
+  'menu gathers the Menu Bar under Trigger > Appearance'
+)
 assert(
-  defaultById['style.bar.position'].kind === 'menu',
+  defaultById['trigger.appearance.top-bar.hide'].when === '! omarchy-toggle-enabled bar-off'
+    && defaultById['trigger.appearance.top-bar.show'].when === 'omarchy-toggle-enabled bar-off'
+    && defaultById['trigger.appearance.top-bar.hide'].action === 'omarchy-toggle-bar'
+    && defaultById['trigger.appearance.top-bar.show'].action === 'omarchy-toggle-bar',
+  'menu offers Hide while the Menu Bar shows and Show while it is hidden'
+)
+assert(!defaultItems.some(item => item.id.startsWith('style.bar')), 'menu no longer keeps the Menu Bar under Style')
+assert(
+  defaultById['trigger.appearance.top-bar.position'].kind === 'menu',
   'menu groups Menu Bar positions in a submenu'
 )
 assert(
-  ['top', 'bottom', 'left', 'right'].every(position => defaultById[`style.bar.position.${position}`].action === `omarchy-bar position ${position}`),
+  ['top', 'bottom', 'left', 'right'].every(position => defaultById[`trigger.appearance.top-bar.position.${position}`].action === `omarchy-bar position ${position}`),
   'menu lists all Menu Bar positions under Position'
 )
-assertEqual(
-  defaultById['style.bar.transparency'].action,
-  'omarchy-bar transparent toggle',
-  'menu exposes Menu Bar transparency as a toggle'
+assert(
+  defaultById['trigger.appearance.top-bar.transparent'].action === 'omarchy-bar transparent true'
+    && defaultById['trigger.appearance.top-bar.opaque'].action === 'omarchy-bar transparent false'
+    && defaultById['trigger.appearance.top-bar.transparent'].when === '! ' + defaultById['trigger.appearance.top-bar.opaque'].when,
+  'menu offers Transparent Bar while the bar is opaque and Opaque Bar while it is transparent'
+)
+assertDeepEqual(
+  ['top', 'bottom', 'left', 'right'].map(position => defaultById[`trigger.appearance.top-bar.position.${position}`].label),
+  ['Top Bar', 'Bottom Bar', 'Left Bar', 'Right Bar'],
+  'menu names each position after the bar'
 )
 const triggerIds = triggerItems.map(item => item.id)
-const appearanceLabels = ['Menu Bar', 'Battery Percentage', 'Workspace Layout', 'Window Gaps', 'Animations', '1-Window Ratio']
+const appearanceLabels = ['Animations', 'Menu Bar', 'Battery Percentage', 'Window Gaps', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
 assertEqual(triggerIds.indexOf('trigger.appearance'), triggerIds.indexOf('trigger.toggle') + 1, 'menu places Appearance right after Toggle')
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance').map(item => item.label),
