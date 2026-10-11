@@ -393,6 +393,9 @@ function displayRow(items, itemOrder, checkedResults, disabledResults, entry, de
 // cached while one expression runs lives in that subshell only, so a lazy
 // memo never survives to the expression after it.
 var GUARD_READERS = [
+  "omarchy-bar get omarchy.clock format",
+  "omarchy-bar get omarchy.clock verticalFormat",
+  "omarchy-bar position",
   "omarchy-channel-current",
   "omarchy-default-agent",
   "omarchy-default-browser",

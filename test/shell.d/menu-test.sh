@@ -392,8 +392,20 @@ assert(
 )
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.indicators').map(item => item.label),
-  ['Battery Percentage'],
+  ['Battery Percentage', 'Clock'],
   'menu gathers bar indicator options under Menu Bar > Indicators'
+)
+const clockModel = requireFromRoot('shell/plugins/panels/clock/Model.js')
+const clockRows = defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.indicators.clock')
+// Each row hands bash its format, so ask bash what it hands over.
+const clockRowFormats = key => clockRows
+  .filter(item => item.action.startsWith(`omarchy-bar set omarchy.clock ${key} `))
+  .map(item => require('child_process').execFileSync('bash', ['-c', item.action.replace(`omarchy-bar set omarchy.clock ${key} `, 'printf %s ')], { encoding: 'utf8' }))
+assertDeepEqual(clockRowFormats('format'), clockModel.clockFormats(false), 'menu spells out every horizontal clock format')
+assertDeepEqual(clockRowFormats('verticalFormat'), clockModel.clockFormats(true), 'menu spells out every vertical clock format')
+assert(
+  clockRows.every(item => item.checked && item.checked.includes('$(omarchy-bar get omarchy.clock ') && item.when.includes('$(omarchy-bar position)')),
+  'menu checks the current clock format and offers only the formats for the bar orientation'
 )
 assertDeepEqual(
   ['top', 'bottom', 'left', 'right'].map(position => defaultById[`trigger.appearance.top-bar.position.${position}`].label),

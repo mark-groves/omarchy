@@ -2,7 +2,7 @@
 
 # omarchy:summary=Configure the bar and its widget layout
 # omarchy:group=bar
-# omarchy:args=use <id> | reset | defaults | position <top|bottom|left|right> | transparent <true|false|toggle> | put <id> [placement] | move <id> [placement] | set <id> <key> <value> [--json] [placement]
+# omarchy:args=use <id> | reset | defaults | position [top|bottom|left|right] | transparent <true|false|toggle> | put <id> [placement] | move <id> [placement] | set <id> <key> <value> [--json] [placement] | get <id> <key>
 # omarchy:examples=omarchy bar use local.neon-bar | omarchy bar put omarchy.keyboard-layout --after omarchy.clock | omarchy bar move omarchy.clock --section center --index 0 | omarchy bar set omarchy.clock format HH:mm
 
 set -euo pipefail
@@ -16,13 +16,15 @@ Usage: omarchy bar <command> [args...]
   use <id>                             Use a bar option as the active bar
   reset                                Return to the built-in Omarchy bar
   defaults                             Restore the default bar and service widgets
-  position <top|bottom|left|right>     Bar position
+  position [top|bottom|left|right]     Bar position; prints the current one
+                                       when given none
   transparent <true|false|toggle>      Bar transparency
   put <id> [placement]                 Put a widget on the bar, leaving one
                                        that is already there where it is
   move <id> [placement]                Move a widget within or between sections
   set <id> <key> <value> [--json] [placement]
                                        Set a per-widget option
+  get <id> <key>                       Print a per-widget option
 
 Placement:
   --section <left|center|right>        Target section
@@ -196,8 +198,12 @@ cmd_defaults() {
 }
 
 cmd_position() {
-  local position="${1:-}"
-  [[ -n $position ]] || fail "position is required"
+  if (( $# == 0 )); then
+    jq -r '.bar.position // "top"' "$(source_file)"
+    return
+  fi
+
+  local position="$1"
   (( $# == 1 )) || fail "position takes a single value"
   [[ $position =~ ^(top|bottom|left|right)$ ]] || fail "position must be top, bottom, left, or right"
   commit "$NORMALIZE | .bar.position = \$position" --arg position "$position"
@@ -363,6 +369,21 @@ cmd_set() {
   echo "Set $key on $id"
 }
 
+# Prints the option from the first instance of the widget on the bar, raw for a
+# string and as JSON otherwise, and fails when no instance sets it.
+cmd_get() {
+  local id="${1:-}"
+  local key="${2:-}"
+  [[ -n $id ]] || fail "get requires a widget id"
+  [[ -n $key ]] || fail "get requires a setting key"
+  (( $# == 2 )) || fail "get takes a widget id and a setting key"
+
+  jq -e -r --arg id "$id" --arg key "$key" '
+    first(.bar.layout[]?[]? | select(.id == $id) | .[$key] | select(. != null))
+    | if type == "string" then . else tojson end
+  ' "$(source_file)" 2>/dev/null || exit 1
+}
+
 # --------------------------------------------------------------------- dispatch
 
 command="${1:-}"
@@ -393,6 +414,9 @@ case "$command" in
     ;;
   set)
     cmd_set "$@"
+    ;;
+  get)
+    cmd_get "$@"
     ;;
   -h | --help | help | "")
     usage
