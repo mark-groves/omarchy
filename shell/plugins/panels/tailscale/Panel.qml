@@ -385,8 +385,9 @@ Panel {
     iconComponent: Component {
       Item {
         TailscaleIcon {
-          anchors.centerIn: parent
-          iconSize: Style.space(11)
+          x: (parent.width - width) / 2
+          y: (parent.height - height) / 2
+          iconSize: button.iconSize
           color: root.barIconColor
           badgeColor: root.urgent
           crossed: !tailscale.active && !tailscale.needsLogin
