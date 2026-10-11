@@ -119,6 +119,9 @@ grep -Fxq "owe: intro --start first-frame --refresh $state/theme/backgrounds/int
 [[ $(readlink "$state/background") == "$state/theme/backgrounds/2-road.webp" ]] || fail "the remembered background is selected"
 ! grep -qE '^shell: background (prepare|themeTransition)' "$log" || fail "an intro replaces the normal still transition"
 [[ $(<"$home/.local/state/omarchy/background-intro.session-id") == already-consumed ]] || fail "a theme switch leaves login consumption unchanged"
+# The shell holds the old theme's still, whose path the swap deleted, and loads
+# it again when OWE hands the desktop back, so it gets the new one either way.
+wait_command "^shell: background setInstant $state/theme/backgrounds/2-road.webp\$"
 pass "switching themes plays the matching intro for the remembered background"
 
 set_theme beta
@@ -176,7 +179,12 @@ wait_command '^owe: intro '
 [[ ! -f $gates/premature-swap ]] || fail "the outgoing fade and cover settle before replacing the active theme"
 pass "rapid switches present the outgoing video cover before replacing its still"
 
-wait_command '^hypr-reload$'
+# Earlier switches finish in the background, so the next one waits for them,
+# or a late reload of theirs reads as one during its intro.
+for attempt in {1..250}; do
+  pgrep -f "^/bin/bash $ROOT/bin/omarchy-theme-set (alpha|beta)\$" >/dev/null || break
+  sleep 0.02
+done
 release="$test_tmp/reload-release"
 TEST_INTRO_PID="$test_tmp/intro.pid" TEST_RELEASE="$release" set_theme alpha
 wait_command '^owe: intro '
