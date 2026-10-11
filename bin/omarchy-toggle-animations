@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Toggle animations, transparency and other effects that are slow without a GPU
+# omarchy:summary=Toggle animations, blur and shadows, which are slow without a GPU
 # omarchy:args=[toggle|on|off]
 # omarchy:examples=omarchy toggle animations | omarchy toggle animations off | omarchy toggle animations on
 

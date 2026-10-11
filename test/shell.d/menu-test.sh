@@ -365,7 +365,7 @@ assert(
 )
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar').map(item => item.label),
-  ['Hide Bar', 'Show Bar', 'Position Bar', 'Transparent Bar', 'Opaque Bar', 'Indicators'],
+  ['Hide Bar', 'Show Bar', 'Position Bar', 'Bar Background', 'Bar Indicators'],
   'menu gathers the Menu Bar under Trigger > Appearance'
 )
 assert(
@@ -384,16 +384,43 @@ assert(
   ['top', 'bottom', 'left', 'right'].every(position => defaultById[`trigger.appearance.top-bar.position.${position}`].action === `omarchy-bar position ${position}`),
   'menu lists all Menu Bar positions under Position'
 )
-assert(
-  defaultById['trigger.appearance.top-bar.transparent'].action === 'omarchy-bar transparent true'
-    && defaultById['trigger.appearance.top-bar.opaque'].action === 'omarchy-bar transparent false'
-    && defaultById['trigger.appearance.top-bar.transparent'].when === '! ' + defaultById['trigger.appearance.top-bar.opaque'].when,
-  'menu offers Transparent Bar while the bar is opaque and Opaque Bar while it is transparent'
+assertDeepEqual(
+  defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.background').map(item => [item.label, item.action]),
+  [
+    ['Opaque Bar', 'omarchy-bar background opaque'],
+    ['Glassy Bar', 'omarchy-bar background glassy'],
+    ['Clear Bar', 'omarchy-bar background none']
+  ],
+  'menu picks the bar background from Menu Bar > Bar Background'
 )
+// Exactly the bar's current background is checked. Ask bash, against a
+// shell.json in each state, which rows it checks.
+{
+  const os = require('os')
+  const { execFileSync } = require('child_process')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'menu-bar-background-'))
+  fs.mkdirSync(path.join(home, '.config/omarchy'), { recursive: true })
+  const checked = bar => {
+    fs.writeFileSync(path.join(home, '.config/omarchy/shell.json'), JSON.stringify({ bar }))
+    return ['opaque', 'glassy', 'clear'].filter(look => {
+      try {
+        execFileSync('bash', ['-c', defaultById[`trigger.appearance.top-bar.background.${look}`].checked], { env: { ...process.env, HOME: home, OMARCHY_PATH: root, PATH: `${root}/bin:${process.env.PATH}` } })
+        return true
+      } catch (e) {
+        return false
+      }
+    })
+  }
+  assertDeepEqual(checked({}), ['opaque'], 'menu checks Opaque Bar while the bar is opaque')
+  assertDeepEqual(checked({ background: 'glassy' }), ['glassy'], 'menu checks Glassy Bar while the bar is glassy')
+  assertDeepEqual(checked({ background: 'none' }), ['clear'], 'menu checks Clear Bar while the bar has no background')
+  assertDeepEqual(checked({ transparent: true }), ['clear'], 'menu checks Clear Bar for a bar made transparent before backgrounds')
+  fs.rmSync(home, { recursive: true, force: true })
+}
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.indicators').map(item => item.label),
   ['Battery Percentage', 'Clock'],
-  'menu gathers bar indicator options under Menu Bar > Indicators'
+  'menu gathers bar indicator options under Menu Bar > Bar Indicators'
 )
 const clockModel = requireFromRoot('shell/plugins/panels/clock/Model.js')
 const clockRows = defaultItems.filter(item => item.parent === 'trigger.appearance.top-bar.indicators.clock')
@@ -417,8 +444,17 @@ assertDeepEqual(
   [['Theme Corners', 'omarchy-hyprland-corners theme'], ['Sharp Corners', 'omarchy-hyprland-corners sharp'], ['Rounded Corners', 'omarchy-hyprland-corners rounded']],
   'menu picks window corners from Appearance > Window Corners'
 )
+assertDeepEqual(
+  defaultItems.filter(item => item.parent === 'trigger.appearance.window-transparency').map(item => [item.label, item.action]),
+  [
+    ['Opaque Windows', 'omarchy-hyprland-window-transparency opaque'],
+    ['Transparent Windows', 'omarchy-hyprland-window-transparency transparent'],
+    ['Glassy Windows', 'omarchy-hyprland-window-transparency glassy']
+  ],
+  'menu picks window transparency from Appearance > Window Transparency'
+)
 const triggerIds = triggerItems.map(item => item.id)
-const appearanceLabels = ['Animations', 'Menu Bar', 'Window Gaps', 'Window Corners', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
+const appearanceLabels = ['Animations', 'Menu Bar', 'Window Gaps', 'Window Corners', 'Window Transparency', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
 assertEqual(triggerIds.indexOf('trigger.toggle'), triggerIds.indexOf('trigger.appearance') + 1, 'menu places Toggle right after Appearance')
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance').map(item => item.label),

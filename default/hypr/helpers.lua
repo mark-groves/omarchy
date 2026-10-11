@@ -281,7 +281,8 @@ function o.window(match, rules)
   hl.window_rule(rules)
 end
 
--- Opt a window in to Omarchy's standard active/inactive transparency.
+-- Opt a window in to Omarchy's standard active/inactive transparency. The tag
+-- lets Appearance > Window Transparency turn these windows opaque or glassy.
 function o.transparent_window(match, opacity)
-  o.window(match, { opacity = opacity or "0.985 0.96" })
+  o.window(match, { opacity = opacity or "0.985 0.96", tag = "+transparent-window" })
 end

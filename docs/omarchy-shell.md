@@ -96,8 +96,8 @@ You can still install by hand: drop a plugin into
 `~/.config/omarchy/plugins/<id>/`, run `omarchy-shell shell rescanPlugins`, then
 `omarchy plugin enable <id>`. A bar widget starts in its declared default
 section; enabling a full bar replaces the one in use. `omarchy bar` drives the
-bar from the CLI — `use | reset | defaults | position | transparent | put |
-move | set`, with placement flags such as `--section` and `--index`.
+bar from the CLI — `use | reset | defaults | position | background | put |
+move | set | get`, with placement flags such as `--section` and `--index`.
 The lower-level IPC methods remain available through `omarchy-shell shell ...`.
 
 ## Elsewhen
@@ -123,7 +123,7 @@ or `omarchy.power`. There is no `bar` target.
 | `rescanPlugins`                       | re-walk plugin dirs and hot-reload plugin code |
 | `reloadConfig`                        | reload shell.json               |
 | `applyTheme <colorsB64> <shellB64>`   | push theme colors + shell.toml  |
-| `toggleBarTransparency`               | flip the bar background between solid and transparent |
+| `toggleBarTransparency`               | cycle the bar background from clear to glassy to opaque |
 | `cycleInput <next\|back>`             | switch to the next or previous input method or layout (Super+I, Super+Shift+I); `not running` without the input reader |
 | `setPluginEnabled <id> <"true"\|…>`   | flip enabled bit (`ok` / `unknown`) |
 | `enablePlugin <id> <placementJson>`   | enable and place in one mutation |
@@ -150,7 +150,7 @@ string on a miss.
   "bar": {
     "id": "omarchy.bar",
     "position": "top",
-    "transparent": false,
+    "background": "opaque",
     "centerAnchor": "omarchy.clock",
     "layout": {
       "left":   [ { "id": "omarchy.menu" } ],
