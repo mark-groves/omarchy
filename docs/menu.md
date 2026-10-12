@@ -71,7 +71,12 @@ describes — which is why the batch works hard to be fast:
 
 - Package and command presence (`omarchy-pkg-present` and friends) are
   answered in-process from one `pacman -Q` snapshot instead of a fork per
-  row. The snapshot resolves provides too, so gvim answers for vim.
+  row. The snapshot resolves provides too, so gvim answers for vim. It is
+  stored in `$XDG_RUNTIME_DIR/omarchy-menu-packages`, stamped with the
+  pacman local database directory (under `pacman-conf DBPath`), and rebuilt by the first batch after any
+  install, removal, or upgrade moves that stamp; a build that overlapped a
+  transaction (`db.lck`) or whose queries failed is used once and never
+  stored.
 - Commands that several rows read a value from — every Defaults > Browser row
   compares against `$(omarchy-default-browser)` — run once, with the captured
   answer substituted into each expression. The reader list is
