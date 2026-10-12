@@ -82,7 +82,12 @@ describes — which is why the batch works hard to be fast:
   answer substituted into each expression. The reader list is
   `GUARD_READERS` in `MenuModel.js`; a new `$(omarchy-...)` reader used by
   more than one row must be added there, and `menu-guards-test.sh` fails the
-  build if it is not.
+  build if it is not. The readers all start at once, before the package
+  snapshot is built.
+- The guards themselves are dealt into eight background subshells that run
+  side by side, so the batch takes about as long as its slowest probe rather
+  than the sum of them. Result lines therefore arrive in any order, and a
+  guard must not depend on anything another guard set.
 
 The three guards differ in what failure means:
 

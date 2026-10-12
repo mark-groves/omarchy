@@ -34,7 +34,7 @@ assertEqual(menu.guardScript({ plain: items.plain }), '', 'guard script is empty
 // The cost the menu is paying is per fork, not per expression, so what makes
 // the batch fast is asking each command once however many rows want it.
 assertEqual(
-  (script.match(/^__omarchy_read_\d+=\$\(omarchy-default-browser /gm) || []).length,
+  (script.match(/^exec \{__omarchy_read_fd_\d+\}< <\(omarchy-default-browser /gm) || []).length,
   1,
   'guard script reads a value command once for the whole batch'
 )
@@ -85,7 +85,7 @@ prelude() {
     const path = require("path")
     const menu = require(path.join(process.env.ROOT, "shell/plugins/menu/MenuModel.js"))
     process.stdout.write(menu.guardScript({ probe: { id: "probe", when: "true" } }))
-  ' | command grep -v '^if {'
+  ' | command sed '/^__omarchy_groups=()$/,$d'
 }
 
 # The prelude shadows the real commands for the length of the batch, so it has
@@ -185,7 +185,7 @@ reader_script=$(node -e '
 reader_result=$(XDG_RUNTIME_DIR="" bash -c '
 omarchy-dns() { printf "Cloudflare\n"; }
 export -f omarchy-dns
-'"$reader_script")
+'"$reader_script" | sort)
 [[ $reader_result == $'hit:c:1\nmiss:c:0' ]] ||
   fail "guard prelude compares a captured reader as the substitution did" "got: $reader_result"
 pass "guard prelude compares a captured reader exactly as the substitution it replaced"
@@ -197,7 +197,8 @@ omarchy-dns() { printf "Cloudflare\n"; return 3; }
 export -f omarchy-dns
 '"$reader_script"'
 printf "survived\n"' 2>/dev/null)
-[[ $errexit_result == $'hit:c:1\nmiss:c:0\nsurvived' ]] ||
+# Rows arrive in any order, but only once every group is done.
+[[ $(head -n 2 <<<"$errexit_result" | sort) == $'hit:c:1\nmiss:c:0' && $(tail -n 1 <<<"$errexit_result") == "survived" ]] ||
   fail "guard batch survives a failing reader under errexit" "got: $errexit_result"
 pass "guard batch survives a reader that exits nonzero under errexit"
 
