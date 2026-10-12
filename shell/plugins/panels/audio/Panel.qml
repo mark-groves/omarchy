@@ -426,12 +426,14 @@ Panel {
   // walk the selection off-screen — wifi uses ListView.positionViewAtIndex
   // for this; we don't have that affordance with a multi-section Column.
   function resetScroll() {
+    var scrollArea = panel.loadedContent ? panel.loadedContent.scrollArea : null
     if (!scrollArea) return
     var flick = scrollArea.contentItem
     if (flick && flick.contentY !== undefined) flick.contentY = 0
   }
 
   function ensureCursorVisible(item) {
+    var scrollArea = panel.loadedContent ? panel.loadedContent.scrollArea : null
     if (!item || !scrollArea) return
     var flick = scrollArea.contentItem
     if (!flick || flick.contentY === undefined) return
@@ -758,12 +760,14 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(560))
 
-    PanelKeyCatcher {
+    content: PanelKeyCatcher {
       id: keyCatcher
+      property alias scrollArea: scrollArea
+      implicitHeight: panelColumn.implicitHeight
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
