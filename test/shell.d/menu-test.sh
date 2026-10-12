@@ -771,6 +771,20 @@ assert(
     && /onClicked:[\s\S]*root\.activateIndex\(row\.index, true\)/.test(menuQml),
   'mouse activation carries pointer intent into subordinate menus'
 )
+// Both menu files load separately at startup; evaluating after the first
+// alone ran the whole guard batch twice.
+assert(
+  /function rebuildItemsFromSources\(\)[\s\S]*?if \(root\.defaultMenuSettled && root\.userMenuSettled\) root\.evaluateGuards\(\)/.test(menuQml)
+    && /onLoaded: \{ root\.defaultMenuItems = [^}]*root\.defaultMenuSettled = true; root\.rebuildItemsFromSources\(\) \}/.test(menuQml)
+    && /onLoadFailed: \{ root\.defaultMenuSettled = true; if \(root\.userMenuSettled\) root\.evaluateGuards\(\) \}/.test(menuQml)
+    && /onLoaded: \{ root\.userMenuItems = [^}]*root\.userMenuSettled = true; root\.rebuildItemsFromSources\(\) \}/.test(menuQml)
+    && /onLoadFailed: \{ root\.userMenuItems = \[\]; root\.userMenuSettled = true; root\.rebuildItemsFromSources\(\) \}/.test(menuQml),
+  'menu evaluates guards once both menu files have answered, not once per file at startup'
+)
+assert(
+  /function openExistingMenu\([\s\S]*?root\.evaluateGuards\(\)/.test(menuQml),
+  'menu still evaluates guards on every open, settled or not'
+)
 JS
 
 font_charset=$(fc-query --format='%{charset}' "$ROOT/default/fonts/omarchy/omarchy.ttf")
