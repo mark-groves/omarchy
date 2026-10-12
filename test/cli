@@ -541,6 +541,10 @@ case "$1" in
     [[ $2 == "-F" ]] && echo "session-1"
     exit 0
     ;;
+  source-file)
+    cat >>"${TMUX_LOG:-/dev/null}"
+    exit 0
+    ;;
   set-environment|set-option|refresh-client)
     echo "$*" >>"${TMUX_LOG:-/dev/null}"
     exit 0
@@ -556,7 +560,7 @@ EOF
 chmod +x "$FAKE_BIN/tmux"
 
 TMUX_LOG="$PI_TMPDIR/tmux.log" PATH="$FAKE_BIN:$ROOT/bin:$PATH" HOME="$PI_TMPDIR" "$ROOT/bin/omarchy-theme-set-tmux"
-grep -q 'set-environment -g COLORFGBG 0;15' "$PI_TMPDIR/tmux.log" || fail "tmux sync reads mode from colors.toml"
+grep -Fxq "'set-environment' '-g' 'COLORFGBG' '0;15'" "$PI_TMPDIR/tmux.log" || fail "tmux sync reads mode from colors.toml"
 pass "tmux sync reads mode from colors.toml"
 
 cat >"$FAKE_BIN/pgrep" <<'EOF'
