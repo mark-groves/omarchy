@@ -427,12 +427,58 @@ var GUARD_READERS = [
 // is set in the environment, which a login shell may well have done, so the
 // parser follows the indented lines rather than reading the first one and
 // dropping half of what is installed.
-function guardHelpers() {
-  return 'declare -A __omarchy_pkgs=()\n'
-    + 'mapfile -t __omarchy_pkg_names < <({ pacman -Qq; LC_ALL=C pacman -Qi'
+//
+// Building the set is most of the batch's runtime (~75ms of `-Qi` over a
+// thousand packages), yet it only changes when a transaction does. So it is
+// kept in $XDG_RUNTIME_DIR, stamped with the local database directory's
+// identity and change times: every install, removal and upgrade adds, removes
+// or renames a `name-version` entry there, which moves them. A set is stored
+// only from a build no transaction can have overlapped -- the same stamp
+// before and after, and no db.lck at either end -- so a half-written database
+// is never what gets remembered. The stamp and the set are read through one
+// descriptor, so a writer replacing the file mid-read cannot pair one stamp
+// with another set.
+//
+// A build that failed is used for this run, as before, but never stored:
+// only when both queries succeed does it end with a `/` line, which no
+// package name can contain.
+//
+// The database is wherever pacman.conf's DBPath puts it, so pacman-conf
+// names the directory the stamp and lock are read from; one that cannot be
+// named is never cached.
+function guardPackageSnapshot() {
+  var build = '{ set -o pipefail; pacman -Qq && LC_ALL=C pacman -Qi'
     + " | awk '/^[A-Za-z]/ { provides = ($0 ~ /^Provides/); sub(/^[^:]*: /, \"\") }"
     + ' provides && $0 != "None" { n = split($0, p, " ");'
-    + ' for (i = 1; i <= n; i++) { sub(/[<>=].*/, "", p[i]); print p[i] } }\'; } 2>/dev/null)\n'
+    + ' for (i = 1; i <= n; i++) { sub(/[<>=].*/, "", p[i]); print p[i] } }\' && echo /; } 2>/dev/null'
+  var stamp = 'stat -c "%d:%i:%.9Y:%.9Z" -- "$__omarchy_pkg_db/local" 2>/dev/null'
+
+  return '__omarchy_pkg_db=${OMARCHY_PACMAN_DB_PATH:-$(pacman-conf DBPath 2>/dev/null)} || __omarchy_pkg_db=""\n'
+    + '__omarchy_pkg_db=${__omarchy_pkg_db%/}\n'
+    + '__omarchy_pkg_cache=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/omarchy-menu-packages}\n'
+    + '__omarchy_pkg_stamp=""\n'
+    + '[[ -z $__omarchy_pkg_db ]] || __omarchy_pkg_stamp=$(' + stamp + ') || __omarchy_pkg_stamp=""\n'
+    + '__omarchy_pkg_names=()\n'
+    + 'if [[ -n $__omarchy_pkg_cache && -n $__omarchy_pkg_stamp ]]'
+    + ' && { IFS= read -r __omarchy_pkg_line && [[ $__omarchy_pkg_line == "$__omarchy_pkg_stamp" ]]'
+    + ' && mapfile -t __omarchy_pkg_names; } 2>/dev/null <"$__omarchy_pkg_cache"; then :\n'
+    + 'else\n'
+    + '  __omarchy_pkg_names=()\n'
+    + '  [[ ! -e $__omarchy_pkg_db/db.lck ]] || __omarchy_pkg_stamp=""\n'
+    + '  mapfile -t __omarchy_pkg_names < <(' + build + ')\n'
+    + '  if ((${#__omarchy_pkg_names[@]})) && [[ ${__omarchy_pkg_names[-1]} == "/" ]]; then unset "__omarchy_pkg_names[-1]"; else __omarchy_pkg_stamp=""; fi\n'
+    + '  if [[ -n $__omarchy_pkg_cache && -n $__omarchy_pkg_stamp && ! -e $__omarchy_pkg_db/db.lck ]]'
+    + ' && [[ $(' + stamp + ') == "$__omarchy_pkg_stamp" ]]; then\n'
+    + '    { printf "%s\\n" "$__omarchy_pkg_stamp" "${__omarchy_pkg_names[@]}" >"$__omarchy_pkg_cache.$$"'
+    + ' && mv -f -- "$__omarchy_pkg_cache.$$" "$__omarchy_pkg_cache"; } 2>/dev/null'
+    + ' || rm -f -- "$__omarchy_pkg_cache.$$" 2>/dev/null || :\n'
+    + '  fi\n'
+    + 'fi\n'
+}
+
+function guardHelpers() {
+  return 'declare -A __omarchy_pkgs=()\n'
+    + guardPackageSnapshot()
     + 'for __omarchy_pkg in "${__omarchy_pkg_names[@]}"; do __omarchy_pkgs[$__omarchy_pkg]=1; done\n'
     + '__omarchy_pkg_has() { [[ -n ${__omarchy_pkgs[$1]-} ]] && return 0; '
     + '[[ $1 == *[\\<\\>=]* ]] && { pacman -Q "$1" &>/dev/null; return; }; return 1; }\n'
