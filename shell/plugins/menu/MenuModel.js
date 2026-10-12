@@ -494,19 +494,31 @@ function guardHelpers() {
 // same way unquoted -- while a function would also catch `command -v reader`,
 // `VAR=x reader`, and every other form, and answer those wrong. Anything but
 // the plain substitution is left alone to run the real command.
+//
+// The readers are separate programs with nothing to share, so they all start
+// at once, before the package set is built, each on a process substitution
+// of its own; the batch then reads each one's output in turn. Run one after
+// another they were a quarter of the batch. Reading to EOF and dropping the
+// trailing newlines is what `$(...)` does with the same output.
 function guardPrelude(guards) {
-  var prelude = guardHelpers()
+  var start = ""
+  var collect = ""
 
   for (var i = 0; i < GUARD_READERS.length; i++) {
     // The guards arrive already substituted, so what marks a reader as wanted
     // is the slot standing in for it, not the call it replaced.
     if (guards.indexOf(guardReaderSlot(i)) < 0) continue
-    // `|| :` so a reader that exits nonzero cannot take the batch down with
-    // it under a login shell that turned on errexit.
-    prelude += "__omarchy_read_" + i + "=$(" + GUARD_READERS[i] + " 2>/dev/null) || :\n"
+    var value = "__omarchy_read_" + i
+    var fd = "__omarchy_read_fd_" + i
+    start += "exec {" + fd + "}< <(" + GUARD_READERS[i] + " 2>/dev/null)\n"
+    // `|| :` because read reports the EOF it stops at, and a login shell may
+    // have turned on errexit.
+    collect += "IFS= read -r -d '' " + value + " <&$" + fd + " || :\n"
+      + "exec {" + fd + "}<&-\n"
+      + value + "=${" + value + "%\"${" + value + "##*[!$'\\n']}\"}\n"
   }
 
-  return prelude
+  return start + guardHelpers() + collect
 }
 
 function guardReaderSlot(index) {
@@ -525,23 +537,53 @@ function guardLine(id, tag, expression) {
     + id + ":" + tag + ":1; else echo " + id + ":" + tag + ":0; fi\n"
 }
 
+// How many subshells share the guards. Most of what is left of the batch is
+// a few dozen separate programs (hardware probes, systemctl, the screen
+// recorder's status), each waiting on its own process start rather than on
+// a core, so running them side by side is where the time comes back. Eight
+// took the shipped menu's batch from ~400ms to ~160ms on a 32-thread desktop
+// (~195ms to ~55ms once the package set was cached); more stopped paying.
+var GUARD_GROUPS = 8
+
 // One bash script for every `when:`, `checked:` and `disabled:` in the menu,
 // reporting `<id>:<w|c|d>:<0|1>` per line. Speed is the whole point: the menu
 // opens on the last evaluation's answers, so however long this takes is how
 // long a row can contradict the state it describes.
+//
+// Guards are dealt round-robin into GUARD_GROUPS background subshells, each
+// inheriting the package set, the shadowed helpers and the readers' answers,
+// and the batch exits once all of them have. Lines arrive in any order, which
+// the menu never relied on: each names its row, and each is one short write
+// to the pipe, which the kernel never interleaves.
+//
+// A group that dies part way (a guard tripping a login shell's `set -u`, say)
+// has left its remaining rows unanswered, and the menu keeps the last full
+// set only when the batch fails. So each group is waited for by pid, and the
+// batch's status is nonzero if any of them was.
 function guardScript(items) {
-  var guards = ""
+  var lines = []
   var ids = Object.keys(items || {})
 
   for (var i = 0; i < ids.length; i++) {
     var entry = items[ids[i]]
     if (!entry) continue
-    if (entry.when) guards += guardLine(ids[i], "w", entry.when)
-    if (entry.checked) guards += guardLine(ids[i], "c", entry.checked)
-    if (entry.disabled) guards += guardLine(ids[i], "d", entry.disabled)
+    if (entry.when) lines.push(guardLine(ids[i], "w", entry.when))
+    if (entry.checked) lines.push(guardLine(ids[i], "c", entry.checked))
+    if (entry.disabled) lines.push(guardLine(ids[i], "d", entry.disabled))
+  }
+  if (lines.length === 0) return ""
+
+  var groups = []
+  for (var j = 0; j < lines.length; j++) {
+    var group = j % GUARD_GROUPS
+    groups[group] = (groups[group] || "") + lines[j]
   }
 
-  return guards ? guardPrelude(guards) + guards : ""
+  var script = guardPrelude(lines.join("")) + "__omarchy_groups=()\n"
+  for (var k = 0; k < groups.length; k++) script += "{\n" + groups[k] + "} &\n__omarchy_groups+=($!)\n"
+  return script + "__omarchy_failed=0\n"
+    + 'for __omarchy_group in "${__omarchy_groups[@]}"; do wait "$__omarchy_group" || __omarchy_failed=1; done\n'
+    + "((__omarchy_failed == 0))\n"
 }
 
 // An action that only asks this shell to summon one of its own plugins can be
