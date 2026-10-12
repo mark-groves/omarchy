@@ -175,8 +175,10 @@ Panel {
     iconComponent: Component {
       Item {
         DropboxIcon {
-          anchors.centerIn: parent
-          iconSize: Style.space(12)
+          x: (parent.width - width) / 2
+          y: (parent.height - height) / 2
+          iconSize: button.iconSize / aspectRatio
+          artworkScale: 1
           color: root.barIconColor
           opacity: dropbox.active ? 1.0 : 0.6
         }

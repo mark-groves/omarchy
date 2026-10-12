@@ -104,7 +104,7 @@ Use these instead of raw shell commands:
 
 - `omarchy-cmd-missing` / `omarchy-cmd-present` - check for commands
 - `omarchy-pkg-missing` / `omarchy-pkg-present` - check for packages (don't use these if you can just use `omarchy-pkg-add`/`omarchy-pkg-drop`)
-- `omarchy-pkg-add` - install packages (handles both pacman and AUR)
+- `omarchy-pkg-add` - install packages from the configured pacman repos, Omarchy's included; use `omarchy-pkg-aur-add` for AUR packages
 - `omarchy-pkg-drop` - remove packages; use this instead of raw `pacman -R*`
 - `omarchy-notification-send` - send desktop notifications; do not call `notify-send` directly
 - `omarchy-hw-asus-rog` - detect ASUS ROG hardware (and similar `hw-*` commands)
@@ -112,6 +112,10 @@ Use these instead of raw shell commands:
 Commands installed by Omarchy's default package set are runtime invariants. Invoke them directly; do not add defensive `omarchy-cmd-present` / `omarchy-cmd-missing` checks around them. Use command-presence helpers only for genuinely optional dependencies or code that can run before the default package set is installed.
 
 Exceptions are allowed for migration and package-helper scripts where the helper may not be available yet, where the helper itself is being implemented, or where direct package-manager behavior is required.
+
+# Background Work
+
+- Long-running code (the shell, daemons, watchers) reacts to events instead of polling with a timer. Polling is the last resort, for state with no change signal; [`agents/skills/shell-dev.md`](agents/skills/shell-dev.md) lists the event sources and the push-refresh pattern.
 
 # Menu
 

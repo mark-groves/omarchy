@@ -47,7 +47,7 @@ ShellRoot {
     },
     bar: {
       position: "top",
-      transparent: false,
+      background: "opaque",
       centerAnchor: "omarchy.clock",
       layout: {
         left: [{ id: "omarchy.menu" }, { id: "omarchy.workspaces" }],
@@ -1781,6 +1781,12 @@ ShellRoot {
       return "ok"
     }
 
+    // Super+I goes through the bar's reader, which keeps a choice made before
+    // any text field has focus until one does.
+    function cycleInput(direction: string): string {
+      return Commons.InputMethodState.cycle(direction === "back") ? "ok" : "not running"
+    }
+
     function rescanPlugins(): void {
       shell.reloadPlugins()
     }
@@ -1790,9 +1796,11 @@ ShellRoot {
       return "ok"
     }
 
+    // Named for the two-state toggle it once was; it now cycles the bar
+    // background from clear to glassy to opaque and around.
     function toggleBarTransparency(): string {
-      if (shell.bar && typeof shell.bar.toggleTransparency === "function") {
-        shell.bar.toggleTransparency()
+      if (shell.bar && typeof shell.bar.cycleBackground === "function") {
+        shell.bar.cycleBackground()
         return "ok"
       }
       return "no-bar"
