@@ -573,11 +573,19 @@ chmod +x "$FAKE_BIN/pkill"
 
 cat >"$FAKE_BIN/sleep" <<'EOF'
 #!/bin/bash
-exit 0
+while [[ -n $HUNK_SETTLED && ! -e $HUNK_SETTLED ]]; do
+  /usr/bin/sleep 0.01
+done
 EOF
 chmod +x "$FAKE_BIN/sleep"
 
-HUNK_RUNNING=1 PKILL_LOG="$PI_TMPDIR/pkill.log" PATH="$FAKE_BIN:$ROOT/bin:$PATH" HOME="$PI_TMPDIR" "$ROOT/bin/omarchy-theme-set-hunk"
+HUNK_RUNNING=1 HUNK_SETTLED="$PI_TMPDIR/hunk-settled" PKILL_LOG="$PI_TMPDIR/pkill.log" PATH="$FAKE_BIN:$ROOT/bin:$PATH" HOME="$PI_TMPDIR" "$ROOT/bin/omarchy-theme-set-hunk"
+[[ $(grep -c -- '-WINCH -x hunk' "$PI_TMPDIR/pkill.log") == "1" ]] || fail "hunk sync returns before its settled nudge"
+touch "$PI_TMPDIR/hunk-settled"
+for _ in {1..200}; do
+  [[ $(grep -c -- '-WINCH -x hunk' "$PI_TMPDIR/pkill.log") == "2" ]] && break
+  /usr/bin/sleep 0.01
+done
 [[ $(grep -c -- '-WINCH -x hunk' "$PI_TMPDIR/pkill.log") == "2" ]] || fail "hunk sync signals running hunk sessions"
 pass "hunk sync signals running hunk sessions"
 
