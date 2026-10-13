@@ -40,14 +40,23 @@ mkdir -p "$MODES_DIR"
 
 # A workspace with windows on it keeps the layout it has, so changing the
 # default never rearranges work in progress: it is saved as that workspace's
-# own layout. Empty workspaces, and those not opened yet, take the new default.
+# own layout. Every other workspace, empty or not opened yet, takes the new
+# default, including one given a layout of its own with Super + L.
+busy=$(hyprctl workspaces -j | jq -r '.[] | select(.id >= 1 and (.windows // 0) > 0) | .id')
+
 while read -r workspace; do
-  [[ -f $MODES_DIR/$workspace.lua ]] && continue
+  [[ -n $workspace && ! -f $MODES_DIR/$workspace.lua ]] || continue
   current=$(omarchy-hyprland-workspace-layout-current "$workspace")
   if [[ $current != "$1" ]]; then
     printf 'o.workspace_mode({ workspace = "%s", mode = "%s" })\n' "$workspace" "$current" >"$MODES_DIR/$workspace.lua"
   fi
-done < <(hyprctl workspaces -j | jq -r '.[] | select(.id >= 1 and (.windows // 0) > 0) | .id')
+done <<<"$busy"
+
+for mode_file in "$MODES_DIR"/[0-9]*.lua; do
+  [[ -f $mode_file ]] || continue
+  workspace=$(basename "$mode_file" .lua)
+  grep -qx -- "$workspace" <<<"$busy" || rm -f "$mode_file"
+done
 
 # Saved even for dwindle, so the choice also wins over a layout set in the
 # user's own looknfeel. Workspaces given a layout with Super + L keep theirs.

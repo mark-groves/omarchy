@@ -542,3 +542,11 @@ toggle
 [[ $(grep -c -- "-r 42 " "$notification_log") -ge 1 ]] ||
   fail "a layout change replaces the last layout notification" "$(cat "$notification_log")"
 pass "layout changes replace a single notification"
+
+# The notification calls dwindle tiling, as the menu and the bar do.
+printf 'o.workspace_mode({ workspace = "3", mode = "floating" })\n' >"$layout_file"
+: >"$notification_log"
+toggle
+grep -q "set to tiling" "$notification_log" && ! grep -q "dwindle" "$notification_log" ||
+  fail "the notification calls dwindle tiling" "$(cat "$notification_log")"
+pass "the notification calls dwindle tiling"

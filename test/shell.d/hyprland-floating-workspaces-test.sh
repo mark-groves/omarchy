@@ -108,11 +108,14 @@ rm -f "$modes_dir"/*.lua
 # layout each one has as its own; empty ones take the new default.
 printf '[{ "id": 2, "name": "2", "tiledLayout": "dwindle", "windows": 3 }, { "id": 4, "name": "4", "tiledLayout": "scrolling", "windows": 0 }, { "id": 6, "name": "6", "tiledLayout": "dwindle", "windows": 1 }]\n' >"$fake/workspaces.json"
 printf 'o.workspace_mode({ workspace = "6", mode = "floating" })\n' >"$modes_dir/6.lua"
+printf 'o.workspace_mode({ workspace = "4", mode = "dwindle" })\n' >"$modes_dir/4.lua"
+printf 'o.workspace_mode({ workspace = "9", mode = "scrolling" })\n' >"$modes_dir/9.lua"
 run omarchy-hyprland-workspace-layout-default floating
 grep -qxF 'o.workspace_mode({ workspace = "2", mode = "dwindle" })' "$modes_dir/2.lua" ||
   fail "a workspace with windows kept the layout it had" "$(cat "$modes_dir/2.lua" 2>&1)"
 [[ ! -e $modes_dir/4.lua && $(run omarchy-hyprland-workspace-layout-current 4) == "floating" ]] ||
-  fail "an empty workspace takes the new default"
+  fail "an empty workspace takes the new default, even with a layout of its own"
+[[ ! -e $modes_dir/9.lua ]] || fail "a workspace not opened yet takes the new default"
 grep -qxF 'o.workspace_mode({ workspace = "6", mode = "floating" })' "$modes_dir/6.lua" ||
   fail "a workspace with a layout of its own keeps it"
 pass "a new default leaves workspaces with windows as they are"
