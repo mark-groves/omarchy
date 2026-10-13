@@ -21,7 +21,7 @@
   //                  installed instead of vanishing from the list.
 
   // Root Menu
-  "apps": {"icon":"󰀻","label":"Apps","aliases":["app","applications"],"provider":"apps"},
+  "apps": {"icon":"󰀻","label":"Apps","aliases":["app","applications"],"provider":"apps","action":"omarchy-shell omarchy.dock apps"},
   "learn": {"icon":"󰧑","label":"Learn"},
   "trigger": {"icon":"󱓞","label":"Trigger"},
   "style": {"icon":"","label":"Style"},
@@ -84,6 +84,14 @@
   "trigger.appearance.top-bar.position.bottom": {"icon":"󰁅","label":"Bottom Bar","action":"omarchy-bar position bottom"},
   "trigger.appearance.top-bar.position.left": {"icon":"󰁍","label":"Left Bar","action":"omarchy-bar position left"},
   "trigger.appearance.top-bar.position.right": {"icon":"󰁔","label":"Right Bar","action":"omarchy-bar position right"},
+  "trigger.appearance.dock": {"icon":"󱂩","label":"Dock"},
+  "trigger.appearance.dock.autohide": {"icon":"󰈉","label":"Auto-hide Dock","when":"[[ $(omarchy-dock autohide) == \"off\" ]]","action":"omarchy-dock autohide on"},
+  "trigger.appearance.dock.always-on": {"icon":"󰈈","label":"Always-on Dock","when":"[[ $(omarchy-dock autohide) == \"on\" ]]","action":"omarchy-dock autohide off"},
+  "trigger.appearance.dock.position": {"icon":"","label":"Dock Position"},
+  "trigger.appearance.dock.position.top": {"icon":"󰁝","label":"Top Dock","checked":"[[ $(omarchy-dock position) == \"top\" ]]","action":"omarchy-dock position top"},
+  "trigger.appearance.dock.position.bottom": {"icon":"󰁅","label":"Bottom Dock","checked":"[[ $(omarchy-dock position) == \"bottom\" ]]","action":"omarchy-dock position bottom"},
+  "trigger.appearance.dock.position.left": {"icon":"󰁍","label":"Left Dock","checked":"[[ $(omarchy-dock position) == \"left\" ]]","action":"omarchy-dock position left"},
+  "trigger.appearance.dock.position.right": {"icon":"󰁔","label":"Right Dock","checked":"[[ $(omarchy-dock position) == \"right\" ]]","action":"omarchy-dock position right"},
   "trigger.appearance.window-gaps": {"icon":"","label":"Window Gaps","action":"omarchy-hyprland-window-gaps-toggle"},
   "trigger.appearance.window-corners": {"icon":"󰘇","label":"Window Corners"},
   "trigger.appearance.window-corners.theme": {"icon":"󰏘","label":"Theme Corners","checked":"[[ $(omarchy-hyprland-corners) == \"theme\" ]]","action":"omarchy-hyprland-corners theme"},

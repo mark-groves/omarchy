@@ -3,6 +3,17 @@
 # omarchy:summary=Cycle the current active workspace through the dwindle, scrolling, and floating layouts
 # omarchy:args=[back]
 
+# Layout changes replace one notification instead of stacking a new one for
+# each press, so cycling through the layouts leaves a single, current one.
+notify_layout() {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/workspace-layout-notification"
+  local last id
+  [[ -r $state ]] && read -r last <"$state"
+  if id=$(omarchy-notification-send -p -r "${last:-0}" -g 󱂬 "$1") && [[ $id =~ ^[0-9]+$ ]]; then
+    mkdir -p "$(dirname "$state")" && printf '%s\n' "$id" >"$state"
+  fi
+}
+
 DIRECTION=${1:-next}
 if [[ $DIRECTION != "next" && $DIRECTION != "back" ]]; then
   echo "Usage: omarchy-hyprland-workspace-layout-toggle [back]" >&2
@@ -43,22 +54,23 @@ if hyprctl eval "$APPLY" >/dev/null 2>&1; then
 fi
 
 if (( ! APPLIED )); then
-  omarchy-notification-send -g 󱂬 "Workspace layout needs a Hyprland reload"
+  notify_layout "Workspace layout needs a Hyprland reload"
 elif [[ $NEW_MODE == "$(omarchy-hyprland-workspace-layout-default)" ]] && rm -f "$MODE_FILE"; then
   # Cycled onto the default, a workspace goes back to following it, so a later
   # change of the default reaches it too.
-  omarchy-notification-send -g 󱂬 "Workspace layout set to $NEW_MODE"
+  notify_layout "Workspace layout set to $NEW_MODE"
 elif mkdir -p "$MODES_DIR" && printf '%s\n' "$APPLY" >"$MODE_FILE"; then
-  omarchy-notification-send -g 󱂬 "Workspace layout set to $NEW_MODE"
+  notify_layout "Workspace layout set to $NEW_MODE"
 else
   # The mode is on screen but nothing will bring it back, and the next press
   # reads the mode from this file, so say so rather than counting it as set.
-  omarchy-notification-send -g 󱂬 "Workspace layout set to $NEW_MODE but could not be saved"
+  notify_layout "Workspace layout set to $NEW_MODE but could not be saved"
 fi
 
-# The bar shows the focused workspace's layout.
+# The bar shows the focused workspace's layout, and the dock shows on floating ones.
 if (( APPLIED )); then
   omarchy-shell -q omarchy.workspaces refresh
+  omarchy-shell -q omarchy.dock refresh
 fi
 
 # Titlebars and shadows are set up while the config loads, and only

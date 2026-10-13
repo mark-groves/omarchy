@@ -84,6 +84,7 @@ grep -qxF 'o.workspace_mode({ default = "scrolling" })' "$modes_dir/default.lua"
 [[ $(run omarchy-hyprland-workspace-layout-default) == "scrolling" ]] || fail "the saved default is reported"
 grep -qx 'reload' "$fake/hyprctl.log" || fail "a new default reloads Hyprland"
 grep -qF 'omarchy-shell -q omarchy.workspaces refresh' "$fake/commands.log" || fail "a new default refreshes the bar"
+grep -qF 'omarchy-shell -q omarchy.dock refresh' "$fake/commands.log" || fail "a new default refreshes the dock"
 pass "the default layout is saved, applied, and shown"
 
 run omarchy-hyprland-workspace-layout-default floating
@@ -102,6 +103,21 @@ fi
 [[ $(run omarchy-hyprland-workspace-layout-default) == "floating" ]] || fail "a refused default leaves the saved one alone"
 pass "an unknown default layout is refused"
 rm -f "$modes_dir"/*.lua
+
+# A new default leaves workspaces with windows on them as they are, saving the
+# layout each one has as its own; empty ones take the new default.
+printf '[{ "id": 2, "name": "2", "tiledLayout": "dwindle", "windows": 3 }, { "id": 4, "name": "4", "tiledLayout": "scrolling", "windows": 0 }, { "id": 6, "name": "6", "tiledLayout": "dwindle", "windows": 1 }]\n' >"$fake/workspaces.json"
+printf 'o.workspace_mode({ workspace = "6", mode = "floating" })\n' >"$modes_dir/6.lua"
+run omarchy-hyprland-workspace-layout-default floating
+grep -qxF 'o.workspace_mode({ workspace = "2", mode = "dwindle" })' "$modes_dir/2.lua" ||
+  fail "a workspace with windows kept the layout it had" "$(cat "$modes_dir/2.lua" 2>&1)"
+[[ ! -e $modes_dir/4.lua && $(run omarchy-hyprland-workspace-layout-current 4) == "floating" ]] ||
+  fail "an empty workspace takes the new default"
+grep -qxF 'o.workspace_mode({ workspace = "6", mode = "floating" })' "$modes_dir/6.lua" ||
+  fail "a workspace with a layout of its own keeps it"
+pass "a new default leaves workspaces with windows as they are"
+rm -f "$modes_dir"/*.lua
+printf '[{ "id": 2, "name": "2", "tiledLayout": "dwindle" }, { "id": 4, "name": "4", "tiledLayout": "scrolling" }]\n' >"$fake/workspaces.json"
 
 # --- The workspace mode in Hyprland --------------------------------------------
 
@@ -186,6 +202,10 @@ hl = {
     local target = action.window
     if action.kind == "place" then
       placed[target.address] = true
+    elseif action.kind == "fullscreen" then
+      if action.mode == "maximized" then
+        target.fullscreen = action.action == "unset" and 0 or 1
+      end
     elseif action.tag then
       local name = action.tag:sub(2)
       if action.tag:sub(1, 1) == "+" then
@@ -211,6 +231,7 @@ hl = {
       resize = function(spec) spec.kind = "place" return spec end,
       center = function(spec) spec.kind = "place" return spec end,
       move = function(spec) spec.kind = "place" return spec end,
+      fullscreen = function(spec) spec.kind = "fullscreen" return spec end,
     },
   },
   on = function(event, callback)
@@ -373,6 +394,94 @@ assert(video.floating and has_tag(video, "omarchy-mode-floated"), "a window leav
 fi
 pass "a window leaving fullscreen on a floating workspace floats"
 
+# A window opening on a floating workspace floats from its first frame through
+# a window rule, which tags it the way rules do, with a trailing "*". The mode
+# claims it as it opens, so it tiles again when the workspace stops floating,
+# and the rule stops applying.
+printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
+if ! run_lua '
+require("default.hypr.workspace-layouts")
+local function open_rule()
+  local found
+  for _, candidate in ipairs(state().rules) do
+    if candidate.name == "omarchy-floating-open-1" then found = candidate end
+  end
+  return found
+end
+local rule = open_rule()
+assert(rule and rule.float and rule.enabled and rule.match.workspace == "r[1-1]", "no open rule floats windows on the floating workspace")
+local first_position = rule.move
+local opened = window("0x1", 1, { floating = true, tags = { "omarchy-mode-opened*" } })
+state().subscriptions["window.open"][1](opened)
+assert(has_tag(opened, "omarchy-mode-floated"), "a window the open rule floated was not claimed by the mode")
+assert(open_rule().move ~= first_position, "the next window opens exactly on top of the last")
+o.workspace_mode({ workspace = "1", mode = "dwindle" })
+assert(not opened.floating, "a window the open rule floated kept floating once the workspace tiled")
+assert(open_rule().enabled == false, "the open rule still applies after the workspace tiled")
+'; then
+  fail "windows the open rule floats tile again when the workspace stops floating"
+fi
+pass "windows the open rule floats tile again when the workspace stops floating"
+
+# A maximized window on a floating workspace comes back to its own size when
+# another window opens there, and one on a tiled workspace is left maximized.
+printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
+if ! run_lua '
+require("default.hypr.workspace-layouts")
+local maximized = window("0x1", 1, { floating = true, fullscreen = 1 })
+local tiled_max = window("0x2", 2, { fullscreen = 1 })
+local opening = window("0x3", 1, { floating = true })
+state().subscriptions["window.open"][1](opening)
+assert(maximized.fullscreen == 0, "a maximized window stayed maximized when another opened on its floating workspace")
+local next_door = window("0x4", 2)
+state().subscriptions["window.open"][1](next_door)
+assert(tiled_max.fullscreen == 1, "a maximized window on a tiled workspace was unmaximized")
+'; then
+  fail "a new window on a floating workspace brings a maximized one back to size"
+fi
+pass "a new window on a floating workspace brings a maximized one back to size"
+
+# Apps with float rules of their own keep them on a floating workspace: the
+# open rule passes them over, so they open at their own size and the mode never
+# claims them.
+printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
+if ! run_lua '
+o.window("^float-me$", { float = true })
+o.window({ title = "^Picker$" }, { float = true })
+o.window("^tile-me$", { opacity = "0.9" })
+require("default.hypr.workspace-layouts")
+local rule
+for _, candidate in ipairs(state().rules) do
+  if candidate.name == "omarchy-floating-open-1" then rule = candidate end
+end
+assert(rule.match.class == "negative:(?:^float-me$)", "the open rule does not pass over an app that floats on its own: " .. tostring(rule.match.class))
+assert(rule.match.title == "negative:(?:^Picker$)", "the open rule does not pass over a window titled to float: " .. tostring(rule.match.title))
+'; then
+  fail "apps with float rules of their own are left to them on a floating workspace"
+fi
+pass "apps with float rules of their own are left to them on a floating workspace"
+
+# Apps floated through a tag keep their floating too: one tagged into a tag a
+# float rule matches is passed over, while a rule floating a tag together with
+# a title passes over only that title, not everything with the tag.
+printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
+if ! run_lua '
+o.window("^1password$", { tag = "+floating-window" })
+o.window({ tag = "floating-window" }, { float = true })
+o.window("^chromium$", { tag = "+chromium-based-browser" })
+o.window({ tag = "chromium-based-browser", title = "^Meet - .+" }, { float = true })
+require("default.hypr.workspace-layouts")
+local rule
+for _, candidate in ipairs(state().rules) do
+  if candidate.name == "omarchy-floating-open-1" then rule = candidate end
+end
+assert(rule.match.class == "negative:(?:^1password$)", "the open rule does not pass over an app tagged to float: " .. tostring(rule.match.class))
+assert(rule.match.title == "negative:(?:^Meet - .+)", "the open rule does not pass over just the title a tag rule floats: " .. tostring(rule.match.title))
+'; then
+  fail "apps floated through a tag are left to it on a floating workspace"
+fi
+pass "apps floated through a tag are left to it on a floating workspace"
+
 # A window moved to a special workspace, like the scratchpad, is left alone.
 printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
 if ! run_lua '
@@ -415,10 +524,11 @@ for _, button in ipairs(s.buttons) do
 end
 assert(bar.col.text == "rgb(ddeeff)", "titlebar text does not follow the theme foreground")
 assert(not bar.edge_snap, "dragged windows snap to screen edges")
-assert(#s.buttons == 2, "the titlebars do not have exactly close and maximize")
-local actions = s.buttons[1].action .. s.buttons[2].action
+assert(#s.buttons == 3, "the titlebars do not have exactly close, maximize, and minimize")
+local actions = s.buttons[1].action .. s.buttons[2].action .. s.buttons[3].action
 assert(actions:find("window.close", 1, true), "no button closes the window")
 assert(actions:find("maximized", 1, true), "no button maximizes the window")
+assert(actions:find("omarchy-hyprland-window-minimize", 1, true), "no button minimizes the window to the dock")
 assert(bar.on_double_click:find("maximized", 1, true), "double-clicking a titlebar does not maximize")
 ' TITLEBARS_INSTALLED=1 TITLEBARS_LOADED=1; then
   fail "titlebars load when a workspace floats and follow the theme"
