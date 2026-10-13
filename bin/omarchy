@@ -1151,6 +1151,9 @@ main() {
   --help | -h)
     show_main_help
     ;;
+  logout | reboot | shutdown)
+    dispatch_fast_or_help system "$@"
+    ;;
   commands)
     load_commands
     parse_commands_args "$@"
