@@ -181,6 +181,37 @@ platform_root_copy() {
     fail "$(basename -- "$script") reads the platform root from the fixture"
 }
 
+# How long this machine takes to start processes, as a percentage of the
+# laptop the timing budgets were measured on (100 there, never less): the
+# fastest of three runs of 100 fork/execs of true, against the 25ms they take
+# on that laptop. A test timing process-heavy work multiplies its budget by
+# this, so a Raspberry Pi or an ARM VM gets the room its slower process starts
+# need, and only what is still several times over fails.
+process_speed_percent() {
+  local best="" start end elapsed
+
+  for _ in 1 2 3; do
+    start=$EPOCHREALTIME
+    for _ in {1..100}; do /usr/bin/true; done
+    end=$EPOCHREALTIME
+    elapsed=$(( ${end/[.,]/} - ${start/[.,]/} ))
+    if [[ -z $best ]] || (( elapsed < best )); then
+      best=$elapsed
+    fi
+  done
+  echo $(( best > 25000 ? best * 100 / 25000 : 100 ))
+}
+
+# Sets SPEED_PERCENT for a timing test, skipping the rest of the file when the
+# machine is so much slower than the reference that a budget scaled to it
+# could no longer tell a regression from the machine.
+require_comparable_speed() {
+  SPEED_PERCENT=$(process_speed_percent)
+  (( SPEED_PERCENT <= 800 )) && return 0
+  skip "processes start $(( SPEED_PERCENT / 100 ))x slower than on the reference laptop; skipping $1"
+  exit 0
+}
+
 run_node_test() {
   require_command node
 
