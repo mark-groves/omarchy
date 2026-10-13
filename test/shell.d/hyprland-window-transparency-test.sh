@@ -30,6 +30,7 @@ run omarchy-hyprland-window-transparency glassy
 cmp -s "$ROOT/default/hypr/toggles/window-glassy.lua" "$toggles_dir/window-glassy.lua" || fail "glassy windows are loaded after the theme"
 grep -qx 'hyprctl reload' "$tmpdir/commands.log" || fail "new transparency reloads Hyprland"
 grep -q '^omarchy-restart-btop ' "$tmpdir/commands.log" || fail "new transparency reloads running btop windows"
+! grep -q '^omarchy-notification-send' "$tmpdir/commands.log" || fail "new transparency is shown, not announced"
 pass "glassy windows override the theme"
 
 run omarchy-hyprland-window-transparency opaque
@@ -77,7 +78,7 @@ run omarchy-hyprland-window-transparency glassy
 run omarchy-hyprland-window-transparency transparent
 [[ $(od -An -c "$gtk_css" | tr -d ' \n') == 'label{color:red;}' ]] || fail "leaving glassy restores GTK CSS without a final newline"
 
-# A GTK config that cannot be written fails the change rather than announcing it.
+# A GTK config that cannot be written fails the change.
 printf 'label { color: red; }\n' >"$gtk_css"
 chmod a-w "$gtk_css"
 : >"$tmpdir/commands.log"
@@ -86,7 +87,6 @@ if run omarchy-hyprland-window-transparency glassy 2>/dev/null; then
   fail "a GTK config that cannot be written fails the change"
 fi
 chmod u+w "$gtk_css"
-! grep -q '^omarchy-notification-send' "$tmpdir/commands.log" || fail "a failed change is not announced"
 [[ $(run omarchy-hyprland-window-transparency) == "transparent" ]] || fail "a failed change keeps the previous choice"
 run omarchy-hyprland-window-transparency transparent
 pass "glassy GTK apps get a backdrop blur, and leaving glassy takes it out"
