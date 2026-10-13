@@ -509,10 +509,10 @@ assertDeepEqual(
     ['Transparent Windows', 'omarchy-hyprland-window-transparency transparent'],
     ['Glassy Windows', 'omarchy-hyprland-window-transparency glassy']
   ],
-  'menu picks window transparency from Appearance > Window Transparency'
+  'menu picks window transparency from Appearance > Window Opacity'
 )
 const triggerIds = triggerItems.map(item => item.id)
-const appearanceLabels = ['Animations', 'Menu Bar', 'Dock', 'Window Gaps', 'Window Corners', 'Window Transparency', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
+const appearanceLabels = ['Animations', 'Menu Bar', 'Dock', 'Window Gaps', 'Window Corners', 'Window Opacity', '1-Window Ratio', 'Workspace Layout', 'Herdr Theme Sync']
 assertEqual(triggerIds.indexOf('trigger.toggle'), triggerIds.indexOf('trigger.appearance') + 1, 'menu places Toggle right after Appearance')
 assertDeepEqual(
   defaultItems.filter(item => item.parent === 'trigger.appearance').map(item => item.label),

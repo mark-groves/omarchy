@@ -97,7 +97,7 @@
   "trigger.appearance.window-corners.theme": {"icon":"󰏘","label":"Theme Corners","checked":"[[ $(omarchy-hyprland-corners) == \"theme\" ]]","action":"omarchy-hyprland-corners theme"},
   "trigger.appearance.window-corners.sharp": {"icon":"󰝣","label":"Sharp Corners","checked":"[[ $(omarchy-hyprland-corners) == \"sharp\" ]]","action":"omarchy-hyprland-corners sharp"},
   "trigger.appearance.window-corners.rounded": {"icon":"󰘇","label":"Rounded Corners","checked":"[[ $(omarchy-hyprland-corners) == \"rounded\" ]]","action":"omarchy-hyprland-corners rounded"},
-  "trigger.appearance.window-transparency": {"icon":"󰂵","label":"Window Transparency"},
+  "trigger.appearance.window-transparency": {"icon":"󰂵","label":"Window Opacity"},
   "trigger.appearance.window-transparency.opaque": {"icon":"󰝤","label":"Opaque Windows","checked":"[[ $(omarchy-hyprland-window-transparency) == \"opaque\" ]]","action":"omarchy-hyprland-window-transparency opaque"},
   "trigger.appearance.window-transparency.transparent": {"icon":"󰝣","label":"Transparent Windows","checked":"[[ $(omarchy-hyprland-window-transparency) == \"transparent\" ]]","action":"omarchy-hyprland-window-transparency transparent"},
   "trigger.appearance.window-transparency.glassy": {"icon":"󰂵","label":"Glassy Windows","checked":"[[ $(omarchy-hyprland-window-transparency) == \"glassy\" ]]","action":"omarchy-hyprland-window-transparency glassy"},
