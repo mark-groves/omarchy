@@ -76,8 +76,9 @@ Item {
   // Published from currentlyLocked(), not bound to it. That binding once kept
   // its last true value after an unlock: lid lock then did nothing, the sudo
   // face overlay stayed suppressed, and polkit's cover hid the password card
-  // so the PAM conversation waited with no face tile.
-  readonly property bool locked: false
+  // so the PAM conversation waited with no face tile. It is writable:
+  // assigning a readonly property throws and leaves the flag stuck.
+  property bool locked: false
 
   onLockedChanged: LockCover.covered = locked
   onLockRequestedChanged: publishLockState()

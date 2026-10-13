@@ -57,6 +57,10 @@ assert(
   'the published lock flag is not a binding that can stick after unlock'
 )
 assert(
+  /(?:^|\n)  property bool locked:\s*false/.test(serviceQml) && !/readonly property bool locked:/.test(serviceQml),
+  'the published lock flag is writable so publishLockState can assign it'
+)
+assert(
   /function publishLockState\(\) \{\s*var now = root\.currentlyLocked\(\)\s*if \(root\.locked !== now\) root\.locked = now\s*\}/.test(serviceQml),
   'the published lock flag is written from a fresh read of the session'
 )
