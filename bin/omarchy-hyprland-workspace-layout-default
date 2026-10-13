@@ -42,7 +42,13 @@ mkdir -p "$MODES_DIR"
 # default never rearranges work in progress: it is saved as that workspace's
 # own layout. Every other workspace, empty or not opened yet, takes the new
 # default, including one given a layout of its own with Super + L.
-busy=$(hyprctl workspaces -j | jq -r '.[] | select(.id >= 1 and (.windows // 0) > 0) | .id')
+# Without a list of workspaces nothing can tell busy from empty, so nothing is
+# changed rather than every saved layout taken for an empty workspace's.
+if ! workspaces=$(hyprctl workspaces -j) ||
+  ! busy=$(jq -r 'if type == "array" then .[] | select(.id >= 1 and (.windows // 0) > 0) | .id else error("not a workspace list") end' <<<"$workspaces"); then
+  echo "omarchy-hyprland-workspace-layout-default: could not read the workspaces, so nothing was changed" >&2
+  exit 1
+fi
 
 while read -r workspace; do
   [[ -n $workspace && ! -f $MODES_DIR/$workspace.lua ]] || continue

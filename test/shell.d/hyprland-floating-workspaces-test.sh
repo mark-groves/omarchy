@@ -119,6 +119,18 @@ grep -qxF 'o.workspace_mode({ workspace = "2", mode = "dwindle" })' "$modes_dir/
 grep -qxF 'o.workspace_mode({ workspace = "6", mode = "floating" })' "$modes_dir/6.lua" ||
   fail "a workspace with a layout of its own keeps it"
 pass "a new default leaves workspaces with windows as they are"
+
+# A failed workspace query changes nothing, rather than taking every saved
+# layout for an empty workspace's.
+printf 'o.workspace_mode({ workspace = "2", mode = "dwindle" })\n' >"$modes_dir/2.lua"
+cp "$modes_dir/default.lua" "$tmpdir/default.before"
+printf 'not json\n' >"$fake/workspaces.json"
+if run omarchy-hyprland-workspace-layout-default scrolling 2>/dev/null; then
+  fail "a new default is refused when the workspaces cannot be read"
+fi
+[[ -f $modes_dir/2.lua ]] || fail "a failed workspace query keeps the saved layouts"
+cmp -s "$modes_dir/default.lua" "$tmpdir/default.before" || fail "a failed workspace query keeps the old default"
+pass "a failed workspace query leaves the saved layouts alone"
 rm -f "$modes_dir"/*.lua
 printf '[{ "id": 2, "name": "2", "tiledLayout": "dwindle" }, { "id": 4, "name": "4", "tiledLayout": "scrolling" }]\n' >"$fake/workspaces.json"
 
