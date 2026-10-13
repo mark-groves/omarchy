@@ -73,15 +73,25 @@ Item {
   property bool strandedLock: false
   property bool strandedLockResolved: false
 
-  readonly property bool locked: lockRequested || sessionLock.locked || sessionLock.secure
+  // Published from currentlyLocked(), not bound to it. That binding once kept
+  // its last true value after an unlock: lid lock then did nothing, the sudo
+  // face overlay stayed suppressed, and polkit's cover hid the password card
+  // so the PAM conversation waited with no face tile.
+  readonly property bool locked: false
 
   onLockedChanged: LockCover.covered = locked
+  onLockRequestedChanged: publishLockState()
 
   // Decisions read the lock state afresh. A property binding that missed a change
   // notification once reported locked after an unlock, and a lock request before
   // suspend then took that for done and never locked the session.
   function currentlyLocked() {
     return lockRequested || sessionLock.locked || sessionLock.secure
+  }
+
+  function publishLockState() {
+    var now = root.currentlyLocked()
+    if (root.locked !== now) root.locked = now
   }
   readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating
   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
@@ -258,7 +268,10 @@ Item {
   }
 
   function finishUnlock() {
-    if (!root.currentlyLocked()) return
+    if (!root.currentlyLocked()) {
+      publishLockState()
+      return
+    }
 
     lockRequested = false
     pendingSessionLock = false
@@ -269,6 +282,7 @@ Item {
     sessionLock.locked = false
     logEvent("unlocked")
     runWake()
+    publishLockState()
   }
 
   function armBlankTimer() {
@@ -580,6 +594,7 @@ Item {
         root.startFingerprint()
         root.startFace()
       }
+      root.publishLockState()
     }
 
     onLockStateChanged: {
@@ -599,6 +614,7 @@ Item {
         root.resetAuthenticationState()
         root.runWake()
       }
+      root.publishLockState()
     }
 
     WlSessionLockSurface {

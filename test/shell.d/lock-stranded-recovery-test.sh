@@ -49,6 +49,28 @@ assert(
   'lock, isLocked, and status decide from the current lock state'
 )
 
+// The sudo overlay and polkit cover read the published flag. A binding of the
+// same three values once stayed true after unlock, so the overlay never opened
+// and a password conversation waited with no card on screen.
+assert(
+  !/readonly property bool locked:\s*lockRequested \|\|/.test(serviceQml),
+  'the published lock flag is not a binding that can stick after unlock'
+)
+assert(
+  /function publishLockState\(\) \{\s*var now = root\.currentlyLocked\(\)\s*if \(root\.locked !== now\) root\.locked = now\s*\}/.test(serviceQml),
+  'the published lock flag is written from a fresh read of the session'
+)
+assert(
+  /onLockRequestedChanged:\s*publishLockState\(\)/.test(serviceQml)
+    && /onSecureStateChanged:[\s\S]*?root\.publishLockState\(\)/.test(serviceQml)
+    && /onLockStateChanged:[\s\S]*?root\.publishLockState\(\)/.test(serviceQml),
+  'request, secure, and session-lock changes republish the flag'
+)
+assert(
+  /function finishUnlock\(\) \{[\s\S]*?publishLockState\(\)/.test(serviceQml),
+  'unlock republishes after the request and the session lock are down'
+)
+
 assert(
   /id: strandedLockRetryTimer[\s\S]*running: !root\.strandedLockResolved && remaining > 0/.test(serviceQml),
   'the check retries while the compositor cannot answer, and stops once it has'
