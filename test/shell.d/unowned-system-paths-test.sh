@@ -16,7 +16,9 @@ set -euo pipefail
 
 source "$(dirname "$0")/base-test.sh"
 
-python3 - "$ROOT" <<'PYTHON'
+# The PKGBUILDs live in the omarchy-pkgs checkout, wherever this machine keeps it.
+if find_omarchy_pkgs; then
+  python3 - "$ROOT" "$OMARCHY_PKGS_ROOT" <<'PYTHON'
 import os, re, sys
 from pathlib import Path
 
@@ -54,20 +56,7 @@ allowed = {
 # retroactively matter for machines that already ran it.
 skip_scripts = {"bin/omarchy-upgrade-to-quattro"}
 
-pkgs_candidates = [
-  root.parent / "omarchy-pkgs/pkgbuilds",
-  root.parent.parent / "omarchy-pkgs/pkgbuilds",
-  root.parent / "omacom/omarchy-pkgs/pkgbuilds",
-  Path.home() / "Work/omacom/omarchy-pkgs/pkgbuilds",
-]
-override = os.environ.get("OMARCHY_PKGS_PATH")
-if override:
-  pkgs_candidates = [Path(override) / "pkgbuilds", Path(override)] + pkgs_candidates
-pkgs_root = next((p for p in pkgs_candidates if p.exists()), None)
-if pkgs_root is None:
-  print("not ok - omarchy-pkgs checkout found for package ownership check", file=sys.stderr)
-  sys.exit(1)
-
+pkgs_root = Path(sys.argv[2])
 packaged = "\n".join(p.read_text() for p in pkgs_root.glob("*/PKGBUILD"))
 
 # Commands that put a file somewhere, as opposed to reading one.
@@ -149,8 +138,10 @@ if problems:
   )
   sys.exit(1)
 PYTHON
-
-pass "no Omarchy script writes a path under /usr that no package owns"
+  pass "no Omarchy script writes a path under /usr that no package owns"
+else
+  skip "no Omarchy script writes a path under /usr that no package owns: needs the omarchy-pkgs checkout; set OMARCHY_PKGS_PATH to it"
+fi
 
 for script in bin/omarchy-hibernation-setup bin/omarchy-toggle-hybrid-gpu; do
   grep -F '"${destination%/*}/.${destination##*/}.omarchy.XXXXXX"' "$ROOT/$script" >/dev/null ||
