@@ -30,6 +30,9 @@ local M = {}
 local modes = {}
 local default_mode = nil
 local watching = false
+-- Set up once per config load, on the first floating workspace.
+local floating_ready = false
+local set_up_floating
 local cascade = 0
 local open_rules = 0
 
@@ -378,6 +381,9 @@ function o.workspace_mode(spec)
       hl.config({ general = { layout = spec.default } })
     end
     sync_open_rules()
+    if anything_floats() then
+      set_up_floating()
+    end
     return
   end
 
@@ -390,6 +396,10 @@ function o.workspace_mode(spec)
   end
 
   modes[workspace] = spec.mode
+
+  if anything_floats() then
+    set_up_floating()
+  end
 
   arrange(hl.get_workspace_windows(workspace))
   sync_open_rules()
@@ -509,9 +519,20 @@ function M.apply()
     update_input()
   end
 
-  if not anything_floats() then
+  if anything_floats() then
+    set_up_floating()
+  end
+end
+
+-- What floating workspaces need on top of the rest of the config: shadows,
+-- opaque windows, and titlebars. Run while the config loads when something
+-- floats already, and otherwise the moment a workspace starts floating, so
+-- Super + L brings titlebars without reloading Hyprland.
+set_up_floating = function()
+  if floating_ready then
     return
   end
+  floating_ready = true
 
   -- Overlapping windows need depth to tell apart, and a translucent window over
   -- another is hard to read.

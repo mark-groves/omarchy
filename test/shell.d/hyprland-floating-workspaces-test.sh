@@ -550,6 +550,27 @@ assert(bar.on_double_click:find("maximized", 1, true), "double-clicking a titleb
 fi
 pass "titlebars load when a workspace floats and follow the theme"
 
+# A workspace that starts floating after the config loaded, with Super + L,
+# gets titlebars at once rather than on the next reload, and only once however
+# many workspaces start floating after it.
+rm -f "$modes_dir"/*.lua
+if ! run_lua '
+window("0x1", 3)
+require("default.hypr.workspace-layouts")
+assert(state().plugin_loads == 0, "the titlebar plugin was loaded with nothing floating")
+o.workspace_mode({ workspace = "3", mode = "floating" })
+local s = state()
+assert(s.plugin_loads == 1, "a workspace that started floating did not load the titlebar plugin")
+assert(s.titlebar_config and s.titlebar_config.enabled, "a workspace that started floating did not turn titlebars on")
+local buttons = #s.buttons
+o.workspace_mode({ workspace = "4", mode = "floating" })
+assert(state().plugin_loads == 1 and #state().buttons == buttons, "titlebars were set up again for a second floating workspace")
+' TITLEBARS_INSTALLED=1 TITLEBARS_LOADED=1; then
+  fail "a workspace that starts floating gets titlebars without a reload"
+fi
+pass "a workspace that starts floating gets titlebars without a reload"
+printf 'o.workspace_mode({ workspace = "1", mode = "floating" })\n' >"$modes_dir/1.lua"
+
 # A theme whose raised surface is its background would hide the titlebar again,
 # so it takes the selection color instead.
 theme="$state_home/omarchy/current/theme/colors.toml"

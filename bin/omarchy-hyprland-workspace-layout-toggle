@@ -80,9 +80,9 @@ if (( APPLIED )); then
   omarchy-shell -q omarchy.dock refresh
 fi
 
-# Titlebars and shadows are set up while the config loads, and only
-# when something floats, so the first floating workspace needs a reload to get
-# them. Once the titlebar plugin is in, later ones have them already.
+# A workspace starting to float sets up its titlebars as the mode applies. The
+# titlebar plugin itself is only loaded while the config loads, so the first
+# floating workspace of a session still needs a reload to bring it in.
 if (( APPLIED )) && [[ $NEW_MODE == "floating" ]] && ! hyprctl plugin list -j 2>/dev/null | jq -e 'any(.[]?; .name == "hyprbars")' >/dev/null 2>&1; then
   hyprctl reload >/dev/null
 fi
