@@ -101,6 +101,8 @@
   "games.startHint": "Start it with Super + Space",
   "gpu.enableDedicated": "Enable dedicated GPU and reboot?",
   "gpu.useIntegrated": "Use only integrated GPU and reboot?",
+  "grokBot.updated": "Grok Bot updated",
+  "grokBot.updatedFromTo": "Updated from %1 to %2.",
   "hermes.deleteData": "Also delete ~/.hermes and ~/.config/Hermes (%1: chats, memories, skills, connections and tokens)?",
   "input.touchpadDisabled": "Touchpad disabled",
   "input.touchpadEnabled": "Touchpad enabled",

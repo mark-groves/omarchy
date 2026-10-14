@@ -2027,9 +2027,16 @@ Panel {
         var lines = []
         if (compact.window) {
           var windowName = root.windowDisplayTitle(compact.window.title)
-          var used = root.formatLimitPercent(compact.window.percent) + " used"
+          var used = root.formatLimitPercent(compact.window.percent)
           var reset = root.formatResetCaption(compact.window)
-          lines.push(windowName + ": " + used + (reset !== "" ? " · " + reset : ""))
+          // A complimentary reset names the day it happened. The translated
+          // line covers a window that is only counting down.
+          if (compact.window.resetEarly === true)
+            lines.push(windowName + ": " + used + " used" + (reset !== "" ? " · " + reset : ""))
+          else
+            lines.push(compact.resetMs > 0
+              ? Commons.I18n.t("agents.windowUsedResets").arg(windowName).arg(used.slice(0, -1)).arg(root.formatDuration(compact.resetMs))
+              : Commons.I18n.t("agents.windowUsed").arg(windowName).arg(used.slice(0, -1)))
         }
         if (compact.stale)
           lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000

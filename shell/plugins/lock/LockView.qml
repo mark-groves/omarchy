@@ -198,9 +198,8 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
-        text: root.faceState === "notRecognized"
-          ? "Face not recognized"
-          : (root.faceState === "recognized" ? "Face recognized" : "Look at the camera")
+        text: root.faceState === "notRecognized" ? Commons.I18n.t("face.notRecognized")
+          : (root.faceState === "recognized" ? Commons.I18n.t("face.recognized") : Commons.I18n.t("face.lookAtTheCamera"))
         color: root.faceState === "notRecognized" ? Commons.Color.lock.textError : Commons.Color.lock.text
         opacity: 0.86
         font.family: Style.font.family
@@ -210,8 +209,8 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
-        text: root.faceState === "notRecognized" ? "Type your password"
-          : (root.faceState === "scanning" ? "or type your password" : "")
+        text: root.faceState === "notRecognized" ? Commons.I18n.t("face.typeYourPassword")
+          : (root.faceState === "scanning" ? Commons.I18n.t("face.orTypeYourPassword") : "")
         visible: text !== ""
         color: Commons.Color.lock.text
         opacity: 0.44

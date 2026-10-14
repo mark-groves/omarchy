@@ -262,8 +262,8 @@ if omarchy-pkg-present grok-bot; then
         if pgrep -f '/opt/Grok Bot/(grok-bot|sand)' >/dev/null 2>&1; then
           echo "Restart Grok Bot to use the new version."
         fi
-        omarchy-notification-send -u normal -g 󰚩 "Grok Bot updated" \
-          "Updated from ${installed} to ${latest_version}." || true
+        omarchy-notification-send -u normal -g 󰚩 "$(omarchy-i18n grokBot.updated)" \
+          "$(omarchy-i18n grokBot.updatedFromTo "$installed" "$latest_version")" || true
       else
         echo "Grok Bot is already current (${installed})."
       fi

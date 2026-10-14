@@ -626,6 +626,9 @@
   "setup.security.passwordless-sudo": {
     "label": "Passwordless Sudo"
   },
+  "setup.security.face": {
+    "label": "Face"
+  },
   "setup.config.hyprland": {
     "label": "Hyprland"
   },
@@ -974,6 +977,9 @@
   "remove.security.sudoless-docker": {
     "label": "Sudoless Docker"
   },
+  "remove.security.face": {
+    "label": "Face"
+  },
   "remove.ai.hermes": {
     "label": "Hermes Desktop"
   },
@@ -1153,6 +1159,24 @@
   },
   "update.firmware": {
     "label": "Firmware"
+  },
+  "update.grok-bot": {
+    "label": "Grok Bot"
+  },
+  "update.cursor": {
+    "label": "Cursor"
+  },
+  "update.cursor.all": {
+    "label": "All"
+  },
+  "update.cursor.editor": {
+    "label": "Editor"
+  },
+  "update.cursor.agent": {
+    "label": "Agent CLI"
+  },
+  "update.cursor.origin": {
+    "label": "Origin CLI"
   },
   "update.password": {
     "label": "Password"
