@@ -189,7 +189,10 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       if (!batteryPresent) {
-        close()
+        // Deferred: closing here writes the very property whose change
+        // is being notified, which QML reports as a binding loop for
+        // Panel.opened on every open attempt without a battery.
+        Qt.callLater(function() { root.close() })
         return
       }
 
