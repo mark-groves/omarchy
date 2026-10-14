@@ -476,7 +476,7 @@ Item {
     enteredPassword = ""
     pendingPassword = ""
     failedAttempts += 1
-    failureMessage = "Authentication failed (" + failedAttempts + ")"
+    failureMessage = I18n.t("lock.authenticationFailed").arg(I18n.formatNumber(failedAttempts))
     runWake()
   }
 
@@ -677,6 +677,10 @@ Item {
 
     WlSessionLockSurface {
       id: lockSurface
+      // Right-to-left languages read this window mirrored.
+      Binding { target: lockSurface.contentItem; property: "LayoutMirroring.enabled"; value: Commons.I18n.rightToLeft }
+      Binding { target: lockSurface.contentItem; property: "LayoutMirroring.childrenInherit"; value: true }
+
       color: Commons.Color.background
 
       LockView {
@@ -712,6 +716,10 @@ Item {
 
   PanelWindow {
     id: previewWindow
+    // Right-to-left languages read this window mirrored.
+    Binding { target: previewWindow.contentItem; property: "LayoutMirroring.enabled"; value: Commons.I18n.rightToLeft }
+    Binding { target: previewWindow.contentItem; property: "LayoutMirroring.childrenInherit"; value: true }
+
     visible: root.previewVisible
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
