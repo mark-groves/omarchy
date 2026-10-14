@@ -194,8 +194,6 @@ grep -qF 'hl.dsp.window.tag({ tag = "+omarchy-minimized-from-5", window = "addre
   fail "minimize takes the active window when given none" "$(cat "$TMPDIR/hyprctl.log")"
 pass "minimize sends a window to the dock and keeps focus on its workspace"
 
-# Minimizing again from another workspace replaces the remembered one, so the
-# workspace the window already left is not kept floating forever.
 cat >"$mock_bin/hyprctl" <<STUB
 #!/bin/bash
 case "\$1" in
