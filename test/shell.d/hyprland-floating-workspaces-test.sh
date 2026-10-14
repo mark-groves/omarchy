@@ -165,6 +165,17 @@ pass "a minimized window pins the floating layout the default used to give its w
 
 rm -f "$modes_dir"/*.lua
 printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
+printf '[{ "id": 2, "name": "2", "windows": 0 }]\n' >"$fake/workspaces.json"
+jq -n '[range(200) | { address: "0x\(.)", workspace: { name: "3" }, title: ("x" * 1000) }] +
+  [{ address: "0xabc", workspace: { name: "special:minimized" }, tags: ["omarchy-minimized-from-2"] }]' >"$fake/clients.json"
+run omarchy-hyprland-workspace-layout-default scrolling ||
+  fail "a new default is set however long the client list"
+grep -qxF 'o.workspace_mode({ workspace = "2", mode = "floating" })' "$modes_dir/2.lua" ||
+  fail "a long client list still keeps a minimized window's workspace floating"
+pass "a client list longer than one argument still sets the default"
+
+rm -f "$modes_dir"/*.lua
+printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
 printf 'o.workspace_mode({ workspace = "2", mode = "floating" })\n' >"$modes_dir/2.lua"
 cp "$modes_dir/default.lua" "$tmpdir/default.before"
 printf '[{ "id": 2, "name": "2", "windows": 0 }]\n' >"$fake/workspaces.json"
