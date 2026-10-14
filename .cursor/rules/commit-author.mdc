@@ -1,0 +1,17 @@
+---
+description: Commit as Mark Groves and confirm GitHub author.login before pushing
+alwaysApply: true
+---
+
+Before committing, set the repository git identity so Mark is both author and committer:
+
+```bash
+git config user.name "Mark Groves"
+git config user.email "149283429+mark-groves@users.noreply.github.com"
+```
+
+That noreply address is the one GitHub links to user `mark-groves`. Mark must be both the author and the committer of every commit this agent creates.
+
+A `Co-authored-by: Cursor Agent <cursoragent@cursor.com>` trailer is allowed. Mark stays the author.
+
+Before pushing, verify via the GitHub commit API that `author.login` is `mark-groves`. Do not push if it is not.
