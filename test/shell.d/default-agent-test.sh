@@ -162,6 +162,7 @@ crush_package="crush"
 agy_package="antigravity-cli"
 ori_package="github:OpenRouterLabs/ori-releases"
 basecamp_package="github:basecamp/basecamp-cli"
+kimi_package="npm:@moonshot-ai/kimi-code"
 cursor_agent_package="cursor-agent"
 muse_package="http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]"
 
@@ -183,6 +184,7 @@ assert_lazy_stub "$omp_package" omp
 assert_lazy_stub "$crush_package" crush
 assert_lazy_stub "$ori_package" ori
 assert_lazy_stub "$basecamp_package" basecamp
+assert_lazy_stub "$kimi_package" kimi
 assert_lazy_stub "$muse_package" muse
 pass "custom agent lazy stubs preserve their mise packages"
 
@@ -197,15 +199,16 @@ grep -F "asdf:icholy/asdf-cursor-agent" "$stub_log" >/dev/null &&
   fail "user setup does not create a Cursor asdf stub"
 grep -F "cursor-agent" "$stub_log" >/dev/null &&
   fail "user setup does not create a Cursor mise stub"
-OMARCHY_TEST_MISSING_COMMAND=muse source "$ROOT/install/user/mise.sh"
 grep -Fx "$muse_package muse" "$stub_log" >/dev/null || fail "user setup creates the Muse lazy stub"
+grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "user setup creates the Kimi lazy stub"
 pass "user setup creates the custom agent lazy stubs"
 
 : >"$stub_log"
 source "$ROOT/install/user/mise.sh"
-grep -Fx "$cursor_agent_package" "$stub_log" >/dev/null && fail "user setup replaces an existing cursor-agent command"
-pass "user setup keeps an existing Cursor CLI install"
-grep -Fx "$muse_package muse" "$stub_log" >/dev/null && fail "user setup replaces an existing Muse command"
+grep -F "cursor-agent" "$stub_log" >/dev/null && fail "user setup does not recreate a Cursor mise stub"
+grep -Fx "$muse_package muse" "$stub_log" >/dev/null || fail "user setup recreates the Muse lazy stub"
+grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "user setup recreates the Kimi lazy stub"
+pass "user setup recreates wrappers even when the commands are present"
 
 : >"$stub_log"
 OMARCHY_TEST_MISSING_COMMAND=muse source "$ROOT/migrations/1788724825.sh" >/dev/null
@@ -220,6 +223,10 @@ OMARCHY_TEST_MISSING_COMMAND=muse source "$ROOT/migrations/1788724825.sh" >/dev/
 rm "$test_home/.local/state/omarchy/preinstalls-removed"
 pass "Muse migration preserves existing installs and the preinstall opt-out"
 
+
+: >"$stub_log"
+OMARCHY_TEST_MISSING_COMMAND=kimi source "$ROOT/migrations/1786967403.sh" >/dev/null
+grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "Kimi migration creates its lazy stub"
 
 : >"$stub_log"
 source "$ROOT/migrations/1785617047.sh" >/dev/null
@@ -347,6 +354,7 @@ source "$ROOT/migrations/1785846769.sh" >/dev/null
 source "$ROOT/migrations/1787163407.sh" >/dev/null
 source "$ROOT/migrations/1787342993.sh" >/dev/null
 OMARCHY_TEST_MISSING_COMMAND=cursor-agent source "$ROOT/migrations/1788577553.sh" >/dev/null
+OMARCHY_TEST_MISSING_COMMAND=kimi source "$ROOT/migrations/1786967403.sh" >/dev/null
 [[ ! -s $stub_log ]] || fail "agent migrations respect the preinstall opt-out"
 [[ ! -e $test_home/.local/bin/omp ]] || fail "agent migration removes the obsolete Oh My Pi wrapper after opt-out"
 [[ -e $test_home/.local/bin/cursor-agent ]] || fail "Cursor migration still leaves a real cursor-agent after opt-out"
@@ -480,9 +488,10 @@ grep -Fx "unuse -y -g $legacy_grok_package" "$mise_history" >/dev/null ||
 pass "agent migrations install working wrappers without overriding the preinstall opt-out"
 
 "$ROOT/bin/omarchy-mise-install" "$muse_package" muse
+"$ROOT/bin/omarchy-mise-install" "$kimi_package" kimi
 touch "$test_home/.local/bin/agy" "$test_home/.local/bin/ori"
 omarchy-remove-preinstalls >/dev/null
-for command in agy omp ori grok crush muse; do
+for command in agy omp ori grok crush muse kimi; do
   [[ ! -e $test_home/.local/bin/$command ]] || fail "Remove Preinstalls deletes the $command lazy stub"
 done
 [[ -e $test_home/.local/bin/cursor-agent ]] || fail "Remove Preinstalls leaves a user-installed Cursor Agent in place"
@@ -568,6 +577,8 @@ declare -A expected_agents=(
   [hermes]="hermes"
   [copilot]="copilot"
   [github-copilot]="copilot"
+  [kimi]="kimi"
+  [kimi-code]="kimi"
   [muse]="muse"
   [muse-code]="muse"
   [musecode]="muse"
@@ -584,6 +595,7 @@ declare -A expected_packages=(
   [grok]="$grok_package"
   [agy]="$agy_package"
   [copilot]="copilot"
+  [kimi]="$kimi_package"
   [cursor-agent]="$cursor_agent_package"
   [muse]="$muse_package"
 )
@@ -879,6 +891,7 @@ assert_launch cursor-agent cursor-agent --yolo --trust agent -- "Review this pro
 assert_launch hermes env -u HERMES_SESSION_SOURCE hermes chat --yolo --tui "--query=Review this project"
 assert_launch agy agy --dangerously-skip-permissions --prompt-interactive "Review this project"
 assert_launch copilot copilot --allow-all --interactive "Review this project"
+assert_launch kimi kimi --prompt "Review this project"
 pass "agent launcher adapts initial prompts for every supported agent"
 
 literal_muse_prompt=$'--disable-sandbox !Crash {$(touch must-not-run)}\ntrailing\\ '
@@ -907,6 +920,7 @@ assert_bypass cursor-agent cursor-agent --yolo --trust
 assert_bypass hermes hermes --yolo
 assert_bypass agy agy --dangerously-skip-permissions
 assert_bypass copilot copilot --allow-all
+assert_bypass kimi kimi --yolo
 pass "agent launcher skips permission prompts for every supported agent"
 
 printf '%s\n' "opencode" >"$agent_file"

@@ -251,6 +251,7 @@ const expectedAgents = {
   claude: { icon: '󰛄', label: 'Claude' },
   codex: { icon: '\ue905', iconFont: 'omarchy', label: 'Codex' },
   grok: { icon: '\ue904', iconFont: 'omarchy', label: 'Grok' },
+  kimi: { icon: '\u{f06a9}', label: 'Kimi' },
   hermes: { icon: '\ue90a', iconFont: 'omarchy', label: 'Hermes' },
   openclaw: { icon: '\ue90c', iconFont: 'omarchy', label: 'OpenClaw' },
   copilot: { icon: '', label: 'Copilot' },
@@ -276,7 +277,7 @@ assertDeepEqual(
   defaultItems
     .filter(item => item.parent === 'setup.default.agent')
     .map(item => item.label),
-  ['Antigravity', 'Claude', 'Codex', 'Copilot', 'Crush', 'Cursor CLI', 'Grok', 'Hermes', 'Muse Code', 'omp', 'OpenClaw', 'OpenCode', 'Ori', 'Pi'],
+  ['Antigravity', 'Claude', 'Codex', 'Copilot', 'Crush', 'Cursor CLI', 'Grok', 'Hermes', 'Kimi', 'Muse Code', 'omp', 'OpenClaw', 'OpenCode', 'Ori', 'Pi'],
   'menu sorts coding agents alphabetically'
 )
 const expectedDefaults = {
