@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # omarchy:summary=Read and change the registry of Claude, Codex, and Grok subscription accounts
-# omarchy:args=<registry|home|homes|list|refresh|begin|register|use|rename|remove|mode|link|autoswitch> [provider] [args...]
+# omarchy:args=<registry|home|homes|list|refresh|begin|register|recover|use|rename|remove|mode|link|autoswitch> [provider] [args...]
 # omarchy:hidden=true
 """The account registry behind `omarchy agent account`.
 
@@ -67,6 +67,7 @@ DEFAULT_THRESHOLD = 95
 # first, and the menu's Add Account row is `.add`.
 RESERVED_IDS = {"next", "add", "claude", "codex", "grok", "primary"}
 SWITCH_MODES = ("manual", "auto")
+LOGIN_RECEIPT = ".omarchy-login.json"
 
 
 class AccountError(Exception):
@@ -249,8 +250,9 @@ def save(provider: str, registry: dict[str, Any]) -> None:
 # the autoswitch run after each usage update, and a command typed at a prompt
 # can't interleave and drop each other's edits.
 class Locked:
-  def __init__(self, provider: str):
+  def __init__(self, provider: str, save_on_exit: bool = True):
     self.provider = provider
+    self.save_on_exit = save_on_exit
 
   def __enter__(self) -> dict[str, Any]:
     accounts_root().mkdir(parents=True, exist_ok=True)
@@ -261,7 +263,7 @@ class Locked:
 
   def __exit__(self, kind, value, traceback) -> None:
     try:
-      if kind is None:
+      if kind is None and self.save_on_exit:
         save(self.provider, self.registry)
     finally:
       fcntl.flock(self.handle, fcntl.LOCK_UN)
@@ -321,14 +323,35 @@ def carry_settings(provider: str, home: Path) -> None:
   os.replace(tmp, path)
 
 
-# A login in progress gets a scratch home beside the real ones, so an
-# abandoned or duplicate login never shows up as an account.
-def begin(provider: str) -> Path:
+# A login in progress gets a scratch home beside the real ones. Its receipt
+# lets a completed login survive interruption without exposing credentials.
+def process_start(pid: int) -> str:
+  try:
+    # The command name can contain spaces and parentheses.
+    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+  except (OSError, IndexError):
+    return ""
+
+
+def write_receipt(home: Path, receipt: dict[str, Any]) -> None:
+  path = home / LOGIN_RECEIPT
+  fd, tmp = tempfile.mkstemp(prefix=LOGIN_RECEIPT, dir=str(home))
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+      json.dump(receipt, handle)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+  finally:
+    Path(tmp).unlink(missing_ok=True)
+
+
+def begin(provider: str, label: str = "", owner: int = 0) -> Path:
   pending = accounts_root() / provider / ".pending"
   pending.mkdir(parents=True, exist_ok=True)
   os.chmod(pending.parent, 0o700)
   home = Path(tempfile.mkdtemp(prefix="login-", dir=str(pending)))
   link_shared(provider, home)
+  write_receipt(home, {"label": label, "owner": owner, "started": process_start(owner) if owner else ""})
   return home
 
 
@@ -338,11 +361,11 @@ def register(provider: str, label: str, pending: Path) -> dict[str, Any]:
     raise AccountError(f"{pending} is not a pending {PROVIDERS[provider]['name']} login")
 
   found = identity(provider, pending)
-  if not found["accountId"]:
+  if not found["accountId"] or (provider == "claude" and not (read_json(pending / ".credentials.json") or {}).get("claudeAiOauth")):
     shutil.rmtree(pending, ignore_errors=True)
     raise AccountError("The login didn't finish, so no account was added.")
 
-  with Locked(provider) as registry:
+  with Locked(provider, save_on_exit=False) as registry:
     # Each home is asked who it is now, not trusted from when it was added: a
     # `claude auth login` run by hand in ~/.claude changes the primary.
     for account in registry["accounts"]:
@@ -358,22 +381,98 @@ def register(provider: str, label: str, pending: Path) -> dict[str, Any]:
     label = label.strip() or found["email"].split("@")[0] or "Account"
     account_id = unique_id(provider, registry, label)
 
-    # Everything that can fail happens while the login is still pending, where
-    # the add command cleans it up, or is undone: a home that isn't in the
-    # registry would keep a sign-in nothing can manage.
+    # A failed write goes back to pending for recovery. The receipt also
+    # covers abrupt death between moving the home and saving the registry.
     carry_settings(provider, pending)
     home = accounts_root() / provider / account_id
-    pending.rename(home)
     entry = {"id": account_id, "label": label, "home": str(home), "primary": False}
     entry.update(found)
+    receipt = read_json(pending / LOGIN_RECEIPT) or {}
+    receipt["entry"] = entry
+    write_receipt(pending, receipt)
+    pending.rename(home)
     registry["accounts"].append(entry)
     try:
       save(provider, registry)
-    except Exception:
+    except BaseException:
       registry["accounts"].pop()
       home.rename(pending)
       raise
+    (home / LOGIN_RECEIPT).unlink(missing_ok=True)
     return entry
+
+
+def recover_home(provider: str, home: Path) -> dict[str, Any] | None:
+  root = accounts_root() / provider
+  receipt = read_json(home / LOGIN_RECEIPT)
+  if not isinstance(receipt, dict):
+    return None
+  owner = receipt.get("owner")
+  if owner and receipt.get("started") and process_start(owner) == receipt["started"]:
+    return None
+  # A surviving CLI may still be writing credentials after its parent died.
+  if home_in_use(provider, home):
+    return None
+  if not identity(provider, home)["accountId"]:
+    return None
+  # Claude writes its identity and credentials separately. An identity
+  # alone does not mean the OAuth exchange finished.
+  if provider == "claude" and not (read_json(home / ".credentials.json") or {}).get("claudeAiOauth"):
+    return None
+  if home.parent == root / ".pending":
+    try:
+      return register(provider, str(receipt.get("label") or ""), home)
+    except AccountError:
+      # Duplicate and unfinished logins are removed by register itself.
+      if home.exists():
+        raise
+      return None
+
+  # A crash between moving the home and saving the registry is also
+  # recoverable: the receipt holds the exact entry prepared before moving.
+  with Locked(provider, save_on_exit=False) as registry:
+    # Another recovery or removal may have changed the home while we waited.
+    receipt = read_json(home / LOGIN_RECEIPT)
+    found = identity(provider, home)
+    if not home.is_dir() or not isinstance(receipt, dict) or not found["accountId"]:
+      return None
+    if home_in_use(provider, home):
+      return None
+    if any(account_home(provider, a) == home for a in registry["accounts"]):
+      # A committed account may have been renamed since the crash.
+      (home / LOGIN_RECEIPT).unlink(missing_ok=True)
+      return None
+    entry = receipt.get("entry")
+    if not isinstance(entry, dict) or entry.get("home") != str(home) or entry.get("id") != home.name:
+      return None
+    if any(identity(provider, account_home(provider, a))["accountId"] == found["accountId"] for a in registry["accounts"]):
+      # A retry may already have registered this login under another home.
+      shutil.rmtree(home)
+      return None
+    if find(registry, entry["id"]) is not None:
+      # Preserve the login, but choose a free name rather than blocking adds.
+      entry["id"] = unique_id(provider, registry, entry["label"])
+    entry.update(found)
+    registry["accounts"].append(entry)
+    save(provider, registry)
+    (home / LOGIN_RECEIPT).unlink(missing_ok=True)
+    return entry
+
+
+def recover(provider: str) -> list[dict[str, Any]]:
+  recovered = []
+  root = accounts_root() / provider
+  candidates = sorted((root / ".pending").glob("login-*")) + sorted(root.glob("*/"))
+  for home in candidates:
+    try:
+      entry = recover_home(provider, home)
+      if entry is not None:
+        recovered.append(entry)
+    except (AccountError, OSError) as error:
+      # Keep the receipt for another attempt; one failed candidate must not
+      # prevent other accounts and providers from refreshing.
+      print(f"Could not recover {provider} account {home.name}: {error}", file=sys.stderr)
+  return recovered
 
 
 # The id an account answers to, from its label. It can't clash with another
@@ -415,6 +514,7 @@ def rename(provider: str, target: str, label: str) -> dict[str, Any]:
 # panel or the CLI, changes it, and the usage records take their names and
 # emails from here.
 def refresh(provider: str) -> None:
+  recover(provider)
   with Locked(provider) as registry:
     for account in registry["accounts"]:
       account.update(identity(provider, account_home(provider, account)))
@@ -738,10 +838,12 @@ def main(argv: list[str]) -> int:
         print("\t".join([account["id"], str(account_home(provider, account)), "1" if account["id"] == registry["active"] else "0"]))
     elif command == "refresh":
       for provider in ([provider_arg(args)] if args else list(PROVIDERS)):
-        if registry_path(provider).exists():
+        if registry_path(provider).exists() or (accounts_root() / provider).is_dir():
           refresh(provider)
     elif command == "begin":
-      print(begin(provider_arg(args)))
+      print(begin(provider_arg(args), args[1] if len(args) > 1 else "", int(args[2]) if len(args) > 2 else 0))
+    elif command == "recover":
+      print(json.dumps(recover(provider_arg(args))))
     elif command == "register":
       provider = provider_arg(args)
       if len(args) < 3:
@@ -777,7 +879,7 @@ def main(argv: list[str]) -> int:
           print(provider)
     else:
       raise AccountError(f"Unknown command: {command}")
-  except AccountError as error:
+  except (AccountError, OSError) as error:
     print(error, file=sys.stderr)
     return 1
   return 0

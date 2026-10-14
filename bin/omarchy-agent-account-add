@@ -125,9 +125,9 @@ fi
 # have, and a login would quietly reuse it. The CLIs open their login page
 # through $BROWSER, so this points it at a private window instead.
 private_browser() {
-  browser=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/omarchy-account-browser.XXXXXX")
-  printf '#!/bin/bash\nexec omarchy-launch-browser --private "$1"\n' >"$browser"
-  chmod +x "$browser"
+  browser=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/omarchy-account-browser.XXXXXX") || fail "Couldn't set up a home for the new account."
+  printf '#!/bin/bash\nexec omarchy-launch-browser --private "$1"\n' >"$browser" || fail "Couldn't set up a home for the new account."
+  chmod +x "$browser" || fail "Couldn't set up a home for the new account."
 }
 
 case "$provider" in
@@ -184,6 +184,19 @@ if ! primary_signed_in "$provider"; then
     fail "The $name sign-in didn't finish."
   fi
 else
+  # Retry the final registration of a completed, interrupted sign-in before
+  # asking for another browser login. Live sign-ins are never recovered.
+  if recovered=$(omarchy-agent-account-state recover "$provider"); then
+    if [[ $(jq 'length' <<<"$recovered") != "0" ]]; then
+      added=$(jq -r 'map(.label + (if .email != "" then " (" + .email + ")" else "" end)) | join(", ")' <<<"$recovered")
+      omarchy-agent-usage-update --force "$provider" >/dev/null 2>&1 &
+      finish "Added $added."
+      exit 0
+    fi
+  else
+    fail "$recovered"
+  fi
+
   if [[ -z $label && $events == "false" && -t 0 ]]; then
     label=$(gum input --placeholder "Work" --prompt "Name this $name account: ") || exit 130
   fi
@@ -201,7 +214,7 @@ Don't log out of the $name CLI to do this: logging out revokes the saved sign-in
 EOF
   fi
 
-  home=$(omarchy-agent-account-state begin "$provider") || fail "Couldn't set up a home for the new account."
+  home=$(omarchy-agent-account-state begin "$provider" "$label" "$$") || fail "Couldn't set up a home for the new account."
 
   private_browser
   interruptible env BROWSER="$browser" "$home_env=$home" "${login_command[@]}"
@@ -217,7 +230,12 @@ EOF
       echo "Switch to it with: omarchy agent account use $provider $(jq -r .id <<<"$account")"
     fi
   else
-    home=""
+    registration_status=$?
+    # Keep the home for cleanup when registration was explicitly interrupted.
+    # Storage failures preserve the sign-in and receipt for the next refresh.
+    if (( registration_status != 130 )); then
+      home=""
+    fi
     fail "$account"
   fi
 fi
