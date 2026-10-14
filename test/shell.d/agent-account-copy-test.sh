@@ -21,7 +21,7 @@ export PATH="$test_tmp/bin:$ROOT/bin:$PATH"
 unset CLAUDE_CONFIG_DIR CODEX_HOME GROK_HOME
 
 python3 - <<'PY'
-import base64, copy, ctypes, importlib.machinery, importlib.util, json, os, subprocess, sys
+import base64, contextlib, copy, ctypes, importlib.machinery, importlib.util, io, json, os, subprocess, sys
 from pathlib import Path
 
 loader = importlib.machinery.SourceFileLoader("transfer", str(Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-transfer"))
@@ -43,6 +43,18 @@ def claude(home, uuid, token):
   existing["oauthAccount"] = {"accountUuid": uuid, "emailAddress": uuid + "@example.com"}
   transfer.write_json(account_file, existing)
   transfer.write_json(home / ".credentials.json", {"claudeAiOauth": {"accessToken": token, "refreshToken": "fake-refresh", "subscriptionType": "max"}})
+
+# Invalid and oversized bundles fail before executing code or writing logins.
+for raw, message in [(b'{"token":"fake-do-not-echo"', "invalid receiver bundle"), (b"x" * (transfer.MAX_BUNDLE + 1), "receiver bundle is too large")]:
+  result = subprocess.run(["/usr/bin/python3", "-I", "-c", transfer.RECEIVER_BOOTSTRAP], input=raw, capture_output=True)
+  assert result.returncode != 0 and message.encode() in result.stderr
+  assert b"fake-do-not-echo" not in result.stdout + result.stderr
+original_export = transfer.export_accounts
+transfer.export_accounts = lambda providers: {"large": "x" * (transfer.MAX_STREAM + 1)}
+with contextlib.redirect_stderr(io.StringIO()) as errors:
+  assert transfer.main(["bundle", "claude"]) == 1
+assert "too large" in errors.getvalue()
+transfer.export_accounts = original_export
 
 machine("source")
 claude(state.primary_home("claude"), "personal", "fake-personal")
@@ -97,6 +109,17 @@ claude(state.primary_home("claude"), "personal", "destination-token")
 transfer.import_provider("claude", payload["providers"]["claude"], False)
 assert state.read_json(state.primary_home("claude") / ".credentials.json")["claudeAiOauth"]["accessToken"] == "destination-token"
 assert len(state.load("claude")["accounts"]) == 3
+
+# Copy names and ids exactly, even when destination names have been swapped.
+state.rename("claude", "main", "Holding")
+state.rename("claude", "work", "Personal")
+state.rename("claude", "holding", "Work")
+state.use("claude", "personal")
+transfer.import_provider("claude", payload["providers"]["claude"], False)
+registry = state.load("claude")
+assert [(a["id"], a["label"]) for a in registry["accounts"]] == [("main", "Personal"), ("work", "Work"), ("third", "Third")]
+assert registry["active"] == "work", "renaming preserves the selected identity"
+assert state.read_json(state.primary_home("claude") / ".credentials.json")["claudeAiOauth"]["accessToken"] == "destination-token"
 
 # Explicit replacement rolls back credentials and new homes if commit fails.
 original_save = state.save
@@ -206,6 +229,33 @@ transfer.import_provider("claude", payload["providers"]["claude"], False)
 assert not list(Path.home().rglob(".account-copy-backup-*"))
 assert state.read_json(state.primary_home("claude") / ".credentials.json")["claudeAiOauth"]["accessToken"] == "fake-personal"
 
+# A default Main with a different identity must free the source's main id.
+machine("default-existing")
+claude(state.primary_home("claude"), "local", "local-token")
+transfer.import_provider("claude", payload["providers"]["claude"], False)
+registry = state.load("claude")
+assert len({a["id"] for a in registry["accounts"]}) == len(registry["accounts"])
+assert state.find(registry, "main")["accountId"] == "personal"
+assert state.active(registry)["accountId"] == "local"
+assert registry["active"] == "main-2"
+assert state.identity("claude", state.primary_home("claude"))["accountId"] == "local"
+
+# Numeric suffixes needed by source ids are reserved during collision renaming.
+machine("suffix-existing")
+claude(state.primary_home("claude"), "local", "local-token")
+registry = state.load("claude")
+registry["accounts"][0].update(id="work", label="Work")
+registry["active"] = "work"
+state.save("claude", registry)
+suffix_payload = copy.deepcopy(payload["providers"]["claude"])
+suffix_payload["accounts"][2]["id"] = "work-2"
+transfer.import_provider("claude", suffix_payload, False)
+registry = state.load("claude")
+assert len({a["id"] for a in registry["accounts"]}) == len(registry["accounts"])
+assert state.find(registry, "work-2")["accountId"] == "third"
+assert state.active(registry)["accountId"] == "local"
+assert registry["active"] == "work-2-2"
+
 # An unrelated destination primary stays in place; source Main is additional.
 machine("existing")
 claude(state.primary_home("claude"), "local", "local-token")
@@ -215,9 +265,38 @@ state.save("claude", registry)
 transfer.import_provider("claude", payload["providers"]["claude"], False)
 assert state.identity("claude", state.primary_home("claude"))["accountId"] == "local"
 assert len(state.load("claude")["accounts"]) == 4
-assert [a["label"] for a in state.load("claude")["accounts"]][:2] == ["Personal", "Personal 2"]
-assert state.load("claude")["active"] == "main"
+assert [a["label"] for a in state.load("claude")["accounts"]][:2] == ["Personal 2", "Personal"]
+assert state.find(state.load("claude"), "main")["accountId"] == "personal"
+assert state.load("claude")["active"] == "personal-2"
 assert state.load("claude")["switch"] == "manual" and state.load("claude")["threshold"] == 95
+
+# An older installed receiver lacks name synchronization. Use the destination's
+# own backend for the new receiver so additional registry fields survive.
+machine("newer-backend")
+backend_root = root / "newer-omarchy"
+(backend_root / "bin").mkdir(parents=True)
+backend_source = (Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-state").read_text()
+backend_source = backend_source.replace('return {"active": "main",', 'return {"futureSetting": "keep", "active": "main",')
+(backend_root / "bin/omarchy-agent-account-state").write_text(backend_source)
+old_receiver = root / "old-receiver-bin"
+old_receiver.mkdir()
+command = old_receiver / "omarchy-agent-account-transfer"
+command.write_text("#!/bin/bash\nexit 1\n")
+command.chmod(0o755)
+child_env = dict(os.environ, OMARCHY_PATH=str(backend_root), PATH=str(old_receiver) + ":" + str(root / "bin"))
+bundle = {"version": 1, "backend": "raise RuntimeError('sender backend must not run')", "receiver": Path(transfer.__file__).read_text(), "accounts": payload}
+result = subprocess.run(["/usr/bin/python3", "-I", "-c", transfer.RECEIVER_BOOTSTRAP], input=json.dumps(bundle), text=True, capture_output=True, env=child_env)
+assert result.returncode == 0, result.stderr
+assert state.read_json(state.registry_path("claude"))["futureSetting"] == "keep"
+
+# A missing optional refresh command must not undo a completed import.
+machine("no-updater")
+no_updater_env = dict(os.environ, PATH="")
+bundle["backend"] = (Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-state").read_text()
+result = subprocess.run(["/usr/bin/python3", "-I", "-c", transfer.RECEIVER_BOOTSTRAP], input=json.dumps(bundle), text=True, capture_output=True, env=no_updater_env)
+assert result.returncode == 0, result.stderr
+assert "usage refresh could not start" in result.stderr
+assert len(state.read_json(state.registry_path("claude"))["accounts"]) == 3
 
 # Reject invalid preferences before any credentials are written.
 bad = copy.deepcopy(payload)
@@ -253,19 +332,45 @@ cat >"$test_tmp/bin/ssh" <<'SH'
 #!/bin/bash
 printf '%s\n' "$@" >"$OMARCHY_TEST_ROOT/ssh-args"
 [[ $1 == "-T" && $2 == "--" && $3 == "user@remote" ]] || exit 99
-exec env HOME="$OMARCHY_TEST_ROOT/ssh-destination" XDG_STATE_HOME="$OMARCHY_TEST_ROOT/ssh-destination/state" bash -c "$4"
+exec env HOME="$OMARCHY_TEST_ROOT/ssh-destination" XDG_STATE_HOME="$OMARCHY_TEST_ROOT/ssh-destination/state" python3 "$OMARCHY_TEST_ROOT/run-receiver.py" "$4"
 SH
+# Model an old destination with no transfer command or backend on PATH.
+# Decode the login-shell command without sourcing the developer's profiles.
+cat >"$test_tmp/run-receiver.py" <<'PYRECEIVER'
+import os, shlex, subprocess, sys
+outer = shlex.split(sys.argv[1])
+assert outer[:5] == ["/bin/bash", "--noprofile", "--norc", "-p", "-c"]
+prefix = ". /etc/profile.d/omarchy.sh 2>/dev/null; exec "
+assert outer[5].startswith(prefix)
+inner = shlex.split(outer[5][len(prefix):])
+assert inner[:3] == ["/usr/bin/python3", "-I", "-c"]
+assert "fake-personal" not in sys.argv[1]
+os.environ.pop("OMARCHY_PATH", None)
+# Only the preexisting usage updater remains available on the destination.
+os.environ["PATH"] = os.environ["OMARCHY_TEST_ROOT"] + "/bin"
+os.environ["BASH_ENV"] = os.environ["OMARCHY_TEST_ROOT"] + "/bash-env"
+os.chdir(os.environ["HOME"])
+# Test actual shell isolation, without loading this machine's system profile.
+outer[5] = "exec " + outer[5][len(prefix):]
+os.execv(outer[0], outer)
+PYRECEIVER
 chmod +x "$test_tmp/bin/ssh"
 mkdir -p "$test_tmp/ssh-destination"
+cat >"$test_tmp/bash-env" <<'SH'
+echo "unexpected BASH_ENV" >&2
+exit 99
+SH
+printf 'raise RuntimeError("unexpected home module")\n' >"$test_tmp/ssh-destination/json.py"
+# The mock SSH receiver sets BASH_ENV; the sender keeps its normal environment.
 HOME="$test_tmp/source" XDG_STATE_HOME="$test_tmp/source/state" omarchy-agent-account-copy user@remote claude >"$test_tmp/copy-output"
-[[ $(sed -n '4p' "$test_tmp/ssh-args") == "omarchy-agent-account-transfer import" ]] || fail "SSH invokes the fixed receiver command"
+[[ $(sed -n '4p' "$test_tmp/ssh-args") == "/bin/bash --noprofile --norc -p -c "* ]] || fail "SSH invokes an isolated receiver shell"
 [[ $(jq '.accounts | length' "$test_tmp/ssh-destination/state/omarchy/agents/accounts/claude.json") == 3 ]] || fail "SSH copy imports all three Claude subscriptions"
 [[ $(cat "$test_tmp/copy-output") != *fake-* ]] || fail "copy output contains no tokens"
 [[ ! -e $test_tmp/ssh-destination/state/omarchy/agents/accounts/codex.json ]] || fail "provider selection excludes other subscriptions"
 pass "SSH streams selected accounts to the receiver without exposing tokens"
 
 HOME="$test_tmp/source" XDG_STATE_HOME="$test_tmp/source/state" omarchy-agent-account-copy --replace user@remote claude >"$test_tmp/replace-output"
-[[ $(sed -n '4p' "$test_tmp/ssh-args") == "omarchy-agent-account-transfer import --replace" ]] || fail "replacement requires an explicit option"
+[[ $(cat "$test_tmp/ssh-args") == *"--replace"* ]] || fail "replacement requires an explicit option"
 pass "SSH copy forwards explicit replacement"
 
 rm -f "$test_tmp/ssh-args"
@@ -276,5 +381,27 @@ fi
 pass "invalid providers do not start SSH"
 
 HOME="$test_tmp/source" XDG_STATE_HOME="$test_tmp/source/state" omarchy-agent-account-copy user@remote --replace claude >"$test_tmp/replace-after-output"
-[[ $(sed -n '4p' "$test_tmp/ssh-args") == "omarchy-agent-account-transfer import --replace" ]] || fail "replacement can appear after the host"
+[[ $(cat "$test_tmp/ssh-args") == *"--replace"* ]] || fail "replacement can appear after the host"
 pass "replacement can appear after the host"
+
+# Prefer an installed destination receiver rather than an older bundled backend.
+cat >"$test_tmp/bin/omarchy-agent-account-transfer" <<'SH'
+#!/bin/bash
+if [[ $1 == "capabilities" ]]; then
+  printf '{"streamVersion":1,"sourceNames":true}\n'
+  exit 0
+fi
+printf '%s\n' "$*" >"$OMARCHY_TEST_ROOT/preferred-receiver"
+/usr/bin/python3 -c 'import json,sys; assert json.load(sys.stdin)["version"] == 1'
+SH
+chmod +x "$test_tmp/bin/omarchy-agent-account-transfer"
+HOME="$test_tmp/source" XDG_STATE_HOME="$test_tmp/source/state" "$ROOT/bin/omarchy-agent-account-transfer" bundle claude | /usr/bin/python3 -I -c "$(HOME="$test_tmp/source" XDG_STATE_HOME="$test_tmp/source/state" /usr/bin/python3 - <<'PYBOOT'
+import importlib.machinery, importlib.util, os
+loader=importlib.machinery.SourceFileLoader("transfer",os.environ["OMARCHY_PATH"]+"/bin/omarchy-agent-account-transfer")
+spec=importlib.util.spec_from_loader(loader.name,loader)
+m=importlib.util.module_from_spec(spec);loader.exec_module(m)
+print(m.RECEIVER_BOOTSTRAP)
+PYBOOT
+)" --replace
+[[ $(cat "$test_tmp/preferred-receiver") == "import --replace" ]] || fail "installed receiver is preferred"
+pass "installed receiver is preferred"

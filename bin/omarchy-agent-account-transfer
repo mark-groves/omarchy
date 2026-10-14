@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # omarchy:summary=Export or import subscription account credentials for SSH transfer
-# omarchy:args=<export|import> [--replace] [claude|codex|grok...]
+# omarchy:args=<capabilities|export|bundle|receiver-command|import> [--replace] [claude|codex|grok...]
 # omarchy:hidden=true
 """The private, versioned stream behind account copy. Never log its payload."""
 
@@ -11,17 +11,23 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
-loader = importlib.machinery.SourceFileLoader("accounts", str(Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-state"))
-spec = importlib.util.spec_from_loader(loader.name, loader)
-accounts = importlib.util.module_from_spec(spec)
-loader.exec_module(accounts)
+# SSH supplies the matching backend in memory on older destinations.
+if "_omarchy_account_state" in sys.modules:
+  accounts = sys.modules["_omarchy_account_state"]
+else:
+  loader = importlib.machinery.SourceFileLoader("accounts", str(Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-state"))
+  spec = importlib.util.spec_from_loader(loader.name, loader)
+  accounts = importlib.util.module_from_spec(spec)
+  loader.exec_module(accounts)
 
 FILES = {
   "claude": {".credentials.json", ".claude.json"},
@@ -29,6 +35,47 @@ FILES = {
   "grok": {"auth.json", "settings_cache.json"},
 }
 MAX_STREAM = 8 * 1024 * 1024
+MAX_BUNDLE = MAX_STREAM + 1024 * 1024
+
+# Only this fixed bootstrap goes in SSH's command arguments. Code and
+# credentials arrive over stdin, and no receiver files are installed.
+RECEIVER_BOOTSTRAP = '''import io, json, os, pathlib, shutil, subprocess, sys, types
+raw = sys.stdin.buffer.read(__MAX_BUNDLE__ + 1)
+if len(raw) > __MAX_BUNDLE__:
+  sys.exit("Account copy failed: receiver bundle is too large")
+try:
+  bundle = json.loads(raw)
+except (ValueError, UnicodeError):
+  sys.exit("Account copy failed: invalid receiver bundle")
+if not isinstance(bundle, dict) or bundle.get("version") != 1 or not all(isinstance(bundle.get(k), str) for k in ("backend", "receiver")):
+  sys.exit("Account copy failed: invalid receiver bundle")
+installed = shutil.which("omarchy-agent-account-transfer")
+use_installed = bool(installed)
+local_backend = None
+if installed and (bundle.get("accounts") or {}).get("namePolicy") == "source":
+  probe = subprocess.run([installed, "capabilities"], stdin=subprocess.DEVNULL, capture_output=True)
+  try:
+    capabilities = json.loads(probe.stdout) if probe.returncode == 0 else {}
+  except ValueError:
+    capabilities = {}
+  use_installed = isinstance(capabilities, dict) and capabilities.get("sourceNames") is True
+  if not use_installed:
+    root = os.environ.get("OMARCHY_PATH")
+    local_backend = pathlib.Path(root) / "bin/omarchy-agent-account-state" if root else None
+    if local_backend is None or not local_backend.is_file():
+      sys.exit("Account copy failed: destination account backend is unavailable")
+if use_installed:
+  result = subprocess.run([installed, "import", *sys.argv[1:]], input=json.dumps(bundle.get("accounts")).encode())
+  sys.exit(result.returncode)
+for name, field in (("_omarchy_account_state", "backend"), ("_omarchy_account_transfer", "receiver")):
+  module = types.ModuleType(name)
+  module.__file__ = "<omarchy-account-copy>"
+  sys.modules[name] = module
+  source = local_backend.read_text() if field == "backend" and local_backend else bundle[field]
+  exec(compile(source, module.__file__, "exec"), module.__dict__)
+sys.stdin = io.TextIOWrapper(io.BytesIO(json.dumps(bundle.get("accounts")).encode()))
+sys.exit(module.main(["import", *sys.argv[1:]]))
+'''.replace("__MAX_BUNDLE__", str(MAX_BUNDLE))
 
 
 def login_files(provider: str, home: Path) -> dict[str, Any]:
@@ -43,7 +90,7 @@ def login_files(provider: str, home: Path) -> dict[str, Any]:
 
 
 def export_accounts(providers: list[str]) -> dict[str, Any]:
-  payload = {"version": 1, "providers": {}}
+  payload = {"version": 1, "namePolicy": "source", "providers": {}}
   for provider in providers:
     if provider not in FILES:
       raise accounts.AccountError(f"Unknown subscription provider: {provider}")
@@ -71,11 +118,17 @@ def validate(payload: Any) -> None:
     if not isinstance(registry.get("active"), str) or registry.get("switch") not in accounts.SWITCH_MODES or type(registry.get("threshold")) is not int or not 50 <= registry["threshold"] <= 100:
       raise accounts.AccountError("Invalid account transfer preferences")
     ids = set()
+    identities = set()
     for entry in registry["accounts"]:
       if not isinstance(entry, dict) or not all(isinstance(entry.get(k), str) and entry[k] for k in ("id", "label", "accountId")):
         raise accounts.AccountError("Invalid account transfer identity")
+      if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", entry["id"]) or entry["id"] in accounts.RESERVED_IDS:
+        raise accounts.AccountError("Invalid account transfer ID")
       if type(entry.get("primary")) is not bool or entry["id"] in ids:
         raise accounts.AccountError("Invalid account transfer account")
+      if entry["accountId"] in identities:
+        raise accounts.AccountError("Duplicate account transfer identity")
+      identities.add(entry["accountId"])
       ids.add(entry["id"])
       files = entry.get("files")
       if not isinstance(files, dict) or not files or not set(files) <= FILES[provider] or not all(isinstance(v, dict) for v in files.values()):
@@ -164,24 +217,52 @@ def unique_label(registry: dict[str, Any], label: str) -> str:
   return candidate
 
 
+def match_source_names(provider: str, registry: dict[str, Any], copied: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
+  active = accounts.active(registry)
+  copied_objects = {id(account) for _, account in copied}
+  source_ids = {entry["id"] for entry, _ in copied}
+  source_labels = {entry["label"] for entry, _ in copied}
+  # Free the imported ids together, so swaps cannot force numeric suffixes.
+  for entry, account in copied:
+    account["id"] = "copy-name-" + uuid.uuid4().hex
+    account["label"] = entry["label"]
+  for account in registry["accounts"]:
+    if id(account) in copied_objects:
+      continue
+    if account["label"] in source_labels:
+      account["label"] = unique_label(registry, account["label"])
+    if account["id"] in source_ids:
+      base = accounts.slug(account["label"]) or "account"
+      candidate, suffix = base, 2
+      while candidate in source_ids or candidate in accounts.RESERVED_IDS or any(
+        other is not account and other["id"] == candidate for other in registry["accounts"]
+      ):
+        candidate, suffix = f"{base}-{suffix}", suffix + 1
+      account["id"] = candidate
+  for entry, account in copied:
+    account["id"] = entry["id"]
+  # The selected account stays selected, even when its id changes.
+  registry["active"] = active["id"]
+
+
 def import_provider(provider: str, incoming: dict[str, Any], replace: bool) -> list[str]:
   accounts.recover(provider)
   backups = {}
   backup_dirs = []
   created = []
   results = []
+  copied = []
   try:
     with accounts.Locked(provider) as registry:
       for a in registry["accounts"]:
         for name in FILES[provider]:
           cleanup_transfers(file_path(provider, accounts.account_home(provider, a), name).parent)
       was_empty = not any(accounts.identity(provider, accounts.account_home(provider, a))["accountId"] and login_files(provider, accounts.account_home(provider, a)) for a in registry["accounts"])
-      mapped = {}
       for entry in incoming["accounts"]:
         existing = next((a for a in registry["accounts"] if accounts.identity(provider, accounts.account_home(provider, a))["accountId"] == entry["accountId"]), None)
         if existing and login_files(provider, accounts.account_home(provider, existing)) and not replace:
-          mapped[entry["id"]] = existing["id"]
-          results.append(f"{accounts.PROVIDERS[provider]['name']}: kept {existing['label']} (already present)")
+          copied.append((entry, existing))
+          results.append(("kept", existing))
           continue
         primary = next(a for a in registry["accounts"] if a.get("primary"))
         if existing is None and entry.get("primary") and not saved_credentials(provider, accounts.primary_home(provider)):
@@ -194,7 +275,7 @@ def import_provider(provider: str, incoming: dict[str, Any], replace: bool) -> l
           if was_empty and account.get("primary"):
             account["label"] = entry["label"]
         else:
-          label = unique_label(registry, entry["label"])
+          label = entry["label"]
           account_id = accounts.unique_id(provider, registry, label)
           home = accounts.accounts_root() / provider / account_id
           home.mkdir(parents=True, mode=0o700)
@@ -231,8 +312,10 @@ def import_provider(provider: str, incoming: dict[str, Any], replace: bool) -> l
           accounts.link_shared(provider, home)
           accounts.carry_settings(provider, home)
         account.update(found)
-        mapped[entry["id"]] = account["id"]
-        results.append(f"{accounts.PROVIDERS[provider]['name']}: copied {account['label']} ({found['email']})")
+        copied.append((entry, account))
+        results.append(("copied", account))
+      match_source_names(provider, registry, copied)
+      mapped = {entry["id"]: account["id"] for entry, account in copied}
       if was_empty:
         registry["active"] = mapped.get(incoming.get("active"), registry["active"])
         if incoming.get("switch") in accounts.SWITCH_MODES:
@@ -254,14 +337,40 @@ def import_provider(provider: str, incoming: dict[str, Any], replace: bool) -> l
     (home / accounts.LOGIN_RECEIPT).unlink(missing_ok=True)
   for folder in backup_dirs:
     shutil.rmtree(folder)
-  return results
+  return [
+    f"{accounts.PROVIDERS[provider]['name']}: kept {a['label']} (already present)" if action == "kept"
+    else f"{accounts.PROVIDERS[provider]['name']}: copied {a['label']} ({a['email']})"
+    for action, a in results
+  ]
 
 
 def main(args: list[str]) -> int:
   try:
-    if args and args[0] == "export":
-      encoded = json.dumps(export_accounts(args[1:] or list(FILES)))
-      if len(encoded.encode()) > MAX_STREAM:
+    if args == ["capabilities"]:
+      print(json.dumps({"streamVersion": 1, "sourceNames": True}))
+    elif args in (["receiver-command"], ["receiver-command", "--replace"]):
+      command = "/usr/bin/python3 -I -c " + shlex.quote(RECEIVER_BOOTSTRAP)
+      if "--replace" in args:
+        command += " --replace"
+      # Avoid user profiles, BASH_ENV and home-directory Python modules
+      # while credentials are on stdin. Load only the system bootstrap.
+      command = ". /etc/profile.d/omarchy.sh 2>/dev/null; exec " + command
+      print("/bin/bash --noprofile --norc -p -c " + shlex.quote(command))
+    elif args and args[0] in ("export", "bundle"):
+      payload = export_accounts(args[1:] or list(FILES))
+      if len(json.dumps(payload).encode()) > MAX_STREAM:
+        raise accounts.AccountError("Account transfer stream is too large")
+      limit = MAX_STREAM
+      if args[0] == "bundle":
+        payload = {
+          "version": 1,
+          "backend": (Path(os.environ["OMARCHY_PATH"]) / "bin/omarchy-agent-account-state").read_text(),
+          "receiver": Path(__file__).read_text(),
+          "accounts": payload,
+        }
+        limit = MAX_BUNDLE
+      encoded = json.dumps(payload)
+      if len(encoded.encode()) > limit:
         raise accounts.AccountError("Account transfer stream is too large")
       print(encoded)
     elif args in (["import"], ["import", "--replace"]):
@@ -279,9 +388,12 @@ def main(args: list[str]) -> int:
       finally:
         # Earlier providers remain committed if a later provider fails.
         if providers:
-          subprocess.Popen(["omarchy-agent-usage-update", "--force", "--limits-only", *providers], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+          try:
+            subprocess.Popen(["omarchy-agent-usage-update", "--force", "--limits-only", *providers], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+          except OSError as error:
+            print(f"Accounts copied, but usage refresh could not start: {error}", file=sys.stderr)
     else:
-      raise accounts.AccountError("Usage: omarchy-agent-account-transfer <export|import> [--replace] [claude|codex|grok...]")
+      raise accounts.AccountError("Usage: omarchy-agent-account-transfer <capabilities|export|bundle|receiver-command|import> [--replace] [claude|codex|grok...]")
   except (accounts.AccountError, OSError, ValueError, TypeError) as error:
     print(f"Account copy failed: {error}", file=sys.stderr)
     return 1
