@@ -455,6 +455,58 @@ scrub_factory_accounts() {
   rm -f "$root/etc/"{shadow-,gshadow-,passwd-,group-,subuid-,subgid-}
 }
 
+disable_factory_usbguard() {
+  local root="$1"
+
+  [[ -f $root/usr/lib/systemd/system/usbguard.service || -f $root/etc/systemd/system/usbguard.service ]] || return 0
+  systemctl --root="$root" disable usbguard.service >>"$LOG_FILE" 2>&1
+}
+
+write_bolt_auth_mode() {
+  local path="$1" temporary
+
+  install -d -m 700 "${path%/*}" || return 1
+  temporary=$(mktemp "${path%/*}/.config.XXXXXX") || return 1
+  if awk '
+    /^[[:space:]]*\[/ {
+      section = ($0 ~ /^[[:space:]]*\[config\][[:space:]]*$/)
+      print
+      if (section) { found = 1; print "AuthMode = enabled" }
+      next
+    }
+    section && /^[[:space:]]*AuthMode[[:space:]]*=/ { next }
+    { print }
+    END { if (!found) print "\n[config]\nAuthMode = enabled" }
+  ' "$(if [[ -e $path ]]; then printf '%s' "$path"; else printf '%s' /dev/null; fi)" >"$temporary" &&
+    sync "$temporary" && mv -fT -- "$temporary" "$path" && sync "${path%/*}"; then
+    return 0
+  fi
+  rm -f -- "$temporary"
+  return 1
+}
+
+reset_factory_thunderbolt() {
+  local root="$1" directory
+
+  root=$(realpath -e -- "$1") || return 1
+  [[ $root != "/" && -d $root ]] || return 1
+  [[ -d $root/var/lib/omarchy/thunderbolt-authorization || -f $root/etc/omarchy/thunderbolt-authorization.enabled || -f $root/etc/omarchy/thunderbolt-authorization.pending ]] || return 0
+  for directory in etc etc/omarchy var var/lib var/lib/omarchy var/lib/boltd; do
+    [[ ! -L $root/$directory ]] || return 1
+  done
+  if [[ -f $root/usr/lib/systemd/system/omarchy-thunderbolt-authorization.service || -f $root/etc/systemd/system/omarchy-thunderbolt-authorization.service ]]; then
+    systemctl --root="$root" disable omarchy-thunderbolt-authorization.service >>"$LOG_FILE" 2>&1 || return 1
+  fi
+  rm -f -- "$root/etc/systemd/system/multi-user.target.wants/omarchy-thunderbolt-authorization.service" \
+    "$root/etc/omarchy/thunderbolt-authorization.enabled" \
+    "$root/etc/omarchy/thunderbolt-authorization.pending" || return 1
+  rm -rf -- "$root/var/lib/omarchy/thunderbolt-authorization" || return 1
+  for directory in devices keys domains; do
+    rm -rf -- "$root/var/lib/boltd/$directory" || return 1
+  done
+  write_bolt_auth_mode "$root/var/lib/boltd/boltd.conf"
+}
+
 # Remove the seller's account material and machine identity from the retained
 # @factory baseline so it can neither be mounted for recovery nor restore the
 # seller's account on a future reset. Idempotent (a scrubbed baseline has no
@@ -463,6 +515,14 @@ sanitize_factory_baseline() {
   local factory="$1"
   btrfs property set -ts "$factory" ro false
 
+  if ! disable_factory_usbguard "$factory"; then
+    btrfs property set -ts "$factory" ro true
+    fail "could not disable USBGuard in the factory baseline (see $LOG_FILE)"
+  fi
+  if ! reset_factory_thunderbolt "$factory"; then
+    btrfs property set -ts "$factory" ro true
+    fail "could not reset Thunderbolt authorization in the factory baseline"
+  fi
   if ! scrub_factory_accounts "$factory"; then
     btrfs property set -ts "$factory" ro true
     fail "could not remove account credentials from the factory baseline (see $LOG_FILE)"
@@ -487,6 +547,9 @@ stage_full_reset() {
   [[ -f $unit_src/omarchy-provision-owner.service && -x $next/usr/bin/omarchy-provision-owner ]] ||
     fail "the factory snapshot predates provisioning support; cannot reset from it"
 
+  disable_factory_usbguard "$next" ||
+    fail "could not disable USBGuard in the factory system (see $LOG_FILE)"
+
   log "Scrubbing machine identity from the factory system"
   systemd-id128 new >"$next/etc/machine-id"
   rm -f "$next"/etc/ssh/ssh_host_*
@@ -501,6 +564,9 @@ stage_full_reset() {
   log "Removing account credentials from the factory system"
   scrub_factory_accounts "$next" ||
     fail "could not remove account credentials from the factory system (see $LOG_FILE)"
+
+  reset_factory_thunderbolt "$next" ||
+    fail "could not reset Thunderbolt authorization in the staged root"
 
   # @factory itself survives the wipe as the baseline for future resets. If it
   # came from a normal install it still holds the seller's account and
