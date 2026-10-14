@@ -197,6 +197,15 @@ assertEqual(
   'trigger.appearance',
   'menu lists Appearance first under Trigger'
 )
+// Super+Ctrl+O routes through the `toggle` alias (#15168): dropping it
+// silently broke the shortcut, so pin the aliases and both routes.
+assertDeepEqual(
+  defaultById['trigger.toggle'].aliases,
+  ['toggle', 'toggles'],
+  'menu keeps the toggle aliases the shortcut routes through'
+)
+assertEqual(menu.resolveRoute(rankBase.items, rankBase.itemOrder, 'toggle'), 'trigger.toggle', 'menu routes toggle to the Toggle menu')
+assertEqual(menu.resolveRoute(rankBase.items, rankBase.itemOrder, 'toggles'), 'trigger.toggle', 'menu routes toggles to the Toggle menu')
 assertEqual(
   defaultById['trigger.emoji'].action,
   'omarchy-menu-emoji',
