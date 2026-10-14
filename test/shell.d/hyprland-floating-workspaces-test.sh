@@ -58,6 +58,7 @@ cat >"$fake/monitors.json" <<'EOF'
 EOF
 printf '{ "id": 2, "name": "2", "tiledLayout": "dwindle" }\n' >"$fake/activeworkspace.json"
 printf '[{ "id": 2, "name": "2", "tiledLayout": "dwindle" }, { "id": 4, "name": "4", "tiledLayout": "scrolling" }]\n' >"$fake/workspaces.json"
+printf '[]\n' >"$fake/clients.json"
 reset_logs
 
 # --- Which layout a workspace is in -------------------------------------------
@@ -119,6 +120,69 @@ grep -qxF 'o.workspace_mode({ workspace = "2", mode = "dwindle" })' "$modes_dir/
 grep -qxF 'o.workspace_mode({ workspace = "6", mode = "floating" })' "$modes_dir/6.lua" ||
   fail "a workspace with a layout of its own keeps it"
 pass "a new default leaves workspaces with windows as they are"
+
+# A window minimized to the dock still belongs to the workspace it left, so
+# that workspace keeps floating. A different empty workspace does not, and a
+# window on the scratchpad does not count as minimized from somewhere.
+rm -f "$modes_dir"/*.lua
+printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
+printf 'o.workspace_mode({ workspace = "4", mode = "floating" })\n' >"$modes_dir/4.lua"
+printf 'o.workspace_mode({ workspace = "8", mode = "floating" })\n' >"$modes_dir/8.lua"
+printf '[{ "id": 4, "name": "4", "windows": 0 }, { "id": 8, "name": "8", "windows": 0 }]\n' >"$fake/workspaces.json"
+cat >"$fake/clients.json" <<'EOF'
+[
+  {
+    "address": "0xabc",
+    "workspace": { "name": "special:minimized", "type": "special" },
+    "tags": ["omarchy-minimized-from-4"]
+  },
+  {
+    "address": "0xdef",
+    "workspace": { "name": "special:scratchpad", "type": "special" },
+    "tags": ["omarchy-minimized-from-8"]
+  }
+]
+EOF
+run omarchy-hyprland-workspace-layout-default dwindle
+grep -qxF 'o.workspace_mode({ workspace = "4", mode = "floating" })' "$modes_dir/4.lua" ||
+  fail "a workspace with a minimized window keeps its floating layout" "$(cat "$modes_dir/4.lua" 2>&1)"
+[[ ! -e $modes_dir/8.lua ]] || fail "a scratchpad window does not keep another workspace's layout"
+[[ $(run omarchy-hyprland-workspace-layout-current 4) == "floating" ]] ||
+  fail "the minimized window's workspace still reports floating"
+[[ $(run omarchy-hyprland-workspace-layout-current 8) == "dwindle" ]] ||
+  fail "an empty workspace takes the new default"
+pass "a minimized window keeps its workspace floating, and an empty one does not"
+
+# The workspace was floating only because the default was. Saving that layout
+# as its own is what leaves the dock in place after the default moves on.
+rm -f "$modes_dir"/*.lua
+printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
+printf '[{ "id": 2, "name": "2", "windows": 0 }]\n' >"$fake/workspaces.json"
+printf '[{ "address": "0xabc", "workspace": { "name": "special:minimized" }, "tags": ["omarchy-minimized-from-2"] }]\n' >"$fake/clients.json"
+run omarchy-hyprland-workspace-layout-default scrolling
+grep -qxF 'o.workspace_mode({ workspace = "2", mode = "floating" })' "$modes_dir/2.lua" ||
+  fail "a minimized window's workspace keeps floating when the default changes" "$(ls "$modes_dir"; echo '---'; cat "$modes_dir"/*.lua)"
+grep -qxF 'o.workspace_mode({ default = "scrolling" })' "$modes_dir/default.lua" ||
+  fail "the new default is still saved"
+[[ $(run omarchy-hyprland-workspace-layout-current 2) == "floating" ]] ||
+  fail "the minimized window's workspace stays floating"
+pass "a minimized window pins the floating layout the default used to give its workspace"
+
+# An unreadable client list hides whether a minimized window should keep a
+# layout, so nothing is changed.
+rm -f "$modes_dir"/*.lua
+printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
+printf 'o.workspace_mode({ workspace = "2", mode = "floating" })\n' >"$modes_dir/2.lua"
+cp "$modes_dir/default.lua" "$tmpdir/default.before"
+printf '[{ "id": 2, "name": "2", "windows": 0 }]\n' >"$fake/workspaces.json"
+printf 'not json\n' >"$fake/clients.json"
+if run omarchy-hyprland-workspace-layout-default scrolling 2>/dev/null; then
+  fail "a new default is refused when minimized windows cannot be read"
+fi
+[[ -f $modes_dir/2.lua ]] || fail "an unreadable client list keeps the saved layouts"
+cmp -s "$modes_dir/default.lua" "$tmpdir/default.before" || fail "an unreadable client list keeps the old default"
+pass "an unreadable client list leaves the saved layouts alone"
+printf '[]\n' >"$fake/clients.json"
 
 # A failed workspace query changes nothing, rather than taking every saved
 # layout for an empty workspace's.
