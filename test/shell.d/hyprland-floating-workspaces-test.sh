@@ -121,9 +121,6 @@ grep -qxF 'o.workspace_mode({ workspace = "6", mode = "floating" })' "$modes_dir
   fail "a workspace with a layout of its own keeps it"
 pass "a new default leaves workspaces with windows as they are"
 
-# A window minimized to the dock still belongs to the workspace it left, so
-# that workspace keeps floating. A different empty workspace does not, and a
-# window on the scratchpad does not count as minimized from somewhere.
 rm -f "$modes_dir"/*.lua
 printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
 printf 'o.workspace_mode({ workspace = "4", mode = "floating" })\n' >"$modes_dir/4.lua"
@@ -153,8 +150,6 @@ grep -qxF 'o.workspace_mode({ workspace = "4", mode = "floating" })' "$modes_dir
   fail "an empty workspace takes the new default"
 pass "a minimized window keeps its workspace floating, and an empty one does not"
 
-# The workspace was floating only because the default was. Saving that layout
-# as its own is what leaves the dock in place after the default moves on.
 rm -f "$modes_dir"/*.lua
 printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
 printf '[{ "id": 2, "name": "2", "windows": 0 }]\n' >"$fake/workspaces.json"
@@ -168,8 +163,6 @@ grep -qxF 'o.workspace_mode({ default = "scrolling" })' "$modes_dir/default.lua"
   fail "the minimized window's workspace stays floating"
 pass "a minimized window pins the floating layout the default used to give its workspace"
 
-# An unreadable client list hides whether a minimized window should keep a
-# layout, so nothing is changed.
 rm -f "$modes_dir"/*.lua
 printf 'o.workspace_mode({ default = "floating" })\n' >"$modes_dir/default.lua"
 printf 'o.workspace_mode({ workspace = "2", mode = "floating" })\n' >"$modes_dir/2.lua"
