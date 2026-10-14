@@ -7,6 +7,17 @@ import QtQuick
 QtObject {
   id: root
 
+  // Manual click forwarding must honor the same clipping as Qt's hit test.
+  // Collapsed drawers keep their children laid out beyond the visible edge.
+  function itemContainsPoint(target, source, x, y) {
+    if (!target || !target.contains(target.mapFromItem(source, x, y))) return false
+    for (var item = target; item; item = item.parent) {
+      if (!item.visible || item.opacity === 0 || !item.enabled) return false
+      if (item.clip && !item.contains(item.mapFromItem(source, x, y))) return false
+    }
+    return true
+  }
+
   function clamp(value, min, max) {
     var n = Number(value)
     if (!isFinite(n)) return min
