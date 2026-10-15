@@ -168,7 +168,7 @@ assert(
   'the lock card is the shared large card size, not the 26 px in-field glyph slot'
 )
 assert(
-  /Look at the camera/.test(viewQml) && /or type your password/.test(viewQml),
+  /face\.lookAtTheCamera/.test(viewQml) && /face\.orTypeYourPassword/.test(viewQml),
   'the lock card keeps the scan hint and the password fallback'
 )
 assert(

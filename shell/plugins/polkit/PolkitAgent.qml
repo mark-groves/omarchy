@@ -94,7 +94,7 @@ Item {
   }
 
   function authorizationLabel(message) {
-    return PolkitModel.authorizationLabel(message)
+    return message ? PolkitModel.authorizationLabel(message, I18n.t) : I18n.t("polkit.authenticationNeeded")
   }
 
   function noteSlotFailure(url) {
@@ -202,7 +202,7 @@ Item {
     var flow = polkitAgent.flow
     if (!flow) return
 
-    currentMessage = String(flow.message || "Authentication is needed...")
+    currentMessage = String(flow.message || "")
     currentPrompt = String(flow.inputPrompt || "")
     currentSupplementary = String(flow.supplementaryMessage || "")
     responseRequired = !!flow.isResponseRequired
@@ -395,6 +395,10 @@ Item {
 
   PanelWindow {
     id: panel
+    // Right-to-left languages read this window mirrored.
+    Binding { target: panel.contentItem; property: "LayoutMirroring.enabled"; value: Commons.I18n.rightToLeft }
+    Binding { target: panel.contentItem; property: "LayoutMirroring.childrenInherit"; value: true }
+
     visible: root.cardVisible
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -477,9 +481,8 @@ Item {
         Text {
           textFormat: Text.PlainText
           anchors.horizontalCenter: parent.horizontalCenter
-          text: root.faceState === "notRecognized"
-            ? "Face not recognized"
-            : (root.faceState === "recognized" ? "Face recognized" : root.presentation.chromeHint)
+          text: root.faceState === "notRecognized" ? Commons.I18n.t("face.notRecognized")
+            : (root.faceState === "recognized" ? Commons.I18n.t("face.recognized") : root.presentation.chromeHint)
           color: root.faceState === "notRecognized" ? Commons.Color.polkit.textError : root.foreground
           opacity: 0.86
           font.family: root.fontFamily
@@ -490,8 +493,8 @@ Item {
         Text {
           textFormat: Text.PlainText
           anchors.horizontalCenter: parent.horizontalCenter
-          text: root.faceState === "notRecognized" ? "Type your password"
-            : (root.faceState === "scanning" ? "Esc cancels" : "")
+          text: root.faceState === "notRecognized" ? Commons.I18n.t("face.typeYourPassword")
+            : (root.faceState === "scanning" ? Commons.I18n.t("face.escCancels") : "")
           visible: text !== ""
           color: root.foreground
           opacity: 0.44
@@ -596,7 +599,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.errorFlash ? "Wrong" : (root.submitted ? "Checking..." : root.presentation.hint)
+            text: root.errorFlash ? I18n.t("polkit.wrong") : (root.submitted ? I18n.t("polkit.checking") : I18n.t("polkit.enterPassword"))
             color: root.errorFlash ? Commons.Color.polkit.textError : root.foreground
             opacity: root.errorFlash ? 1 : 0.36
             font.family: root.fontFamily

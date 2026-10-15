@@ -180,10 +180,11 @@ function fingerprintConfiguredFromPamConfig(raw) {
   return false
 }
 
-function authorizationLabel(message) {
+function authorizationLabel(message, tr) {
+  var t = typeof tr === "function" ? tr : function(key, english) { return english }
   var text = String(message || "")
   var match = text.match(/^Authentication is (?:needed|required) to run [`']([^`']+)[`'] as /i)
-  return match ? "Authorize running '" + match[1] + "'" : text
+  return match ? t("polkit.authorizeRunning", "Authorize running '%1'").replace("%1", match[1]) : text
 }
 
 // FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin

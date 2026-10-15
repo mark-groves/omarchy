@@ -13,15 +13,14 @@ omarchy-mise-install npm:playwright playwright
 omarchy-mise-install pi
 omarchy-mise-install github:can1357/oh-my-pi omp
 omarchy-mise-install grok
+omarchy-mise-install npm:@moonshot-ai/kimi-code kimi
 omarchy-mise-install npm:@kitlangton/ghui ghui
 omarchy-mise-install aqua:modem-dev/hunk hunk
 omarchy-mise-install github:basecamp/hey-cli hey
 omarchy-mise-install github:basecamp/basecamp-cli basecamp
 omarchy-mise-install npm:cf cf
 omarchy-mise-install github:OpenRouterLabs/ori-releases ori
-if omarchy-cmd-missing muse; then
-  omarchy-mise-install "http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]" muse
-fi
+omarchy-mise-install "http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]" muse
 
 # Build the account dispatchers declared by /etc/mise/conf.d.
 mise reshim

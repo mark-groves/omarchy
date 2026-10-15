@@ -28,8 +28,9 @@ if (( $# == 0 )); then
 fi
 
 case $1 in
-  dwindle) LABEL=tiling ;;
-  scrolling | floating) LABEL=$1 ;;
+  dwindle) MESSAGE=$(omarchy-i18n layout.defaultTiling) ;;
+  scrolling) MESSAGE=$(omarchy-i18n layout.defaultScrolling) ;;
+  floating) MESSAGE=$(omarchy-i18n layout.defaultFloating) ;;
   *)
     echo "Usage: omarchy-hyprland-workspace-layout-default [dwindle|scrolling|floating]" >&2
     exit 1
@@ -48,10 +49,12 @@ busy_workspace_ids() {
   local workspaces clients
   workspaces=$(hyprctl workspaces -j) || return 1
   clients=$(hyprctl clients -j) || return 1
-  jq -r --argjson clients "$clients" '
-    if (type == "array") and ($clients | type == "array") then
+  # Both lists go through stdin, as a long client list outgrows one argument.
+  printf '%s\n%s\n' "$workspaces" "$clients" | jq -rs '
+    .[0] as $workspaces | .[1] as $clients |
+    if ($workspaces | type == "array") and ($clients | type == "array") then
       (
-        [.[] | select(.id >= 1 and (.windows // 0) > 0) | .id] +
+        [$workspaces[] | select(.id >= 1 and (.windows // 0) > 0) | .id] +
         [$clients[]
           | select(.workspace.name == "special:minimized")
           | (.tags // [])[]
@@ -62,7 +65,7 @@ busy_workspace_ids() {
     else
       error("not a workspace list")
     end
-  ' <<<"$workspaces"
+  '
 }
 
 if ! busy=$(busy_workspace_ids); then
@@ -91,4 +94,4 @@ printf 'o.workspace_mode({ default = "%s" })\n' "$1" >"$DEFAULT_FILE"
 hyprctl reload >/dev/null
 omarchy-shell -q omarchy.workspaces refresh
 omarchy-shell -q omarchy.dock refresh
-notify_layout "Default layout set to $LABEL"
+notify_layout "$MESSAGE"

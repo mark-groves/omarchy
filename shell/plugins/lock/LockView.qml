@@ -31,7 +31,7 @@ Item {
   property string passwordText: ""
   property bool syncingPasswordText: false
 
-  readonly property string placeholderText: "Enter Password"
+  readonly property string placeholderText: Commons.I18n.t("lock.enterPassword")
   readonly property int fieldWidth: 381
   readonly property int fieldHeight: 67
   readonly property int outlineThickness: 3
@@ -198,9 +198,8 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
-        text: root.faceState === "notRecognized"
-          ? "Face not recognized"
-          : (root.faceState === "recognized" ? "Face recognized" : "Look at the camera")
+        text: root.faceState === "notRecognized" ? Commons.I18n.t("face.notRecognized")
+          : (root.faceState === "recognized" ? Commons.I18n.t("face.recognized") : Commons.I18n.t("face.lookAtTheCamera"))
         color: root.faceState === "notRecognized" ? Commons.Color.lock.textError : Commons.Color.lock.text
         opacity: 0.86
         font.family: Style.font.family
@@ -210,8 +209,8 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
-        text: root.faceState === "notRecognized" ? "Type your password"
-          : (root.faceState === "scanning" ? "or type your password" : "")
+        text: root.faceState === "notRecognized" ? Commons.I18n.t("face.typeYourPassword")
+          : (root.faceState === "scanning" ? Commons.I18n.t("face.orTypeYourPassword") : "")
         visible: text !== ""
         color: Commons.Color.lock.text
         opacity: 0.44
@@ -291,7 +290,7 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.fill: passwordInput
-        text: root.authenticatingPassword ? "Checking…" : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
+        text: root.authenticatingPassword ? Commons.I18n.t("lock.checking") : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
         visible: passwordInput.text.length === 0
         color: root.authenticatingPassword ? Commons.Color.lock.text : (root.failureMessage.length > 0 ? Commons.Color.lock.textError : Commons.Color.lock.placeholder)
         font.family: Style.font.family
@@ -350,7 +349,7 @@ Item {
       anchors.topMargin: 18
       anchors.horizontalCenter: inputField.horizontalCenter
       visible: root.fingerprintConfigured && root.fingerprintUnavailable
-      text: "Fingerprint reader unavailable"
+      text: Commons.I18n.t("lock.fingerprintUnavailable")
       color: Commons.Color.lock.textError
       font.family: Style.font.family
       font.pixelSize: Style.font.heading
