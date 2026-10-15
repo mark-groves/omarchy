@@ -702,6 +702,17 @@ assert(
   /\(event\.key === Qt\.Key_Backspace \|\| Util\.readingKey\(event\) === Qt\.Key_Left\) && !root\.filterText[\s\S]*root\.goBack\(\)/.test(menuQml),
   'menu Left key (Right in a right-to-left language) follows empty-filter Backspace navigation'
 )
+// Input methods commit text only to a text-input item, so the search line must be one.
+const filterInputBlock = (menuQml.match(/FilterInput \{[\s\S]*?\n          \}/) || [''])[0]
+assert(
+  /keyHandler: keyCatcher/.test(filterInputBlock)
+    && /readOnly: root\.deleteConfirmOpen/.test(filterInputBlock)
+    && /onTextChanged: if \(text !== root\.filterText\) root\.setFilter\(text\)/.test(filterInputBlock)
+    && /onFilterTextChanged: if \(filterInput\.text !== filterText\) filterInput\.text = filterText/.test(menuQml)
+    && !/event\.text/.test(menuQml.match(/id: keyCatcher[\s\S]*?ConfirmDialog \{/)[0])
+    && (menuQml.match(/keyCatcher\.forceActiveFocus/g) || []).length === 0,
+  'menu search line takes input-method text, refuses it behind the delete confirmation, and stays in step with the filter'
+)
 assert(
   /PointerMoveGate\s*\{[\s\S]*id: pointerGate[\s\S]*referenceItem: card[\s\S]*\}/.test(menuQml),
   'menu uses shared pointer movement gate in card coordinates'

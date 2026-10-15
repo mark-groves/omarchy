@@ -111,6 +111,20 @@ apply_session_locale() {
   dbus-update-activation-environment --systemd "LANG=$locale" >/dev/null 2>&1 || true
 }
 
+# A Chinese, Japanese or Korean language brings its input method and glyph
+# forms, unless the user already has an input method or chose the forms.
+seed_typing() {
+  local method
+  case $1 in
+  ja) method=mozc ;;
+  ko) method=hangul ;;
+  zh-CN) method=pinyin ;;
+  zh-TW) method=chewing ;;
+  *) return 0 ;;
+  esac
+  /usr/bin/python3 "$OMARCHY_PATH/default/input-methods/typing_setup.py" seed-language "$method" || true
+}
+
 set_language() {
   local code=$1
   if ! known_language "$code"; then
@@ -131,6 +145,7 @@ set_language() {
   # password prompt cannot leave the interface switched with LANG behind it.
   mkdir -p "$(dirname "$language_file")"
   echo "$code" >"$language_file"
+  seed_typing "$code"
 
   omarchy-notification-send -g  "$(omarchy-i18n language.changed "$name")" "$(omarchy-i18n language.newApps)"
 }

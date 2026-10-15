@@ -423,6 +423,25 @@ assert_bash_equal "$(cat "$ELEVATE_LOG")" "sudo -n omarchy-locale-generate sv" "
 assert_bash_equal "$(cat "$LOCALE_GEN_LOG")" "sv_SE.UTF-8" "the passwordless helper generates the language's locale"
 assert_bash_equal "$(cat "$OMARCHY_LANGUAGE_FILE")" "sv" "the passwordless switch persists the choice"
 
+# A CJK language brings its glyph forms, and its input method where Fcitx
+# answers; without a session bus the switch still succeeds and says how.
+cjk_font=$XDG_CONFIG_HOME/fontconfig/conf.d/50-omarchy-input-method.conf
+[[ ! -e $cjk_font ]] && pass "a non-CJK language leaves the CJK glyph forms alone" || fail "a non-CJK language leaves the CJK glyph forms alone"
+cat >"$work/stubs/busctl" <<'STUB'
+#!/bin/bash
+echo "no session bus" >&2
+exit 1
+STUB
+cp "$work/stubs/busctl" "$work/stubs/fcitx5-remote"
+chmod +x "$work/stubs/busctl" "$work/stubs/fcitx5-remote"
+cjk_output=$(TEST_SUDO_GRANT=1 omarchy-language ja </dev/null 2>&1) || fail "a CJK language switches without a reachable Fcitx" "$cjk_output"
+assert_bash_equal "$(cat "$OMARCHY_LANGUAGE_FILE")" "ja" "a CJK language switches without a reachable Fcitx"
+[[ $cjk_output == *"Setup > Typing > Input Methods"* ]] && pass "an input method that could not be added is named with where to add it" || fail "an input method that could not be added is named with where to add it" "$cjk_output"
+grep -q 'Noto Sans CJK JP' "$cjk_font" && pass "Japanese seeds Japanese glyph forms" || fail "Japanese seeds Japanese glyph forms"
+TEST_SUDO_GRANT=1 omarchy-language ko </dev/null 2>/dev/null
+grep -q 'Noto Sans CJK JP' "$cjk_font" && pass "a second CJK language keeps the glyph forms already chosen" || fail "a second CJK language keeps the glyph forms already chosen"
+rm -f "$work/stubs/busctl" "$work/stubs/fcitx5-remote" "$cjk_font"
+
 # A cancelled polkit prompt must not persist the choice, or the interface
 # would switch with LANG left behind.
 cat >"$work/stubs/pkexec" <<'STUB'
