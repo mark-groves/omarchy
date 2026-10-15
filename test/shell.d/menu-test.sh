@@ -584,9 +584,10 @@ assert(
   'plugin enable reports a bar as replacing the one in use, whether enabled or freshly added'
 )
 assert(
-  /\.barWidget\.defaultSection \/\/ "center"/.test(pluginAdd)
+  /\.barWidget\.defaultSection \/\/ "centerEnd" \| if \. == "center" then "centerEnd" end/.test(pluginAdd)
+    && /printf '%s\\n' left centerBegin center centerEnd tray right \|/.test(pluginAdd)
     && /gum choose[\s\S]*?--selected "\$default_section"/.test(pluginAdd),
-  'interactive plugin add selects the manifest placement or center fallback by default'
+  'interactive plugin add offers every bar section and selects the manifest placement or centerEnd fallback by default'
 )
 assert(
   /"omarchy-plugin-\$1" "\$id"/.test(pluginPicker),

@@ -531,7 +531,7 @@ pass "kept service is dropped when its plugin stops declaring a service"
 shell_ipc_quiet omarchy.system-update refresh >/dev/null 2>&1 || true
 sleep 0.8
 
-default_ids=$(jq -c '(.bar.layout.left + .bar.layout.center + .bar.layout.right) | map(.id // .)' "$ROOT/config/omarchy/shell.json")
+default_ids=$(jq -c '[.bar.layout[]] | add | map(.id // .)' "$ROOT/config/omarchy/shell.json")
 visible_default_ids='[
   "omarchy.menu",
   "omarchy.workspaces",
@@ -573,19 +573,20 @@ jq -e --argjson expected "$default_ids" --argjson visibleExpected "$visible_defa
 pass "default bar layout renders expected module slots"
 
 jq -e '
-  map(select(.section == "center")) | map(.id) as $center |
-  ($center | index("omarchy.weather")) != null and
-  ($center | index("omarchy.system-update")) != null and
-  ($center | index("omarchy.indicators")) != null and
-  (($center | index("omarchy.weather")) < ($center | index("omarchy.system-update"))) and
-  (($center | index("omarchy.system-update")) < ($center | index("omarchy.indicators")))
+  def ids($section): map(select(.section == $section) | .id);
+  ids("centerBegin") as $begin | ids("center") as $box | ids("centerEnd") as $end |
+  ($begin | index("omarchy.indicators")) != null and
+  ($box | index("omarchy.clock")) != null and
+  ($end | index("omarchy.weather")) != null and
+  ($end | index("omarchy.system-update")) != null and
+  (($end | index("omarchy.weather")) < ($end | index("omarchy.system-update")))
 ' <<<"$geometry" >/dev/null || {
   printf 'Geometry:\n' >&2
   jq . <<<"$geometry" >&2
-  fail_with_log "runtime geometry keeps update before indicators"
+  fail_with_log "runtime geometry hangs indicators and update off the clock's box"
 }
 
-pass "runtime geometry keeps update before indicators"
+pass "runtime geometry hangs indicators and update off the clock's box"
 
 for panel_id in omarchy.audio omarchy.bluetooth omarchy.monitor omarchy.network omarchy.power; do
   shell_ipc "$panel_id" open >/dev/null || fail_with_log "direct panel IPC opens $panel_id"
