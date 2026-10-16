@@ -584,9 +584,10 @@ assert(
   'plugin enable reports a bar as replacing the one in use, whether enabled or freshly added'
 )
 assert(
-  /\.barWidget\.defaultSection \/\/ "center"/.test(pluginAdd)
+  /\.barWidget\.defaultSection \/\/ "centerEnd" \| if \. == "center" then "centerEnd" end/.test(pluginAdd)
+    && /printf '%s\\n' left centerBegin center centerEnd tray right \|/.test(pluginAdd)
     && /gum choose[\s\S]*?--selected "\$default_section"/.test(pluginAdd),
-  'interactive plugin add selects the manifest placement or center fallback by default'
+  'interactive plugin add offers every bar section and selects the manifest placement or centerEnd fallback by default'
 )
 assert(
   /"omarchy-plugin-\$1" "\$id"/.test(pluginPicker),
@@ -701,6 +702,17 @@ assert(
 assert(
   /\(event\.key === Qt\.Key_Backspace \|\| Util\.readingKey\(event\) === Qt\.Key_Left\) && !root\.filterText[\s\S]*root\.goBack\(\)/.test(menuQml),
   'menu Left key (Right in a right-to-left language) follows empty-filter Backspace navigation'
+)
+// Input methods commit text only to a text-input item, so the search line must be one.
+const filterInputBlock = (menuQml.match(/FilterInput \{[\s\S]*?\n          \}/) || [''])[0]
+assert(
+  /keyHandler: keyCatcher/.test(filterInputBlock)
+    && /readOnly: root\.deleteConfirmOpen/.test(filterInputBlock)
+    && /onTextChanged: if \(text !== root\.filterText\) root\.setFilter\(text\)/.test(filterInputBlock)
+    && /onFilterTextChanged: if \(filterInput\.text !== filterText\) filterInput\.text = filterText/.test(menuQml)
+    && !/event\.text/.test(menuQml.match(/id: keyCatcher[\s\S]*?ConfirmDialog \{/)[0])
+    && (menuQml.match(/keyCatcher\.forceActiveFocus/g) || []).length === 0,
+  'menu search line takes input-method text, refuses it behind the delete confirmation, and stays in step with the filter'
 )
 assert(
   /PointerMoveGate\s*\{[\s\S]*id: pointerGate[\s\S]*referenceItem: card[\s\S]*\}/.test(menuQml),

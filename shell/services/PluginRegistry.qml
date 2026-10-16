@@ -72,7 +72,7 @@ QtObject {
     if (manifest.barWidget !== undefined && Util.isPlainObject(manifest.barWidget)
         && manifest.barWidget.defaultSection !== undefined) {
       var defaultSection = String(manifest.barWidget.defaultSection)
-      if (["left", "center", "tray", "right"].indexOf(defaultSection) === -1) {
+      if (Util.barSections.indexOf(defaultSection) === -1) {
         console.warn("PluginRegistry: invalid barWidget.defaultSection at " + sourcePath)
         return null
       }
@@ -198,10 +198,13 @@ QtObject {
     return findEntryLocation(config, id).kind === "bar"
   }
 
+  // A manifest's "center" means beside the clock, so it lands in centerEnd, as
+  // a widget that names no section does; in the box it would push the clock
+  // off center.
   function defaultBarWidgetSection(manifest) {
     var metadata = manifest && Util.isPlainObject(manifest.barWidget) ? manifest.barWidget : null
     var section = metadata ? String(metadata.defaultSection || "") : ""
-    return ["left", "center", "tray", "right"].indexOf(section) !== -1 ? section : "center"
+    return Util.barSections.indexOf(section) !== -1 && section !== "center" ? section : "centerEnd"
   }
 
   function barEntryId(entry) {
@@ -212,7 +215,7 @@ QtObject {
     if (!Util.isPlainObject(config) || !Util.isPlainObject(config.bar)
         || !Util.isPlainObject(config.bar.layout)) return { found: false }
     var key = Util.canonicalWidgetId(String(id))
-    var sections = ["left", "center", "right", "tray"]
+    var sections = Util.barSections
     for (var s = 0; s < sections.length; s++) {
       if (section && sections[s] !== section) continue
       var entries = config.bar.layout[sections[s]]
@@ -264,7 +267,7 @@ QtObject {
   // The tray section is drawn inside the tray, so the tray cannot go there.
   function barTarget(config, placement, fallbackSection, id) {
     var target = placement || {}
-    var section = ["left", "center", "right", "tray"].indexOf(String(target.section || "")) !== -1
+    var section = Util.barSections.indexOf(String(target.section || "")) !== -1
       ? String(target.section) : fallbackSection
     var tray = isTray(id)
     var trayError = { error: "the tray cannot go in its own drawer" }
@@ -286,8 +289,9 @@ QtObject {
       return { section: section, index: Math.min(requested, config.bar.layout[section].length) }
     }
 
-    // The tray section has no anchor: a widget put there goes at its end.
-    var anchors = { left: "omarchy.workspaces", center: "omarchy.weather", right: "omarchy.tray" }
+    // A section without an anchor (the tray's drawer, for one) takes a widget
+    // put there at its end.
+    var anchors = { left: "omarchy.workspaces", centerEnd: "omarchy.weather", right: "omarchy.tray" }
     if (!anchors[section]) return { section: section, index: config.bar.layout[section].length }
     var anchor = findRelativeBarLocation(config, anchors[section], section)
     return {
@@ -406,9 +410,9 @@ QtObject {
   }
 
   function ensureConfigShape(config) {
-    if (!Util.isPlainObject(config.bar)) config.bar = { layout: { left: [], center: [], right: [] } }
-    if (!Util.isPlainObject(config.bar.layout)) config.bar.layout = { left: [], center: [], right: [] }
-    var sections = ["left", "center", "right"]
+    if (!Util.isPlainObject(config.bar)) config.bar = { layout: {} }
+    if (!Util.isPlainObject(config.bar.layout)) config.bar.layout = {}
+    var sections = Util.barSections
     for (var i = 0; i < sections.length; i++) {
       if (!Array.isArray(config.bar.layout[sections[i]])) config.bar.layout[sections[i]] = []
     }
@@ -416,7 +420,8 @@ QtObject {
   }
 
   // Bar widgets use the default section declared in their manifest, falling
-  // back to center. Panels/overlays/menus/services go into the plugins[] array.
+  // back to centerEnd, beside the center box rather than in it.
+  // Panels/overlays/menus/services go into the plugins[] array.
   // Built-ins are already loaded, so shell.json only ever records the
   // deviation: an added third-party plugin in plugins[], a switched-off
   // built-in in disabledPlugins[].
@@ -470,7 +475,7 @@ QtObject {
       var cloneLocation = findEntryLocation(config, cloneId)
       if (cloneLocation.kind === "bar") {
         var cloneEntry = config.bar.layout[cloneLocation.section][cloneLocation.index]
-        var sections = ["left", "center", "right", "tray"]
+        var sections = Util.barSections
         for (var s = 0; s < sections.length; s++) {
           if (!Array.isArray(config.bar.layout[sections[s]])) continue
           for (var i = config.bar.layout[sections[s]].length - 1; i >= 0; i--) {
