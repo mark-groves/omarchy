@@ -133,15 +133,19 @@ aligned_limits, _ = scanner.plan_limits({}, {}, {
 summary["alignedGrokHasStart"] = aligned_limits[0].get("periodStartedAt", "").startswith("2026-09-01T06:44:00")
 summary["alignedGrokNotEarly"] = "resetEarly" not in aligned_limits[0]
 
+# The collector asks for the last week from the real clock, so its pages hold
+# events from now rather than the fixed day above.
+now_ms = str(round(time.time() * 1000))
 pages = {
-  1: {"totalUsageEventsCount": 2, "usageEventsDisplay": [events[0]]},
-  2: {"totalUsageEventsCount": 2, "usageEventsDisplay": [events[1]]},
+  1: {"totalUsageEventsCount": 2, "usageEventsDisplay": [dict(events[0], timestamp=now_ms)]},
+  2: {"totalUsageEventsCount": 2, "usageEventsDisplay": [dict(events[1], timestamp=now_ms)]},
 }
 
 real_filtered_events = scanner.DashboardClient.filtered_events
 
 class WorkingClient:
   def __init__(self, session, base_url):
+    self.session = session
     self.pages = []
 
   def usage_summary(self):
