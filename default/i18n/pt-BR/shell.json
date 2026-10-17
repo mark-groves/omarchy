@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "A verificação de uso de %1 falhou",
   "agents.helpSignInExpired": "O login salvo de %1 expirou. Inicie %1 para atualizá-lo.",
   "agents.helpStartOrRunToSignIn": "Inicie %1 ou execute %2 para entrar.",
-  "agents.helpStartToSeeLimits": "Inicie %1 para ver seus limites; não é preciso entrar novamente.",
   "agents.lastUpdatedAgo": "Atualizado há %1",
   "agents.lastUpdatedJustNow": "Atualizado há menos de um minuto",
   "agents.lastUpdatedUnknown": "Horário da última atualização indisponível",

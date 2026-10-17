@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "%1 사용량 스캔 실패",
   "agents.helpSignInExpired": "%1의 저장된 로그인이 만료되었습니다. %1을 시작하여 갱신하세요.",
   "agents.helpStartOrRunToSignIn": "%1을 시작하거나 %2를 실행하여 로그인하세요.",
-  "agents.helpStartToSeeLimits": "%1을 시작하여 한도를 확인하세요. 다시 로그인할 필요가 없습니다.",
   "agents.lastUpdatedAgo": "마지막 업데이트 %1 전",
   "agents.lastUpdatedJustNow": "1분 이내 업데이트됨",
   "agents.lastUpdatedUnknown": "마지막 업데이트 시간 확인 불가",

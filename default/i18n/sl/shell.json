@@ -36,7 +36,6 @@
   "agents.helpScanFailed": "Pregled porabe %1 ni uspel",
   "agents.helpSignInExpired": "Shranjena prijava za %1 je potekla. Zaženite %1, da jo osvežite.",
   "agents.helpStartOrRunToSignIn": "Za prijavo zaženite %1 ali izvedite %2.",
-  "agents.helpStartToSeeLimits": "Zaženite %1 za ogled omejitev; ponovna prijava ni potrebna.",
   "agents.lastUpdatedAgo": "Nazadnje posodobljeno pred %1",
   "agents.lastUpdatedJustNow": "Nazadnje posodobljeno pred manj kot minuto",
   "agents.lastUpdatedUnknown": "Čas zadnje posodobitve ni na voljo",

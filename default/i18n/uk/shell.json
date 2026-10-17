@@ -36,7 +36,6 @@
   "agents.helpScanFailed": "Сканування використання %1 не вдалося",
   "agents.helpSignInExpired": "Збережений вхід до %1 закінчився. Запустіть %1, щоб оновити його.",
   "agents.helpStartOrRunToSignIn": "Запустіть %1 або виконайте %2, щоб увійти.",
-  "agents.helpStartToSeeLimits": "Запустіть %1, щоб побачити його ліміти; входити знову не потрібно.",
   "agents.lastUpdatedAgo": "Оновлено %1 тому",
   "agents.lastUpdatedJustNow": "Оновлено менше хвилини тому",
   "agents.lastUpdatedUnknown": "Час останнього оновлення недоступний",

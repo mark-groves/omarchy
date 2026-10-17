@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "สแกนยอดใช้งาน %1 ล้มเหลว",
   "agents.helpSignInExpired": "การเข้าสู่ระบบของ %1 ที่บันทึกไว้หมดอายุแล้ว เริ่ม %1 เพื่อต่ออายุ",
   "agents.helpStartOrRunToSignIn": "เริ่ม %1 หรือรัน %2 เพื่อเข้าสู่ระบบ",
-  "agents.helpStartToSeeLimits": "เริ่ม %1 เพื่อดูขีดจำกัด ไม่ต้องเข้าสู่ระบบอีกครั้ง",
   "agents.lastUpdatedAgo": "อัปเดตล่าสุดเมื่อ %1 ที่แล้ว",
   "agents.lastUpdatedJustNow": "อัปเดตล่าสุดเมื่อไม่ถึง 1 นาทีที่แล้ว",
   "agents.lastUpdatedUnknown": "ไม่มีข้อมูลเวลาอัปเดตล่าสุด",

@@ -30,6 +30,19 @@ Panel {
   // answers is how much room is left, and where.
   readonly property var providers: usage.enabledProviders
 
+  // Everything the panel adds up (the hero's totals, the bar's alarm, the
+  // sync footer) reads `providers`. The page itself shows only the agents
+  // with something to say: an agent whose collector says its limits are paused
+  // with nothing to read or do about it would be a header over "Usage
+  // unavailable", so it is left out of the sections, the keyboard rows and the
+  // drag order, while its local stats still count above.
+  readonly property var shownProviders: {
+    var out = []
+    for (var i = 0; i < providers.length; i++)
+      if (!hasNothingToShow(providers[i])) out.push(providers[i])
+    return out
+  }
+
   property bool cursorActive: false
 
   // Countdowns and "last updated" ages read this instead of Date.now() so the
@@ -41,10 +54,10 @@ Panel {
   // a picked account is what moves new sessions to it.
   readonly property var accountEntries: {
     var out = []
-    for (var i = 0; i < providers.length; i++) {
-      var list = providerAccounts(providers[i])
+    for (var i = 0; i < shownProviders.length; i++) {
+      var list = providerAccounts(shownProviders[i])
       if (list.length < 2) continue
-      for (var j = 0; j < list.length; j++) out.push({ provider: providers[i], account: list[j] })
+      for (var j = 0; j < list.length; j++) out.push({ provider: shownProviders[i], account: list[j] })
     }
     return out
   }
@@ -73,12 +86,12 @@ Panel {
       // lapsed sign-in comes first, and the active account with nothing to
       // fix is skipped.
       var entry = 0
-      for (var p = 0; p < providers.length; p++) {
+      for (var p = 0; p < shownProviders.length; p++) {
         // Every agent's header is a stop, so Ctrl+Up/Down can move it.
         rows.push([{ kind: "provider", index: p }])
-        var accounts = providerAccounts(providers[p])
+        var accounts = providerAccounts(shownProviders[p])
         if (accounts.length < 2) {
-          if (needsSignIn(providers[p])) rows.push([{ kind: "providerSignin", index: p }])
+          if (needsSignIn(shownProviders[p])) rows.push([{ kind: "providerSignin", index: p }])
           continue
         }
         for (var a = 0; a < accounts.length; a++, entry++) {
@@ -152,7 +165,7 @@ Panel {
     if (target.kind === "provider" || target.kind === "providerSignin") return target.index
     if (["account", "autoswitch", "signin"].indexOf(target.kind) < 0) return -1
     var entry = accountEntries[target.index]
-    return entry ? providers.indexOf(entry.provider) : -1
+    return entry ? shownProviders.indexOf(entry.provider) : -1
   }
 
   // Ctrl+Up/Down carries the agent the cursor is in up or down the page, and
@@ -160,9 +173,9 @@ Panel {
   function reorderProvider(dy) {
     var from = providerIndexOfKey()
     if (from < 0) return
-    var to = clamp(from + dy, 0, providers.length - 1)
+    var to = clamp(from + dy, 0, shownProviders.length - 1)
     if (to === from) return
-    usage.moveProvider(providers[from].providerId, to)
+    usage.moveProvider(shownProviders[from].providerId, providers.indexOf(shownProviders[to]))
     Qt.callLater(function() { pointAt("provider", to) })
   }
 
@@ -191,8 +204,8 @@ Panel {
     var to = dragTarget
     dragProviderId = ""
     dragTarget = -1
-    if (id === "" || to < 0) return
-    usage.moveProvider(id, to)
+    if (id === "" || to < 0 || to >= shownProviders.length) return
+    usage.moveProvider(id, providers.indexOf(shownProviders[to]))
     Qt.callLater(function() { pointAt("provider", to) })
   }
 
@@ -395,7 +408,7 @@ Panel {
     else if (target.kind === "choice") chooseAddProvider(addProviders[target.index].providerId)
     else if (target.kind === "launch") launchAgent()
     else if (target.kind === "starter") startPrompt(starterPrompts[target.index].prompt)
-    else if (target.kind === "providerSignin") signInAgain(providers[target.index], null)
+    else if (target.kind === "providerSignin") signInAgain(shownProviders[target.index], null)
     else if (target.kind === "signin") signInAgain(pickedEntry.provider, pickedEntry.account)
     else if (target.kind === "autoswitch") setSwitchMode(pickedEntry.provider, autoSwitchFor(pickedEntry.provider) ? "manual" : "auto")
     else if (pickedEntry && !pickedEntry.account.active) useAccount(pickedEntry.provider, pickedEntry.account)
@@ -433,6 +446,92 @@ Panel {
 
   function pausedWithoutLimits(item) {
     return !!item && item.usageStatusText === "Limits paused" && limitWindows(item).length === 0
+  }
+
+  // A shown record that pays for this agent too, with a pool of its own to
+  // draw: the unified X subscription lives on one record (Cursor's, when it
+  // has one), and Grok's own is the same pool.
+  function poolCovering(p) {
+    for (var i = 0; i < providers.length; i++) {
+      var q = providers[i]
+      if (q.providerId === p.providerId || q.ready !== true || limitWindows(q).length === 0) continue
+      var list = q.coverage || []
+      for (var j = 0; j < list.length; j++)
+        if (list[j].id === p.providerId) return q
+    }
+    return null
+  }
+
+  // A section with no limits to draw and nothing to act on has no reason to be
+  // on the page. That is only ever a collector's own verdict, "Limits paused"
+  // with no help text: an agent with no status yet is still loading, and one
+  // that says anything else (a lapsed sign-in, an unreachable endpoint, a
+  // line of help like "Start Claude Code to refresh it") has something to
+  // report. A balance, or several accounts each with limits of their own,
+  // also count as something to show. A record that says it is on the unified
+  // plan always has something to show, "Usage unavailable" at the least, since
+  // its pool is a real allowance; the exception is the same pool already
+  // drawn by another record that covers it, so it is never shown twice.
+  function hasNothingToShow(p) {
+    if (p.unified === true) return !!poolCovering(p)
+    return pausedWithoutLimits(p) && String(p.authHelpText || "") === ""
+      && !p.balance && providerAccounts(p).length < 2
+  }
+
+  // The agents left off the page by hasNothingToShow(), so the page can say
+  // why they aren't there instead of leaving them looking lost.
+  readonly property var hiddenProviders: {
+    var out = []
+    for (var i = 0; i < providers.length; i++)
+      if (shownProviders.indexOf(providers[i]) < 0) out.push(providers[i])
+    return out
+  }
+
+  function coversProvider(covering, hidden) {
+    var list = covering && covering.coverage ? covering.coverage : []
+    for (var i = 0; i < list.length; i++)
+      if (list[i].id === hidden.providerId) return true
+    return false
+  }
+
+  // Hidden agents no shown subscription covers get a quiet footer line; a covered one is already named by the coverage marks.
+  function uncoveredHiddenText() {
+    var lines = []
+    for (var i = 0; i < hiddenProviders.length; i++) {
+      var covered = false
+      for (var j = 0; j < shownProviders.length && !covered; j++)
+        covered = coversProvider(shownProviders[j], hiddenProviders[i])
+      if (!covered) lines.push(Commons.I18n.t("agents.providerLimitsUnavailable").arg(hiddenProviders[i].providerName))
+    }
+    return lines.join("\n")
+  }
+
+  function weekTokens(p) {
+    var days = p && p.recentDays ? p.recentDays : []
+    var total = 0
+    for (var d = 0; d < days.length; d++) total += Number(days[d].messageCount || 0)
+    return total
+  }
+
+  // What one shared pool paid for this week: the covering record's own
+  // tokens plus those of every covered agent that has a record of its own,
+  // from the records the panel already has.
+  function coveredTokensText(covering) {
+    var list = covering && covering.coverage ? covering.coverage : []
+    var parts = []
+    var total = 0
+    for (var i = 0; i < list.length; i++) {
+      var source = list[i].id === covering.providerId ? covering : null
+      for (var j = 0; !source && j < providers.length; j++)
+        if (providers[j].providerId === list[i].id) source = providers[j]
+      var tokens = source ? weekTokens(source) : 0
+      if (tokens <= 0) continue
+      total += tokens
+      parts.push(list[i].name + " " + usage.formatTokenCount(tokens))
+    }
+    if (total <= 0) return ""
+    var text = Commons.I18n.tn("agents.tokensThisWeek", total).arg(usage.formatTokenCount(total))
+    return parts.length > 1 ? text + " \u00b7 " + parts.join(" \u00b7 ") : text
   }
 
   // Sign an account that's already here in again, following along in the
@@ -526,11 +625,22 @@ Panel {
       percent: expired ? 0 : Number(percent),
       resetAt: expired ? "" : String(resetAt || "")
     }
+    // An elapsed window reads 0% because its allowance started over; when the
+    // numbers are old that is a guess, so the meter can tell the two apart.
+    if (expired)
+      window.elapsed = true
     extras = extras || {}
     if (extras.periodStartedAt)
       window.periodStartedAt = String(extras.periodStartedAt)
     if (extras.resetEarly === true)
       window.resetEarly = true
+    // A window that has no clock to count down (a credit balance) can say
+    // what is left instead: valueText sits where the countdown would, and
+    // detail adds a line to the tooltip.
+    if (extras.valueText)
+      window.valueText = String(extras.valueText)
+    if (extras.detail)
+      window.detail = String(extras.detail)
     return window
   }
 
@@ -606,6 +716,23 @@ Panel {
     return Commons.I18n.t("agents.durationMinutes").arg(Commons.I18n.formatNumber(Math.max(1, minutes)))
   }
 
+  // Limits kept past a failed or impossible check are only the last known
+  // numbers. A short gap between checks is routine; past this they are shown as
+  // old rather than as the present.
+  readonly property real staleAfterMs: 15 * 60 * 1000
+
+  function limitsDated(stale, fetchedAt) {
+    return stale === true && (!(Number(fetchedAt) > 0) || nowMs - Number(fetchedAt) > staleAfterMs)
+  }
+
+  function lastUpdatedText(fetchedAt) {
+    var at = Number(fetchedAt)
+    if (!(at > 0)) return Commons.I18n.t("agents.lastUpdatedUnknown")
+    return nowMs - at > 60000
+      ? Commons.I18n.t("agents.lastUpdatedAgo").arg(formatDuration(nowMs - at))
+      : Commons.I18n.t("agents.lastUpdatedJustNow")
+  }
+
   // Window titles stay English in the records, where scopedPart() and the
   // collectors match on them; only what reaches the screen is translated.
   function windowDisplayTitle(title) {
@@ -657,8 +784,6 @@ Panel {
       return Commons.I18n.t("agents.helpRunToAuthenticate").arg("`codex login`")
     case "Start Grok, or run `grok login`, to sign in.":
       return Commons.I18n.t("agents.helpStartOrRunToSignIn").arg("Grok").arg("`grok login`")
-    case "Start Grok to see its limits; signing in again is not needed.":
-      return Commons.I18n.t("agents.helpStartToSeeLimits").arg("Grok")
     case "Grok's saved sign-in expired. Start Grok to refresh it.":
       return Commons.I18n.t("agents.helpSignInExpired").arg("Grok")
     case "Set FIREWORKS_API_KEY, run `firectl set-api-key`, or sign in to Fireworks in pi or opencode.":
@@ -767,33 +892,53 @@ Panel {
     }
 
     var phrases = []
-    if (week > 0) phrases.push(Commons.I18n.tn("agents.tokensThisWeek", week).arg(usage.formatTokenCount(week)))
-    if (today > 0) phrases.push(Commons.I18n.tn("agents.tokensToday", today).arg(usage.formatTokenCount(today)))
+    if (week > 0) phrases.push({ kind: "week", text: Commons.I18n.tn("agents.tokensThisWeek", week).arg(usage.formatTokenCount(week)) })
+    if (today > 0) phrases.push({ kind: "today", text: Commons.I18n.tn("agents.tokensToday", today).arg(usage.formatTokenCount(today)) })
     var topModel = ""
     for (var model in byModel) if (topModel === "" || byModel[model] > byModel[topModel]) topModel = model
-    if (topModel !== "" && byModel[topModel] > 0) phrases.push(Commons.I18n.t("agents.mostlyModel").arg(topModel))
+    if (topModel !== "" && byModel[topModel] > 0) phrases.push({ kind: "model", text: Commons.I18n.t("agents.mostlyModel").arg(topModel) })
     var busiest = ""
     for (var date in byDay) if (busiest === "" || byDay[date] > byDay[busiest]) busiest = date
-    if (busiest !== "" && byDay[busiest] > 0) phrases.push(Commons.I18n.t("agents.busiestDay").arg(dayName(busiest)))
-    if (prompts > 0) phrases.push(Commons.I18n.tn("agents.promptsToday", prompts).arg(Commons.I18n.formatNumber(prompts)))
-    if (sessions > 0) phrases.push(Commons.I18n.tn("agents.sessionsToday", sessions).arg(Commons.I18n.formatNumber(sessions)))
+    if (busiest !== "" && byDay[busiest] > 0) phrases.push({ kind: "busiest", text: Commons.I18n.t("agents.busiestDay").arg(dayName(busiest)) })
+    if (prompts > 0) phrases.push({ kind: "prompts", text: Commons.I18n.tn("agents.promptsToday", prompts).arg(Commons.I18n.formatNumber(prompts)) })
+    if (sessions > 0) phrases.push({ kind: "sessions", text: Commons.I18n.tn("agents.sessionsToday", sessions).arg(Commons.I18n.formatNumber(sessions)) })
     return phrases
   }
   property int phraseIndex: 0
   // Every record that lands rebuilds the phrases, and opening the panel
   // refreshes each agent in turn. Indexing the live list would swap the line
-  // on each of those, so the hero holds what it shows until the next fade.
+  // on each of those, so the hero holds which line it shows until the next
+  // fade, but the numbers in it follow the records: a line held from a
+  // half-loaded first pass must not keep a total that left agents out.
   property string shownPhrase: ""
+  property string shownKind: ""
   readonly property string heroPhrase: addStage !== "" || blankSlate
     ? addHeading
     : (shownPhrase !== "" ? shownPhrase : Commons.I18n.t("agents.subscriptions"))
 
   function showPhrase() {
     var n = summaryPhrases.length
-    shownPhrase = n > 0 ? summaryPhrases[phraseIndex % n] : ""
+    var entry = n > 0 ? summaryPhrases[phraseIndex % n] : null
+    shownKind = entry ? entry.kind : ""
+    shownPhrase = entry ? entry.text : ""
   }
 
-  onSummaryPhrasesChanged: if (shownPhrase === "" || summaryPhrases.length <= 1) showPhrase()
+  // The current text of the held line's kind, or "" once that line is gone.
+  function phraseTextFor(phrases, kind) {
+    for (var i = 0; i < phrases.length; i++)
+      if (phrases[i].kind === kind) return phrases[i].text
+    return ""
+  }
+
+  function refreshShownPhrase() {
+    var text = phraseTextFor(summaryPhrases, shownKind)
+    if (text !== "") shownPhrase = text
+  }
+
+  onSummaryPhrasesChanged: {
+    if (shownPhrase === "" || summaryPhrases.length <= 1) showPhrase()
+    else refreshShownPhrase()
+  }
 
   // The held line was written in the language it was shown in; once a new
   // language's strings arrive and the phrases rebuild, show it again.
@@ -836,13 +981,14 @@ Panel {
 
   // Marks resolve by convention, so a new agent's data file needs nothing
   // from this panel: assets/<id>.svg if it ships one, the module's bar glyph
-  // if it doesn't.
+  // if it doesn't. A record can ask for another agent's mark with `icon`.
   function iconCandidatesForProvider(p, surfaceColor) {
     if (!p) return []
+    var mark = p.providerIcon || p.providerId
     var candidates = []
     if (colorLuminance(surfaceColor || Commons.Color.background) >= 0.5)
-      candidates.push(Qt.resolvedUrl("assets/" + p.providerId + "-light.svg"))
-    candidates.push(Qt.resolvedUrl("assets/" + p.providerId + ".svg"))
+      candidates.push(Qt.resolvedUrl("assets/" + mark + "-light.svg"))
+    candidates.push(Qt.resolvedUrl("assets/" + mark + ".svg"))
     return candidates
   }
 
@@ -1115,7 +1261,7 @@ Panel {
 
           Repeater {
             id: providerSections
-            model: root.addStage === "" ? root.providers : []
+            model: root.addStage === "" ? root.shownProviders : []
 
             ProviderSection {
               required property var modelData
@@ -1163,6 +1309,19 @@ Panel {
                 }
               }
             }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: text !== ""
+            width: parent.width
+            text: root.addStage === "" ? root.uncoveredHiddenText() : ""
+            color: root.dim
+            opacity: 0.8
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
           }
 
           Text {
@@ -1444,6 +1603,14 @@ Panel {
         font.bold: true
       }
 
+      // The agents one subscription pays for, as small marks beside its name.
+      CoverageMarks {
+        anchors.left: sectionName.right
+        anchors.leftMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        coverage: section.provider ? section.provider.coverage : []
+      }
+
       Text {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -1510,6 +1677,33 @@ Panel {
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+      }
+    }
+
+    StaleNote {
+      visible: !section.multi && section.windows.length > 0 && root.limitsDated(stale, fetchedAt)
+      width: parent.width
+      stale: !!section.provider && section.provider.limitsStale === true
+      fetchedAt: section.provider ? Number(section.provider.limitsFetchedAt || 0) : 0
+      help: section.provider ? section.provider.authHelpText : ""
+    }
+
+    // What a shared pool paid for this week.
+    Column {
+      visible: !section.multi && sharedTokens.text !== ""
+      width: parent.width
+      spacing: Style.space(4)
+
+      Text {
+        id: sharedTokens
+        textFormat: Text.PlainText
+        visible: text !== ""
+        width: parent.width
+        text: section.provider && section.provider.coverage && section.provider.coverage.length > 0 ? root.coveredTokensText(section.provider) : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
       }
     }
 
@@ -1607,6 +1801,14 @@ Panel {
               fetchedAt: Number(accountBlock.modelData.fetchedAt || 0)
             }
           }
+
+          StaleNote {
+            visible: (accountBlock.modelData.limits || []).length > 0 && root.limitsDated(stale, fetchedAt)
+            width: parent.width
+            stale: accountBlock.modelData.stale === true
+            fetchedAt: Number(accountBlock.modelData.fetchedAt || 0)
+            help: accountBlock.modelData.authHelpText
+          }
         }
       }
     }
@@ -1621,6 +1823,7 @@ Panel {
     property int candidateIndex: 0
     onCandidatesKeyChanged: candidateIndex = 0
     property real size: Style.font.heading
+    property bool textFallback: true
 
     width: size
     height: size
@@ -1640,12 +1843,42 @@ Panel {
 
     Text {
       anchors.centerIn: parent
-      visible: markImage.status !== Image.Ready
+      visible: mark.textFallback && markImage.status !== Image.Ready
       textFormat: Text.PlainText
       text: button.text
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: mark.size
+    }
+  }
+
+  // A row of small marks for the agents a subscription covers, each naming
+  // its agent on hover. A mark that has no asset is left out rather than
+  // standing in the bar's glyph, which would say nothing about that agent.
+  component CoverageMarks: Row {
+    id: marks
+    property var coverage: []
+    spacing: Style.space(6)
+    visible: coverage.length > 0
+
+    Repeater {
+      model: marks.coverage
+
+      ProviderIcon {
+        id: coverageMark
+        required property var modelData
+        provider: ({ providerId: String(modelData.id || ""), providerName: String(modelData.name || modelData.id || "") })
+        size: Style.font.body
+        opacity: 0.75
+        textFallback: false
+
+        HoverHandler { id: coverageHover }
+
+        PanelToolTip {
+          visible: coverageHover.hovered && coverageMark.provider.providerName !== ""
+          text: coverageMark.provider.providerName
+        }
+      }
     }
   }
 
@@ -1981,6 +2214,37 @@ Panel {
     }
   }
 
+  // Under limits that have not been refreshed for a while: how old they are,
+  // and why, when the collector says. Quiet, but in plain view, because a
+  // meter that stopped moving looks the same as one that has nothing to report.
+  component StaleNote: Column {
+    id: note
+    property bool stale: false
+    property real fetchedAt: 0
+    property string help: ""
+    spacing: Style.space(2)
+
+    Text {
+      width: parent.width
+      textFormat: Text.PlainText
+      text: root.lastUpdatedText(note.fetchedAt)
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      visible: text !== ""
+      width: parent.width
+      textFormat: Text.PlainText
+      text: root.helpDisplayText(note.help)
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
   // With no measured windows, leave a place to discover how to get usage.
   component UnavailableUsage: Item {
     id: unavailable
@@ -2011,11 +2275,15 @@ Panel {
   component CompactLimit: Item {
     id: compact
     property var window: null
-    // The age of numbers kept past a failed check is shown only on hover.
+    // Numbers kept past a failed check: their age is on hover and, once they
+    // are old enough, in a line under the section. Old numbers are drawn muted,
+    // and an allowance that has since reset is drawn as unknown, not as 0%.
     property bool stale: false
     property real fetchedAt: 0
-    readonly property var scoped: window && window.scoped ? window.scoped : []
-    readonly property bool alarming: window && window.percent >= 0.9
+    readonly property bool dated: root.limitsDated(stale, fetchedAt)
+    readonly property bool unknown: dated && !!window && window.elapsed === true
+    readonly property var scoped: window && window.scoped && !unknown ? window.scoped : []
+    readonly property bool alarming: !dated && window && window.percent >= 0.9
     readonly property real resetMs: root.resetMsFor(window)
     implicitHeight: Math.max(compactTitle.implicitHeight, compactValue.implicitHeight)
 
@@ -2025,7 +2293,7 @@ Panel {
       visible: compactHover.hovered && !!compact.window
       text: {
         var lines = []
-        if (compact.window) {
+        if (compact.window && !compact.unknown) {
           var windowName = root.windowDisplayTitle(compact.window.title)
           var used = root.formatLimitPercent(compact.window.percent)
           var reset = root.formatResetCaption(compact.window)
@@ -2038,10 +2306,10 @@ Panel {
               ? Commons.I18n.t("agents.windowUsedResets").arg(windowName).arg(used.slice(0, -1)).arg(root.formatDuration(compact.resetMs))
               : Commons.I18n.t("agents.windowUsed").arg(windowName).arg(used.slice(0, -1)))
         }
+        if (compact.window && compact.window.detail)
+          lines.push(compact.window.detail)
         if (compact.stale)
-          lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000
-            ? Commons.I18n.t("agents.lastUpdatedAgo").arg(root.formatDuration(root.nowMs - compact.fetchedAt))
-            : compact.fetchedAt > 0 ? Commons.I18n.t("agents.lastUpdatedJustNow") : Commons.I18n.t("agents.lastUpdatedUnknown"))
+          lines.push(root.lastUpdatedText(compact.fetchedAt))
         for (var i = 0; i < compact.scoped.length; i++)
           lines.push(compact.scoped[i].title + ": " + root.formatLimitPercent(compact.scoped[i].percent) + " of its "
             + root.windowDisplayTitle(compact.window ? compact.window.title : "").toLowerCase() + " allowance")
@@ -2066,8 +2334,9 @@ Panel {
       anchors.right: compactValue.left
       anchors.rightMargin: Style.space(20)
       anchors.verticalCenter: parent.verticalCenter
-      value: compact.window ? compact.window.percent : -1
+      value: compact.window && !compact.unknown ? compact.window.percent : -1
       alarming: compact.alarming
+      muted: compact.dated
       markers: compact.scoped
     }
 
@@ -2080,8 +2349,9 @@ Panel {
       text: "00h 00m"
     }
 
-    // How long until the window resets. The meter says how full it is; the
-    // exact percentage is in the row's tooltip.
+    // How long until the window resets, or what is left when it has no reset.
+    // The meter says how full it is; the exact percentage is in the row's
+    // tooltip.
     Text {
       id: compactValue
       width: Math.ceil(compactValueMetrics.advanceWidth)
@@ -2089,7 +2359,8 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       horizontalAlignment: Text.AlignRight
-      text: compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : ""
+      text: compact.unknown ? "\u2014" : (compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : (compact.window && compact.window.valueText ? compact.window.valueText : ""))
+      elide: Text.ElideRight
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -2101,6 +2372,8 @@ Panel {
     id: meter
     property real value: -1
     property bool alarming: false
+    // Old numbers: still drawn, but fainter than a current reading.
+    property bool muted: false
     property real thickness: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
 
     // Other allowances on the same clock, drawn as ticks across the track.
@@ -2122,6 +2395,7 @@ Panel {
       radius: meterTrack.radius
       width: meterTrack.width * root.clamp(meter.value, 0, 1)
       color: meter.alarming ? root.urgent : root.foreground
+      opacity: meter.muted ? 0.4 : 1
 
       Behavior on width {
         NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic }

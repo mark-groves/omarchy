@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1-Nutzungsprüfung fehlgeschlagen",
   "agents.helpSignInExpired": "Die gespeicherte Anmeldung von %1 ist abgelaufen. Starte %1, um sie zu aktualisieren.",
   "agents.helpStartOrRunToSignIn": "Starte %1 oder führe %2 aus, um dich anzumelden.",
-  "agents.helpStartToSeeLimits": "Starte %1, um seine Limits zu sehen; eine erneute Anmeldung ist nicht nötig.",
   "agents.lastUpdatedAgo": "Zuletzt vor %1 aktualisiert",
   "agents.lastUpdatedJustNow": "Zuletzt vor weniger als einer Minute aktualisiert",
   "agents.lastUpdatedUnknown": "Zeit der letzten Aktualisierung nicht verfügbar",

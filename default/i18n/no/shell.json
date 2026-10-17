@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Bruksskanning for %1 mislyktes",
   "agents.helpSignInExpired": "Lagret innlogging for %1 har utløpt. Start %1 for å fornye den.",
   "agents.helpStartOrRunToSignIn": "Start %1, eller kjør %2, for å logge inn.",
-  "agents.helpStartToSeeLimits": "Start %1 for å se grensene; innlogging på nytt er ikke nødvendig.",
   "agents.lastUpdatedAgo": "Sist oppdatert for %1 siden",
   "agents.lastUpdatedJustNow": "Sist oppdatert for under et minutt siden",
   "agents.lastUpdatedUnknown": "Siste oppdateringstid utilgjengelig",

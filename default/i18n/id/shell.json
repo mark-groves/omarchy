@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "Pemindaian penggunaan %1 gagal",
   "agents.helpSignInExpired": "Sesi masuk %1 yang tersimpan telah kedaluwarsa. Mulai %1 untuk memperbaruinya.",
   "agents.helpStartOrRunToSignIn": "Mulai %1, atau jalankan %2, untuk masuk.",
-  "agents.helpStartToSeeLimits": "Mulai %1 untuk melihat batasnya; tidak perlu masuk lagi.",
   "agents.lastUpdatedAgo": "Terakhir diperbarui %1 yang lalu",
   "agents.lastUpdatedJustNow": "Terakhir diperbarui kurang dari semenit yang lalu",
   "agents.lastUpdatedUnknown": "Waktu pembaruan terakhir tidak tersedia",

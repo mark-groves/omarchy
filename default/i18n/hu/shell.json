@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1 használati vizsgálata nem sikerült",
   "agents.helpSignInExpired": "A(z) %1 mentett bejelentkezése lejárt. Indítsd el a(z) %1 alkalmazást a frissítéshez.",
   "agents.helpStartOrRunToSignIn": "Indítsd el ezt: %1, vagy futtasd ezt: %2 a bejelentkezéshez.",
-  "agents.helpStartToSeeLimits": "Indítsd el ezt: %1 a korlátok megtekintéséhez; nem kell újra bejelentkezned.",
   "agents.lastUpdatedAgo": "Utolsó frissítés %1 ezelőtt",
   "agents.lastUpdatedJustNow": "Utolsó frissítés kevesebb mint egy perce",
   "agents.lastUpdatedUnknown": "Utolsó frissítés ideje nem elérhető",

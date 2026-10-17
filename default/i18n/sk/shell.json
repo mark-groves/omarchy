@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "Skenovanie využitia %1 zlyhalo",
   "agents.helpSignInExpired": "Uložené prihlásenie do %1 vypršalo. Na obnovenie spustite %1.",
   "agents.helpStartOrRunToSignIn": "Na prihlásenie spustite %1 alebo spustite %2.",
-  "agents.helpStartToSeeLimits": "Spustite %1, ak chcete zobraziť limity; opätovné prihlásenie nie je potrebné.",
   "agents.lastUpdatedAgo": "Naposledy aktualizované pred %1",
   "agents.lastUpdatedJustNow": "Naposledy aktualizované pred menej ako minútou",
   "agents.lastUpdatedUnknown": "Čas poslednej aktualizácie nedostupný",

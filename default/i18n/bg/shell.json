@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Сканирането на ползването на %1 се провали",
   "agents.helpSignInExpired": "Запазеният вход за %1 изтече. Стартирай %1, за да го обновиш.",
   "agents.helpStartOrRunToSignIn": "Стартирай %1 или изпълни %2, за да влезеш.",
-  "agents.helpStartToSeeLimits": "Стартирай %1, за да видиш лимитите; не е нужен повторен вход.",
   "agents.lastUpdatedAgo": "Последна актуализация преди %1",
   "agents.lastUpdatedJustNow": "Последна актуализация преди по-малко от минута",
   "agents.lastUpdatedUnknown": "Няма данни за последна актуализация",

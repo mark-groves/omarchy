@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1-forbrugsscanning mislykkedes",
   "agents.helpSignInExpired": "Det gemte login for %1 er udløbet. Start %1 for at opdatere det.",
   "agents.helpStartOrRunToSignIn": "Start %1, eller kør %2, for at logge ind.",
-  "agents.helpStartToSeeLimits": "Start %1 for at se dets grænser; du behøver ikke logge ind igen.",
   "agents.lastUpdatedAgo": "Sidst opdateret for %1 siden",
   "agents.lastUpdatedJustNow": "Sidst opdateret for under et minut siden",
   "agents.lastUpdatedUnknown": "Tidspunkt for sidste opdatering ikke tilgængeligt",

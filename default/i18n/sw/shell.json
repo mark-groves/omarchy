@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Uchanganuzi wa matumizi ya %1 umeshindwa",
   "agents.helpSignInExpired": "Kuingia kwa %1 kulikohifadhiwa kumeisha. Anzisha %1 ili kuisasisha.",
   "agents.helpStartOrRunToSignIn": "Anzisha %1, au endesha %2, ili kuingia.",
-  "agents.helpStartToSeeLimits": "Anzisha %1 ili kuona vikomo vyake; kuingia tena hakuhitajiki.",
   "agents.lastUpdatedAgo": "Sasisho la mwisho %1 iliyopita",
   "agents.lastUpdatedJustNow": "Sasisho la mwisho chini ya dakika moja iliyopita",
   "agents.lastUpdatedUnknown": "Wakati wa sasisho la mwisho haupatikani",

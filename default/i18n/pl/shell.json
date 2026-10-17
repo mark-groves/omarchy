@@ -36,7 +36,6 @@
   "agents.helpScanFailed": "Skanowanie użycia %1 nie powiodło się",
   "agents.helpSignInExpired": "Zapisane logowanie %1 wygasło. Uruchom %1, aby je odnowić.",
   "agents.helpStartOrRunToSignIn": "Uruchom %1 lub %2, aby się zalogować.",
-  "agents.helpStartToSeeLimits": "Uruchom %1, aby zobaczyć jego limity; ponowne logowanie nie jest potrzebne.",
   "agents.lastUpdatedAgo": "Zaktualizowano %1 temu",
   "agents.lastUpdatedJustNow": "Zaktualizowano mniej niż minutę temu",
   "agents.lastUpdatedUnknown": "Czas ostatniej aktualizacji niedostępny",

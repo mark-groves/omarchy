@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Nabigo ang pag-scan ng usage ng %1",
   "agents.helpSignInExpired": "Nag-expire ang naka-save na sign-in ng %1. Simulan ang %1 upang i-refresh ito.",
   "agents.helpStartOrRunToSignIn": "Simulan ang %1, o patakbuhin ang %2, upang mag-sign in.",
-  "agents.helpStartToSeeLimits": "Simulan ang %1 upang makita ang mga limitasyon nito; hindi na kailangang mag-sign in muli.",
   "agents.lastUpdatedAgo": "Huling na-update %1 ang nakalipas",
   "agents.lastUpdatedJustNow": "Huling na-update wala pang isang minuto ang nakalipas",
   "agents.lastUpdatedUnknown": "Hindi available ang oras ng huling update",

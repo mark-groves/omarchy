@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "Quét mức dùng của %1 thất bại",
   "agents.helpSignInExpired": "Đăng nhập đã lưu của %1 đã hết hạn. Hãy chạy %1 để làm mới.",
   "agents.helpStartOrRunToSignIn": "Khởi động %1 hoặc chạy %2 để đăng nhập.",
-  "agents.helpStartToSeeLimits": "Chạy %1 để xem giới hạn; không cần đăng nhập lại.",
   "agents.lastUpdatedAgo": "Cập nhật lần cuối %1 trước",
   "agents.lastUpdatedJustNow": "Cập nhật lần cuối chưa đầy một phút trước",
   "agents.lastUpdatedUnknown": "Chưa có thời gian cập nhật lần cuối",

@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1-notkunarskönnun mistókst",
   "agents.helpSignInExpired": "Vistaða innskráning %1 er útrunnin. Ræstu %1 til að endurnýja hana.",
   "agents.helpStartOrRunToSignIn": "Ræstu %1, eða keyrðu %2, til að skrá þig inn.",
-  "agents.helpStartToSeeLimits": "Ræstu %1 til að sjá takmarkanir þess; ekki þarf að skrá sig inn aftur.",
   "agents.lastUpdatedAgo": "Síðast uppfært %1 síðan",
   "agents.lastUpdatedJustNow": "Síðast uppfært fyrir minna en mínútu síðan",
   "agents.lastUpdatedUnknown": "Síðasti uppfærslutími ekki tiltækur",

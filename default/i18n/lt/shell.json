@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "Nepavyko nuskaityti %1 naudojimo duomenų",
   "agents.helpSignInExpired": "Išsaugoto %1 prisijungimo galiojimas baigėsi. Paleiskite %1, kad jį atnaujintumėte.",
   "agents.helpStartOrRunToSignIn": "Paleiskite %1 arba %2, kad prisijungtumėte.",
-  "agents.helpStartToSeeLimits": "Paleiskite %1, kad matytumėte jo limitus; prisijungti iš naujo nereikia.",
   "agents.lastUpdatedAgo": "Paskutinį kartą atnaujinta prieš %1",
   "agents.lastUpdatedJustNow": "Paskutinį kartą atnaujinta prieš mažiau nei minutę",
   "agents.lastUpdatedUnknown": "Paskutinio atnaujinimo laikas nepasiekiamas",

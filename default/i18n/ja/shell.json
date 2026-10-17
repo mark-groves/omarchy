@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "%1 の利用状況スキャンに失敗しました",
   "agents.helpSignInExpired": "%1 の保存済みサインインの期限が切れました。更新するには %1 を起動してください。",
   "agents.helpStartOrRunToSignIn": "サインインするには %1 を起動するか、%2 を実行してください。",
-  "agents.helpStartToSeeLimits": "上限を確認するには %1 を起動してください。再度のサインインは不要です。",
   "agents.lastUpdatedAgo": "最終更新: %1前",
   "agents.lastUpdatedJustNow": "最終更新: 1分以内",
   "agents.lastUpdatedUnknown": "最終更新時刻を取得できません",

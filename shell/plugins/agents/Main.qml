@@ -316,6 +316,16 @@ Item {
     }
   }
 
+  function coverageList(raw) {
+    var out = []
+    if (!Array.isArray(raw)) return out
+    for (var i = 0; i < raw.length; i++) {
+      var entry = raw[i]
+      if (entry && entry.id) out.push({ id: String(entry.id), name: String(entry.name || entry.id) })
+    }
+    return out
+  }
+
   function displayProvider(record) {
     var stats = syncedStatsFor(String(record.id))
     var synced = !!stats
@@ -324,6 +334,16 @@ Item {
     return {
       providerId: String(record.id),
       providerName: String(record.name || record.id),
+      // The mark to draw when it isn't named for the id (Cursor's unified
+      // X subscription wears Grok's); the id stays what caches and settings
+      // know the agent by.
+      providerIcon: String(record.icon || record.id),
+      // The agents a subscription pays for, shown as marks beside its name;
+      // empty for an agent that stands alone.
+      coverage: coverageList(record.coverage),
+      // The record says it is the unified X subscription's pool, which another
+      // record covering the same agent can stand in for.
+      unified: record.unified === true,
       ready: record.ready === true || synced,
       usageStatusText: String(record.usageStatusText || ""),
       authHelpText: String(record.authHelpText || ""),

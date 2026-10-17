@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1 foydalanish tekshiruvi amalga oshmadi",
   "agents.helpSignInExpired": "%1 uchun saqlangan kirish muddati tugagan. Yangilash uchun %1 ni ishga tushiring.",
   "agents.helpStartOrRunToSignIn": "Kirish uchun %1 ni ishga tushiring yoki %2 ni bajaring.",
-  "agents.helpStartToSeeLimits": "Limitlarini koʻrish uchun %1 ni ishga tushiring; qayta kirish talab qilinmaydi.",
   "agents.lastUpdatedAgo": "Oxirgi marta %1 oldin yangilangan",
   "agents.lastUpdatedJustNow": "Oxirgi marta bir daqiqadan kam oldin yangilangan",
   "agents.lastUpdatedUnknown": "Oxirgi yangilanish vaqti mavjud emas",

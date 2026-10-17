@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "%1 用量扫描失败",
   "agents.helpSignInExpired": "%1 已保存的登录已过期。启动 %1 以刷新。",
   "agents.helpStartOrRunToSignIn": "启动 %1，或运行 %2 以登录。",
-  "agents.helpStartToSeeLimits": "启动 %1 以查看其额度；无需重新登录。",
   "agents.lastUpdatedAgo": "上次更新于 %1 前",
   "agents.lastUpdatedJustNow": "上次更新于不到一分钟前",
   "agents.lastUpdatedUnknown": "上次更新时间不可用",

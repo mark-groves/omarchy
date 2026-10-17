@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "Scanarea utilizării %1 a eșuat",
   "agents.helpSignInExpired": "Autentificarea salvată pentru %1 a expirat. Pornește %1 pentru a o reînnoi.",
   "agents.helpStartOrRunToSignIn": "Pornește %1 sau rulează %2 pentru a te autentifica.",
-  "agents.helpStartToSeeLimits": "Pornește %1 pentru a-i vedea limitele; nu este nevoie să te autentifici din nou.",
   "agents.lastUpdatedAgo": "Actualizat acum %1",
   "agents.lastUpdatedJustNow": "Actualizat acum mai puțin de un minut",
   "agents.lastUpdatedUnknown": "Ora ultimei actualizări indisponibilă",

@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1 kasutuse skannimine ebaõnnestus",
   "agents.helpSignInExpired": "%1 salvestatud sisselogimine aegus. Värskendamiseks käivita %1.",
   "agents.helpStartOrRunToSignIn": "Sisselogimiseks käivita %1 või %2.",
-  "agents.helpStartToSeeLimits": "Käivita %1, et näha selle limiite; uuesti sisselogimist pole vaja.",
   "agents.lastUpdatedAgo": "Viimati uuendatud %1 tagasi",
   "agents.lastUpdatedJustNow": "Viimati uuendatud vähem kui minuti eest",
   "agents.lastUpdatedUnknown": "Viimase uuendamise aeg pole saadaval",

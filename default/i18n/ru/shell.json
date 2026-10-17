@@ -36,7 +36,6 @@
   "agents.helpScanFailed": "Не удалось проверить использование %1",
   "agents.helpSignInExpired": "Сохранённый вход в %1 истёк. Запустите %1, чтобы обновить его.",
   "agents.helpStartOrRunToSignIn": "Запустите %1 или выполните %2, чтобы войти.",
-  "agents.helpStartToSeeLimits": "Запустите %1, чтобы увидеть его лимиты; входить заново не нужно.",
   "agents.lastUpdatedAgo": "Обновлено %1 назад",
   "agents.lastUpdatedJustNow": "Обновлено менее минуты назад",
   "agents.lastUpdatedUnknown": "Время обновления недоступно",

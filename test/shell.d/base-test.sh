@@ -266,5 +266,11 @@ function requireFromRoot(relativePath) {
 
 JS_PRELUDE
     cat
-  } | node
+  } | node || {
+    # A script that throws (a SyntaxError from a bad slice of a QML file, say)
+    # leaves no "not ok" line, and a test that runs more steps afterwards would
+    # otherwise end 0 with the node assertions silently missing.
+    printf 'not ok - node test script failed (exit %s)\n' "$?" >&2
+    exit 1
+  }
 }
