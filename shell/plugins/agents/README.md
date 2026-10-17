@@ -107,6 +107,10 @@ The collector never defers to another record. The panel decides which record dra
 
 An agent whose record says `Limits paused` (Grok does so after a failed credits call, or when its token has lapsed with no numbers cached), has no limits, no balance, no help text (`authHelpText`), and fewer than two accounts has nothing to draw and nothing to act on, so the panel leaves its section out (and its keyboard stop and drag slot). Its local stats still count in the hero's totals and the bar. So it isn't mistaken for missing, a small dim line at the foot of the page reads "<agent> limits unavailable", unless a shown subscription covers it (see `coverage`), whose coverage marks already account for it, in which case there is no line. An agent that is still loading (no status yet), signed out, or carrying any help line (Claude Code's lapsed access token while a refresh keeps failing, for one) keeps its section, so those messages are never hidden. A record with `"unified": true` is the exception in both directions: it is never left out for having nothing to show (it reads "Usage unavailable"), and always left out when a shown record covers it.
 
+### Stale limits
+
+A record whose `limitsStale` is true with a `limitsFetchedAt` more than 15 minutes old (or none) is showing the last known numbers, not the present. The panel says so in plain view, for every agent and each account: the meters are drawn muted and never alarm, a window whose reset has passed since is drawn as unknown (an empty meter and a dash) rather than as 0%, and a dim line under the meters reads "Last updated 3h ago" followed by the collector's `authHelpText` when it has one (Claude's "access token has lapsed" explanation, say). A lapsed or missing sign-in additionally keeps its _Sign-in required_ link above the meters. A younger stale record only says so in the meters' tooltips.
+
 When `~/.local/state/omarchy/agents/accounts/<claude|codex|grok>.json`
 registers more than one account, the `claude`, `codex`, and `grok` records
 also carry

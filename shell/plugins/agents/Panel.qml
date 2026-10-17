@@ -625,6 +625,10 @@ Panel {
       percent: expired ? 0 : Number(percent),
       resetAt: expired ? "" : String(resetAt || "")
     }
+    // An elapsed window reads 0% because its allowance started over; when the
+    // numbers are old that is a guess, so the meter can tell the two apart.
+    if (expired)
+      window.elapsed = true
     extras = extras || {}
     if (extras.periodStartedAt)
       window.periodStartedAt = String(extras.periodStartedAt)
@@ -710,6 +714,23 @@ Panel {
     if (days > 0) return Commons.I18n.t("agents.durationDaysHours").arg(Commons.I18n.formatNumber(days)).arg(Commons.I18n.formatNumber(hours % 24))
     if (hours > 0) return Commons.I18n.t("agents.durationHoursMinutes").arg(Commons.I18n.formatNumber(hours)).arg(Commons.I18n.formatNumber(minutes % 60))
     return Commons.I18n.t("agents.durationMinutes").arg(Commons.I18n.formatNumber(Math.max(1, minutes)))
+  }
+
+  // Limits kept past a failed or impossible check are only the last known
+  // numbers. A short gap between checks is routine; past this they are shown as
+  // old rather than as the present.
+  readonly property real staleAfterMs: 15 * 60 * 1000
+
+  function limitsDated(stale, fetchedAt) {
+    return stale === true && (!(Number(fetchedAt) > 0) || nowMs - Number(fetchedAt) > staleAfterMs)
+  }
+
+  function lastUpdatedText(fetchedAt) {
+    var at = Number(fetchedAt)
+    if (!(at > 0)) return Commons.I18n.t("agents.lastUpdatedUnknown")
+    return nowMs - at > 60000
+      ? Commons.I18n.t("agents.lastUpdatedAgo").arg(formatDuration(nowMs - at))
+      : Commons.I18n.t("agents.lastUpdatedJustNow")
   }
 
   // Window titles stay English in the records, where scopedPart() and the
@@ -1639,6 +1660,14 @@ Panel {
       }
     }
 
+    StaleNote {
+      visible: !section.multi && section.windows.length > 0 && root.limitsDated(stale, fetchedAt)
+      width: parent.width
+      stale: !!section.provider && section.provider.limitsStale === true
+      fetchedAt: section.provider ? Number(section.provider.limitsFetchedAt || 0) : 0
+      help: section.provider ? section.provider.authHelpText : ""
+    }
+
     // What a shared pool paid for this week.
     Column {
       visible: !section.multi && sharedTokens.text !== ""
@@ -1751,6 +1780,14 @@ Panel {
               stale: accountBlock.modelData.stale === true
               fetchedAt: Number(accountBlock.modelData.fetchedAt || 0)
             }
+          }
+
+          StaleNote {
+            visible: (accountBlock.modelData.limits || []).length > 0 && root.limitsDated(stale, fetchedAt)
+            width: parent.width
+            stale: accountBlock.modelData.stale === true
+            fetchedAt: Number(accountBlock.modelData.fetchedAt || 0)
+            help: accountBlock.modelData.authHelpText
           }
         }
       }
@@ -2157,6 +2194,37 @@ Panel {
     }
   }
 
+  // Under limits that have not been refreshed for a while: how old they are,
+  // and why, when the collector says. Quiet, but in plain view, because a
+  // meter that stopped moving looks the same as one that has nothing to report.
+  component StaleNote: Column {
+    id: note
+    property bool stale: false
+    property real fetchedAt: 0
+    property string help: ""
+    spacing: Style.space(2)
+
+    Text {
+      width: parent.width
+      textFormat: Text.PlainText
+      text: root.lastUpdatedText(note.fetchedAt)
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      visible: text !== ""
+      width: parent.width
+      textFormat: Text.PlainText
+      text: root.helpDisplayText(note.help)
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
   // With no measured windows, leave a place to discover how to get usage.
   component UnavailableUsage: Item {
     id: unavailable
@@ -2187,11 +2255,15 @@ Panel {
   component CompactLimit: Item {
     id: compact
     property var window: null
-    // The age of numbers kept past a failed check is shown only on hover.
+    // Numbers kept past a failed check: their age is on hover and, once they
+    // are old enough, in a line under the section. Old numbers are drawn muted,
+    // and an allowance that has since reset is drawn as unknown, not as 0%.
     property bool stale: false
     property real fetchedAt: 0
-    readonly property var scoped: window && window.scoped ? window.scoped : []
-    readonly property bool alarming: window && window.percent >= 0.9
+    readonly property bool dated: root.limitsDated(stale, fetchedAt)
+    readonly property bool unknown: dated && !!window && window.elapsed === true
+    readonly property var scoped: window && window.scoped && !unknown ? window.scoped : []
+    readonly property bool alarming: !dated && window && window.percent >= 0.9
     readonly property real resetMs: root.resetMsFor(window)
     implicitHeight: Math.max(compactTitle.implicitHeight, compactValue.implicitHeight)
 
@@ -2201,7 +2273,7 @@ Panel {
       visible: compactHover.hovered && !!compact.window
       text: {
         var lines = []
-        if (compact.window) {
+        if (compact.window && !compact.unknown) {
           var windowName = root.windowDisplayTitle(compact.window.title)
           var used = root.formatLimitPercent(compact.window.percent)
           var reset = root.formatResetCaption(compact.window)
@@ -2217,9 +2289,7 @@ Panel {
         if (compact.window && compact.window.detail)
           lines.push(compact.window.detail)
         if (compact.stale)
-          lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000
-            ? Commons.I18n.t("agents.lastUpdatedAgo").arg(root.formatDuration(root.nowMs - compact.fetchedAt))
-            : compact.fetchedAt > 0 ? Commons.I18n.t("agents.lastUpdatedJustNow") : Commons.I18n.t("agents.lastUpdatedUnknown"))
+          lines.push(root.lastUpdatedText(compact.fetchedAt))
         for (var i = 0; i < compact.scoped.length; i++)
           lines.push(compact.scoped[i].title + ": " + root.formatLimitPercent(compact.scoped[i].percent) + " of its "
             + root.windowDisplayTitle(compact.window ? compact.window.title : "").toLowerCase() + " allowance")
@@ -2244,8 +2314,9 @@ Panel {
       anchors.right: compactValue.left
       anchors.rightMargin: Style.space(20)
       anchors.verticalCenter: parent.verticalCenter
-      value: compact.window ? compact.window.percent : -1
+      value: compact.window && !compact.unknown ? compact.window.percent : -1
       alarming: compact.alarming
+      muted: compact.dated
       markers: compact.scoped
     }
 
@@ -2268,7 +2339,7 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       horizontalAlignment: Text.AlignRight
-      text: compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : (compact.window && compact.window.valueText ? compact.window.valueText : "")
+      text: compact.unknown ? "\u2014" : (compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : (compact.window && compact.window.valueText ? compact.window.valueText : ""))
       elide: Text.ElideRight
       color: root.dim
       font.family: root.fontFamily
@@ -2281,6 +2352,8 @@ Panel {
     id: meter
     property real value: -1
     property bool alarming: false
+    // Old numbers: still drawn, but fainter than a current reading.
+    property bool muted: false
     property real thickness: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
 
     // Other allowances on the same clock, drawn as ticks across the track.
@@ -2302,6 +2375,7 @@ Panel {
       radius: meterTrack.radius
       width: meterTrack.width * root.clamp(meter.value, 0, 1)
       color: meter.alarming ? root.urgent : root.foreground
+      opacity: meter.muted ? 0.4 : 1
 
       Behavior on width {
         NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic }

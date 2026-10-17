@@ -359,7 +359,7 @@ const resetAt = new Date(panelRoot.nowMs + 1000).toISOString()
 const measured = { limits: [{ label: 'Session (5-hour)', percent: 0.78, resetsAt: resetAt }] }
 assertEqual(limitWindows(measured)[0].percent, 0.78, 'usage remains until the reset time')
 panelRoot.nowMs += 1000
-assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '' }], 'usage resets at the deadline while the panel stays open')
+assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '', elapsed: true }], 'usage resets at the deadline while the panel stays open')
 assertEqual(measured.limits[0].percent, 0.78, 'display reset leaves the measured record intact')
 
 // A model's weekly allowance rides under the Weekly row; one whose window has

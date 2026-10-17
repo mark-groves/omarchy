@@ -27,7 +27,7 @@ assert(/target\.kind === "signin"\) signInAgain\(/.test(panelSource) && /target\
 assert(/target\.kind === "autoswitch"\) setSwitchMode\(/.test(panelSource), 'Enter on Autoswitch flips the switch mode')
 assert(/keyColumn = use >= 0 \? use : /.test(panelSource), 'moving up or down onto an account lands on Use')
 assert(/Qt\.callLater\(function\(\) \{ if \(picking\) pointAt\("choice", 0\) \}\)/.test(panelSource), 'picking an agent to add starts with the first one focused')
-assert(!/opacity: stale \?/.test(panelSource) && /I18n\.t\("agents\.lastUpdatedAgo"\)\.arg\(root\.formatDuration/.test(panelSource), 'stale limits say how old they are only on hover')
+assert(/I18n\.t\("agents\.lastUpdatedAgo"\)\.arg\(formatDuration/.test(panelSource) && /lines\.push\(root\.lastUpdatedText\(compact\.fetchedAt\)\)/.test(panelSource), 'stale limits say how old they are on hover too')
 assert(/onPickingChanged: resetKeys\(\)/.test(panelSource), 'the cursor starts over when the agent list comes or goes')
 assert(!/t === "a" \|\| t === "A"/.test(panelSource), 'adding an account has no hotkey; the + is the way in')
 assert(/if \(!accounts\[a\]\.active\) \{/.test(panelSource) && /if \(row\.length > 0\) rows\.push\(row\)/.test(panelSource), 'the active account with nothing to fix is not a keyboard stop')
@@ -187,4 +187,27 @@ assertEqual(
 )
 assert(/root\.formatLimitPercent\(compact\.window\.percent\)/.test(panelSource), 'agents panel tooltips use the fork percent helper')
 assert(/root\.formatResetCaption\(compact\.window\)/.test(panelSource), 'agents panel tooltips name a complimentary reset')
+
+// Stale limits: old numbers are called old, young ones are left alone.
+const staleStart = panelSource.indexOf('function limitsDated(stale, fetchedAt)')
+const staleEnd = panelSource.indexOf('// Window titles stay English in the records')
+assert(staleStart > 0 && staleEnd > staleStart, 'agents panel exposes the stale-limits helpers')
+let nowMs = 1792200000000
+const staleAfterMs = 15 * 60 * 1000
+eval(panelSource.slice(staleStart, staleEnd))
+assert(/readonly property real staleAfterMs: 15 \* 60 \* 1000/.test(panelSource), 'limits count as old after fifteen minutes')
+assert(!limitsDated(false, nowMs - 5 * 3600000), 'numbers the collector calls current are never marked old')
+assert(!limitsDated(true, nowMs - 5 * 60000), 'stale numbers five minutes old are routine, not flagged')
+assert(limitsDated(true, nowMs - 16 * 60000), 'stale numbers past fifteen minutes are flagged')
+assert(limitsDated(true, 0), 'stale numbers with no known time are flagged')
+assertEqual(lastUpdatedText(nowMs - 3 * 3600000), 'Last updated 6d 14h ago', 'the visible line says how long ago the numbers were read')
+assertEqual(String(lastUpdatedText(nowMs - 20000)), 'Last updated less than a minute ago', 'a very recent read is said so')
+assertEqual(String(lastUpdatedText(0)), 'Last updated time unavailable', 'an unknown read time is said so')
+assert(/component StaleNote: Column/.test(panelSource) && /StaleNote \{\s*visible: !section\.multi && section\.windows\.length > 0 && root\.limitsDated\(stale, fetchedAt\)/.test(panelSource), 'a section with old limits shows the note in plain view')
+assert(/StaleNote \{\s*visible: \(accountBlock\.modelData\.limits \|\| \[\]\)\.length > 0 && root\.limitsDated\(stale, fetchedAt\)/.test(panelSource), 'each account with old limits shows its own note')
+assert(/text: root\.helpDisplayText\(note\.help\)/.test(panelSource), 'the note carries the collector\'s help text when there is some')
+assert(/readonly property bool unknown: dated && !!window && window\.elapsed === true/.test(panelSource) && /value: compact\.window && !compact\.unknown \? compact\.window\.percent : -1/.test(panelSource), 'an allowance that reset while the numbers were old is drawn as unknown, not as 0%')
+assert(/readonly property bool alarming: !dated && /.test(panelSource) && /muted: compact\.dated/.test(panelSource) && /opacity: meter\.muted \? 0\.4 : 1/.test(panelSource), 'old numbers are drawn muted and never alarm')
+assert(/if \(expired\)\s*window\.elapsed = true/.test(panelSource), 'a window past its reset says so')
+assert(/visible: !section\.multi && root\.needsSignIn\(section\.provider\)/.test(panelSource), 'a lapsed sign-in keeps its clickable Sign-in required link above the meters')
 JS
