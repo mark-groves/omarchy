@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "Échec de l'analyse d'utilisation de %1",
   "agents.helpSignInExpired": "La connexion enregistrée de %1 a expiré. Lancez %1 pour la renouveler.",
   "agents.helpStartOrRunToSignIn": "Lancez %1, ou exécutez %2, pour vous connecter.",
-  "agents.helpStartToSeeLimits": "Lancez %1 pour voir ses limites ; inutile de vous reconnecter.",
   "agents.lastUpdatedAgo": "Mis à jour il y a %1",
   "agents.lastUpdatedJustNow": "Mis à jour il y a moins d'une minute",
   "agents.lastUpdatedUnknown": "Heure de dernière mise à jour indisponible",

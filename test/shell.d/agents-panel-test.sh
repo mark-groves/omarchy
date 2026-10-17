@@ -68,31 +68,101 @@ for (const file of fs.readdirSync(root + '/shell/plugins/agents/assets')) {
   assert(!/<script|href=|url\(|<image|<style/i.test(svg.replace(/url\(#[^)]*\)/g, '')), file + ' carries no script, external reference, or embedded image')
 }
 
-// The shared pool's tokens: run the real functions.
-const noteStart = panelSource.indexOf('function weekTokens(p)')
+// The hiding rule: pull the real functions out of the panel and run them.
+const hideStart = panelSource.indexOf('function pausedWithoutLimits(item)')
+const hideEnd = panelSource.indexOf('// The agents left off the page by hasNothingToShow()')
+assert(hideStart > 0 && hideEnd > hideStart, 'agents panel exposes the section-hiding rule')
+let shownProviders, hiddenProviders, providers = []
+let limitWindows = p => (p.limits || []).filter(l => Number(l.percent) >= 0)
+let providerAccounts = p => (p && p.accounts && p.accounts.length > 0 ? p.accounts : [])
+eval(panelSource.slice(hideStart, hideEnd))
+const paused = { usageStatusText: 'Limits paused', authHelpText: '', limits: [], accounts: [], balance: null }
+assert(hasNothingToShow(paused), 'paused with no limits, help, balance or accounts is left off the page')
+assert(!hasNothingToShow({ ...paused, authHelpText: 'Start Claude Code to refresh it.' }), 'paused with a line of help keeps its section')
+assert(!hasNothingToShow({ ...paused, limits: [{ title: 'Weekly', percent: 0.2 }] }), 'paused with limits still shows them')
+assert(!hasNothingToShow({ ...paused, balance: { remaining: 3 } }), 'a balance keeps the section')
+assert(!hasNothingToShow({ ...paused, accounts: [{}, {}] }), 'several accounts keep the section')
+assert(!hasNothingToShow({ ...paused, usageStatusText: '' }), 'an agent with no status is still loading, not silent')
+assert(!hasNothingToShow({ ...paused, usageStatusText: 'Sign-in expired' }), 'a lapsed sign-in is never hidden')
+assert(!hasNothingToShow({ ...paused, usageStatusText: 'Waiting for auth' }), 'a missing sign-in is never hidden')
+assert(!hasNothingToShow({ ...paused, usageStatusText: 'Grok unavailable' }), 'other trouble is never hidden')
+assert(/for \(var p = 0; p < shownProviders\.length; p\+\+\)/.test(panelSource) && /model: root\.addStage === "" \? root\.shownProviders : \[\]/.test(panelSource), 'the sections and keyboard rows read the shown agents')
+assert(/usage\.moveProvider\(shownProviders\[from\]\.providerId, providers\.indexOf\(shownProviders\[to\]\)\)/.test(panelSource), 'reordering counts only the shown agents but moves within all of them')
+assert(/for \(var i = 0; i < providers\.length; i\+\+\) \{\s*var p = providers\[i\]/.test(panelSource), 'the hero totals still add up every agent, shown or not')
+
+// The notes for hidden agents and the shared pool's tokens: run the real functions.
+const noteStart = panelSource.indexOf('function coversProvider(covering, hidden)')
 const noteEnd = panelSource.indexOf('// Sign an account that\'s already here in again')
-assert(noteStart > 0 && noteEnd > noteStart, 'agents panel exposes the shared-pool helpers')
-let providers = []
+assert(noteStart > hideEnd && noteEnd > noteStart, 'agents panel exposes the hidden-agent and shared-pool helpers')
+const catalog = {
+  'agents.providerLimitsUnavailable': '%1 limits unavailable',
+  'agents.lastUpdatedAgo': 'Last updated %1 ago',
+  'agents.lastUpdatedJustNow': 'Last updated less than a minute ago',
+  'agents.lastUpdatedUnknown': 'Last updated time unavailable',
+}
 const Commons = { I18n: {
+  t: key => Object.assign(new String(catalog[key]), { arg: value => catalog[key].replace('%1', value) }),
   tn: (key, count) => ({ arg: value => value + (count === 1 ? ' token' : ' tokens') + ' this week' }),
 } }
 const usage = { formatTokenCount: n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n) }
 const week = tokens => [0, 0, 0, 0, 0, 0, tokens].map((messageCount, i) => ({ date: '2026-10-1' + i, messageCount }))
 const pool = { providerId: 'cursor', providerName: 'X Subscription', ready: true, unified: true, limits: [{ title: 'Weekly', percent: 0.22 }], recentDays: week(900000), coverage: [{ id: 'grok', name: 'Grok' }, { id: 'grok-bot', name: 'Grok Bot' }, { id: 'cursor', name: 'Cursor' }] }
-const grok = { providerId: 'grok', providerName: 'Grok', ready: true, unified: true, recentDays: week(300000), coverage: [{ id: 'grok', name: 'Grok' }, { id: 'grok-bot', name: 'Grok Bot' }] }
+const grok = { providerId: 'grok', providerName: 'Grok', ready: true, unified: true, recentDays: week(300000), coverage: [{ id: 'grok', name: 'Grok' }, { id: 'grok-bot', name: 'Grok Bot' }], ...paused }
+const fireworks = { providerId: 'fireworks', providerName: 'Fireworks', recentDays: [], coverage: [], ...paused }
+function panelState(allProviders) {
+  providers = allProviders
+  return {
+    providers,
+    shownProviders: providers.filter(p => !hasNothingToShow(p)),
+    get hiddenProviders() { return providers.filter(p => this.shownProviders.indexOf(p) < 0) },
+  }
+}
 eval(panelSource.slice(noteStart, noteEnd))
-providers = [pool, grok]
+;({ providers, shownProviders, hiddenProviders } = panelState([pool, grok]))
 assertEqual(coveredTokensText(pool), '1.2M tokens this week \u00b7 Grok 300.0K \u00b7 Cursor 900.0K', 'the shared pool adds up its covered agents\' week and names each share')
-providers = [{ ...pool, recentDays: [] }, grok]
+assertEqual(uncoveredHiddenText(), '', 'a hidden agent a shown record covers gets no footer line')
+;({ providers, shownProviders, hiddenProviders } = panelState([pool, grok, fireworks]))
+assertEqual(uncoveredHiddenText(), 'Fireworks limits unavailable', 'a hidden agent nothing covers gets a quiet footer line')
+;({ providers, shownProviders, hiddenProviders } = panelState([{ ...pool, recentDays: [] }, grok]))
 assertEqual(coveredTokensText(providers[0]), '300.0K tokens this week', 'a single contributor is not itemized')
-providers = [{ ...pool, recentDays: [] }, { ...grok, recentDays: [] }]
+;({ providers, shownProviders, hiddenProviders } = panelState([{ ...pool, recentDays: [] }, { ...grok, recentDays: [] }]))
 assertEqual(coveredTokensText(providers[0]), '', 'no tokens this week, no line')
+;({ providers, shownProviders, hiddenProviders } = panelState([{ ...pool, coverage: [] }, { ...grok, unified: false }]))
 assertEqual(coveredTokensText({ ...pool, coverage: [] }), '', 'an agent that covers nothing gets no shared-pool line')
+assertEqual(uncoveredHiddenText(), 'Grok limits unavailable', 'with no pool covering it, a hidden Grok is noted in the footer')
+
+// One X subscription pool at a time. Grok's own record is the pool when no
+// Cursor record covers it, and is left out when one does.
+const grokPool = { ...grok, usageStatusText: '', limits: [{ title: 'Weekly', percent: 0.31 }] }
+const grokLegacy = { ...grok, unified: false, coverage: [], usageStatusText: '', limits: [{ title: 'Weekly', percent: 0.31 }] }
+const grokUnavailable = { ...grok }
+const names = list => panelState(list).shownProviders.map(p => p.providerId).join(',')
+assertEqual(names([pool, grokPool]), 'cursor', 'a Cursor pool that covers Grok stands in for a unified Grok pool: only one X Subscription section')
+assertEqual(names([grokPool, pool]), 'cursor', 'the order the records arrive in does not bring the second pool back')
+assertEqual(names([grokPool]), 'grok', 'with no Cursor record, a unified Grok shows the pool itself')
+assertEqual(names([grokUnavailable]), 'grok', 'a unified Grok with no data stays visible, as Usage unavailable')
+assert(pausedWithoutLimits(grokUnavailable), 'a unified Grok with no data draws the quiet Usage unavailable line')
+assertEqual(names([pool, grokUnavailable]), 'cursor', 'a unified Grok with no data is left out when Cursor shows the pool')
+assertEqual(names([{ ...pool, ready: false }, grokPool]), 'cursor,grok', 'a Cursor record that is not ready does not cover Grok')
+assertEqual(names([{ ...pool, limits: [], usageStatusText: 'Sign-in expired' }, grokPool]), 'cursor,grok', 'a Cursor record with no pool to draw does not cover Grok')
+assertEqual(names([{ ...pool, coverage: [{ id: 'cursor', name: 'Cursor' }] }, grokPool]), 'cursor,grok', 'a Cursor record that does not list Grok does not cover it')
+assertEqual(names([pool, grokLegacy]), 'cursor,grok', 'a legacy Grok record with limits of its own is never folded into another pool')
+assertEqual(names([pool, { ...grokPool, usageStatusText: 'Sign-in expired' }]), 'cursor', 'a covered Grok is left out even with a lapsed sign-in: the pool is still drawn once')
+assertEqual(names([grokLegacy]), 'grok', 'a legacy Grok record is untouched')
+assertEqual(names([{ ...grokLegacy, limits: [], usageStatusText: 'Limits paused', unified: false }]), '', 'a legacy Grok that is paused with nothing to say is still left out')
 assert(/text: section\.provider && section\.provider\.coverage && section\.provider\.coverage\.length > 0 \? root\.coveredTokensText\(section\.provider\) : ""/.test(panelSource), 'the shared-pool line shows only for a record with coverage')
 // The header's weekly total and the shared pool's are the same sum of the same records.
 assertEqual(weekTokens({ recentDays: week(900000) }), 900000, 'one agent\'s week is the sum of its days')
 const everyAgent = [pool, grok].reduce((sum, p) => sum + weekTokens(p), 0)
 assertEqual(everyAgent, 1200000, 'the header adds every agent\'s week, the pool\'s included')
+assert(!/[^n]coveredHidden(Text|Names)|coveredNote|coversHidden/.test(panelSource) && !fs.readFileSync(root + '/default/i18n/en/shell.json', 'utf8').includes('coversHidden'), 'the covered-agent note is gone: the coverage marks already say it')
+assert(/text: root\.addStage === "" \? root\.uncoveredHiddenText\(\) : ""/.test(panelSource), 'the uncovered-agent note sits in the page footer, not the add view')
+assert(!/Start Grok to see its limits/.test(panelSource) && !/helpStartToSeeLimits/.test(panelSource), 'the dead "Start Grok to see its limits" text is gone from the panel')
+for (const code of fs.readdirSync(root + '/default/i18n')) {
+  const file = root + '/default/i18n/' + code + '/shell.json'
+  if (fs.existsSync(file)) assert(!fs.readFileSync(file, 'utf8').includes('helpStartToSeeLimits'), code + ' catalog dropped the dead help line')
+}
+assert(!fs.readFileSync(root + '/bin/omarchy-agent-usage-grok', 'utf8').includes('Start Grok to see'), 'the Grok collector no longer asks to start Grok for its limits')
 
 const formatStart = panelSource.indexOf('function formatLimitPercent')
 const formatEnd = panelSource.indexOf('// ---------------------------------------------------------------- balance')

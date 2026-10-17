@@ -40,7 +40,6 @@
   "agents.helpScanFailed": "فشل فحص استخدام %1",
   "agents.helpSignInExpired": "انتهى تسجيل دخول %1 المحفوظ. شغّل %1 لتجديده.",
   "agents.helpStartOrRunToSignIn": "شغّل %1، أو نفّذ %2، لتسجيل الدخول.",
-  "agents.helpStartToSeeLimits": "شغّل %1 لعرض حدوده؛ لا حاجة لتسجيل الدخول مجددًا.",
   "agents.lastUpdatedAgo": "آخر تحديث قبل %1",
   "agents.lastUpdatedJustNow": "آخر تحديث قبل أقل من دقيقة",
   "agents.lastUpdatedUnknown": "وقت آخر تحديث غير متاح",

@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "اسکن مصرف %1 ناموفق بود",
   "agents.helpSignInExpired": "ورود ذخیره‌شدهٔ %1 منقضی شده است. برای تازه‌سازی، %1 را شروع کنید.",
   "agents.helpStartOrRunToSignIn": "برای ورود، %1 را شروع کنید یا %2 را اجرا کنید.",
-  "agents.helpStartToSeeLimits": "برای مشاهدهٔ محدودیت‌ها %1 را شروع کنید؛ نیازی به ورود دوباره نیست.",
   "agents.lastUpdatedAgo": "آخرین به‌روزرسانی %1 پیش",
   "agents.lastUpdatedJustNow": "آخرین به‌روزرسانی کمتر از یک دقیقه پیش",
   "agents.lastUpdatedUnknown": "زمان آخرین به‌روزرسانی در دسترس نیست",

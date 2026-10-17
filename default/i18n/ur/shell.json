@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1 کے استعمال کا اسکین ناکام رہا",
   "agents.helpSignInExpired": "%1 کا محفوظ کردہ سائن ان ختم ہو گیا ہے۔ اسے تازہ کرنے کے لیے %1 شروع کریں۔",
   "agents.helpStartOrRunToSignIn": "سائن ان کے لیے %1 شروع کریں، یا %2 چلائیں۔",
-  "agents.helpStartToSeeLimits": "اس کی حدود دیکھنے کے لیے %1 شروع کریں؛ دوبارہ سائن ان کرنا ضروری نہیں۔",
   "agents.lastUpdatedAgo": "آخری بار %1 پہلے اپ ڈیٹ ہوا",
   "agents.lastUpdatedJustNow": "آخری بار ایک منٹ سے بھی کم پہلے اپ ڈیٹ ہوا",
   "agents.lastUpdatedUnknown": "آخری اپ ڈیٹ کا وقت دستیاب نہیں",

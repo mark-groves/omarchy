@@ -30,6 +30,19 @@ Panel {
   // answers is how much room is left, and where.
   readonly property var providers: usage.enabledProviders
 
+  // Everything the panel adds up (the hero's totals, the bar's alarm, the
+  // sync footer) reads `providers`. The page itself shows only the agents
+  // with something to say: an agent whose collector says its limits are paused
+  // with nothing to read or do about it would be a header over "Usage
+  // unavailable", so it is left out of the sections, the keyboard rows and the
+  // drag order, while its local stats still count above.
+  readonly property var shownProviders: {
+    var out = []
+    for (var i = 0; i < providers.length; i++)
+      if (!hasNothingToShow(providers[i])) out.push(providers[i])
+    return out
+  }
+
   property bool cursorActive: false
 
   // Countdowns and "last updated" ages read this instead of Date.now() so the
@@ -41,10 +54,10 @@ Panel {
   // a picked account is what moves new sessions to it.
   readonly property var accountEntries: {
     var out = []
-    for (var i = 0; i < providers.length; i++) {
-      var list = providerAccounts(providers[i])
+    for (var i = 0; i < shownProviders.length; i++) {
+      var list = providerAccounts(shownProviders[i])
       if (list.length < 2) continue
-      for (var j = 0; j < list.length; j++) out.push({ provider: providers[i], account: list[j] })
+      for (var j = 0; j < list.length; j++) out.push({ provider: shownProviders[i], account: list[j] })
     }
     return out
   }
@@ -73,12 +86,12 @@ Panel {
       // lapsed sign-in comes first, and the active account with nothing to
       // fix is skipped.
       var entry = 0
-      for (var p = 0; p < providers.length; p++) {
+      for (var p = 0; p < shownProviders.length; p++) {
         // Every agent's header is a stop, so Ctrl+Up/Down can move it.
         rows.push([{ kind: "provider", index: p }])
-        var accounts = providerAccounts(providers[p])
+        var accounts = providerAccounts(shownProviders[p])
         if (accounts.length < 2) {
-          if (needsSignIn(providers[p])) rows.push([{ kind: "providerSignin", index: p }])
+          if (needsSignIn(shownProviders[p])) rows.push([{ kind: "providerSignin", index: p }])
           continue
         }
         for (var a = 0; a < accounts.length; a++, entry++) {
@@ -152,7 +165,7 @@ Panel {
     if (target.kind === "provider" || target.kind === "providerSignin") return target.index
     if (["account", "autoswitch", "signin"].indexOf(target.kind) < 0) return -1
     var entry = accountEntries[target.index]
-    return entry ? providers.indexOf(entry.provider) : -1
+    return entry ? shownProviders.indexOf(entry.provider) : -1
   }
 
   // Ctrl+Up/Down carries the agent the cursor is in up or down the page, and
@@ -160,9 +173,9 @@ Panel {
   function reorderProvider(dy) {
     var from = providerIndexOfKey()
     if (from < 0) return
-    var to = clamp(from + dy, 0, providers.length - 1)
+    var to = clamp(from + dy, 0, shownProviders.length - 1)
     if (to === from) return
-    usage.moveProvider(providers[from].providerId, to)
+    usage.moveProvider(shownProviders[from].providerId, providers.indexOf(shownProviders[to]))
     Qt.callLater(function() { pointAt("provider", to) })
   }
 
@@ -191,8 +204,8 @@ Panel {
     var to = dragTarget
     dragProviderId = ""
     dragTarget = -1
-    if (id === "" || to < 0) return
-    usage.moveProvider(id, to)
+    if (id === "" || to < 0 || to >= shownProviders.length) return
+    usage.moveProvider(id, providers.indexOf(shownProviders[to]))
     Qt.callLater(function() { pointAt("provider", to) })
   }
 
@@ -395,7 +408,7 @@ Panel {
     else if (target.kind === "choice") chooseAddProvider(addProviders[target.index].providerId)
     else if (target.kind === "launch") launchAgent()
     else if (target.kind === "starter") startPrompt(starterPrompts[target.index].prompt)
-    else if (target.kind === "providerSignin") signInAgain(providers[target.index], null)
+    else if (target.kind === "providerSignin") signInAgain(shownProviders[target.index], null)
     else if (target.kind === "signin") signInAgain(pickedEntry.provider, pickedEntry.account)
     else if (target.kind === "autoswitch") setSwitchMode(pickedEntry.provider, autoSwitchFor(pickedEntry.provider) ? "manual" : "auto")
     else if (pickedEntry && !pickedEntry.account.active) useAccount(pickedEntry.provider, pickedEntry.account)
@@ -433,6 +446,64 @@ Panel {
 
   function pausedWithoutLimits(item) {
     return !!item && item.usageStatusText === "Limits paused" && limitWindows(item).length === 0
+  }
+
+  // A shown record that pays for this agent too, with a pool of its own to
+  // draw: the unified X subscription lives on one record (Cursor's, when it
+  // has one), and Grok's own is the same pool.
+  function poolCovering(p) {
+    for (var i = 0; i < providers.length; i++) {
+      var q = providers[i]
+      if (q.providerId === p.providerId || q.ready !== true || limitWindows(q).length === 0) continue
+      var list = q.coverage || []
+      for (var j = 0; j < list.length; j++)
+        if (list[j].id === p.providerId) return q
+    }
+    return null
+  }
+
+  // A section with no limits to draw and nothing to act on has no reason to be
+  // on the page. That is only ever a collector's own verdict, "Limits paused"
+  // with no help text: an agent with no status yet is still loading, and one
+  // that says anything else (a lapsed sign-in, an unreachable endpoint, a
+  // line of help like "Start Claude Code to refresh it") has something to
+  // report. A balance, or several accounts each with limits of their own,
+  // also count as something to show. A record that says it is on the unified
+  // plan always has something to show, "Usage unavailable" at the least, since
+  // its pool is a real allowance; the exception is the same pool already
+  // drawn by another record that covers it, so it is never shown twice.
+  function hasNothingToShow(p) {
+    if (p.unified === true) return !!poolCovering(p)
+    return pausedWithoutLimits(p) && String(p.authHelpText || "") === ""
+      && !p.balance && providerAccounts(p).length < 2
+  }
+
+  // The agents left off the page by hasNothingToShow(), so the page can say
+  // why they aren't there instead of leaving them looking lost.
+  readonly property var hiddenProviders: {
+    var out = []
+    for (var i = 0; i < providers.length; i++)
+      if (shownProviders.indexOf(providers[i]) < 0) out.push(providers[i])
+    return out
+  }
+
+  function coversProvider(covering, hidden) {
+    var list = covering && covering.coverage ? covering.coverage : []
+    for (var i = 0; i < list.length; i++)
+      if (list[i].id === hidden.providerId) return true
+    return false
+  }
+
+  // Hidden agents no shown subscription covers get a quiet footer line; a covered one is already named by the coverage marks.
+  function uncoveredHiddenText() {
+    var lines = []
+    for (var i = 0; i < hiddenProviders.length; i++) {
+      var covered = false
+      for (var j = 0; j < shownProviders.length && !covered; j++)
+        covered = coversProvider(shownProviders[j], hiddenProviders[i])
+      if (!covered) lines.push(Commons.I18n.t("agents.providerLimitsUnavailable").arg(hiddenProviders[i].providerName))
+    }
+    return lines.join("\n")
   }
 
   function weekTokens(p) {
@@ -692,8 +763,6 @@ Panel {
       return Commons.I18n.t("agents.helpRunToAuthenticate").arg("`codex login`")
     case "Start Grok, or run `grok login`, to sign in.":
       return Commons.I18n.t("agents.helpStartOrRunToSignIn").arg("Grok").arg("`grok login`")
-    case "Start Grok to see its limits; signing in again is not needed.":
-      return Commons.I18n.t("agents.helpStartToSeeLimits").arg("Grok")
     case "Grok's saved sign-in expired. Start Grok to refresh it.":
       return Commons.I18n.t("agents.helpSignInExpired").arg("Grok")
     case "Set FIREWORKS_API_KEY, run `firectl set-api-key`, or sign in to Fireworks in pi or opencode.":
@@ -1151,7 +1220,7 @@ Panel {
 
           Repeater {
             id: providerSections
-            model: root.addStage === "" ? root.providers : []
+            model: root.addStage === "" ? root.shownProviders : []
 
             ProviderSection {
               required property var modelData
@@ -1199,6 +1268,19 @@ Panel {
                 }
               }
             }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: text !== ""
+            width: parent.width
+            text: root.addStage === "" ? root.uncoveredHiddenText() : ""
+            color: root.dim
+            opacity: 0.8
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
           }
 
           Text {

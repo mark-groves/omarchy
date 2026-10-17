@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "A análise de utilização de %1 falhou",
   "agents.helpSignInExpired": "A sessão guardada de %1 expirou. Inicia %1 para a renovar.",
   "agents.helpStartOrRunToSignIn": "Inicia %1 ou executa %2 para iniciares sessão.",
-  "agents.helpStartToSeeLimits": "Inicia %1 para veres os limites; não é preciso iniciar sessão outra vez.",
   "agents.lastUpdatedAgo": "Atualizado há %1",
   "agents.lastUpdatedJustNow": "Atualizado há menos de um minuto",
   "agents.lastUpdatedUnknown": "Hora da última atualização indisponível",

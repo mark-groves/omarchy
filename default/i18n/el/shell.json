@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Η σάρωση χρήσης του %1 απέτυχε",
   "agents.helpSignInExpired": "Η αποθηκευμένη σύνδεση του %1 έληξε. Ξεκίνα το %1 για να την ανανεώσεις.",
   "agents.helpStartOrRunToSignIn": "Ξεκίνα το %1 ή εκτέλεσε το %2 για να συνδεθείς.",
-  "agents.helpStartToSeeLimits": "Ξεκίνα το %1 για να δεις τα όριά του· δεν χρειάζεται να συνδεθείς ξανά.",
   "agents.lastUpdatedAgo": "Τελευταία ενημέρωση πριν από %1",
   "agents.lastUpdatedJustNow": "Τελευταία ενημέρωση πριν από λιγότερο από ένα λεπτό",
   "agents.lastUpdatedUnknown": "Η ώρα τελευταίας ενημέρωσης δεν είναι διαθέσιμη",

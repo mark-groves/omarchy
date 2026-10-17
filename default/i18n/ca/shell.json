@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "L'escaneig d'ús de %1 ha fallat",
   "agents.helpSignInExpired": "L'inici de sessió desat de %1 ha caducat. Inicia %1 per actualitzar-lo.",
   "agents.helpStartOrRunToSignIn": "Inicia %1 o executa %2 per iniciar sessió.",
-  "agents.helpStartToSeeLimits": "Inicia %1 per veure'n els límits; no cal tornar a iniciar sessió.",
   "agents.lastUpdatedAgo": "Actualitzat fa %1",
   "agents.lastUpdatedJustNow": "Actualitzat fa menys d'un minut",
   "agents.lastUpdatedUnknown": "Hora d'última actualització no disponible",

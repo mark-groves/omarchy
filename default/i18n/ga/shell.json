@@ -38,7 +38,6 @@
   "agents.helpScanFailed": "Theip ar scanadh úsáide %1",
   "agents.helpSignInExpired": "Tá síniú isteach sábháilte %1 imithe in éag. Tosaigh %1 chun é a athnuachan.",
   "agents.helpStartOrRunToSignIn": "Tosaigh %1, nó rith %2, chun síniú isteach.",
-  "agents.helpStartToSeeLimits": "Tosaigh %1 chun a theorainneacha a fheiceáil; ní gá síniú isteach arís.",
   "agents.lastUpdatedAgo": "Nuashonraithe go deireanach %1 ó shin",
   "agents.lastUpdatedJustNow": "Nuashonraithe go deireanach níos lú ná nóiméad ó shin",
   "agents.lastUpdatedUnknown": "Am an nuashonraithe dheireanaigh gan fáil",

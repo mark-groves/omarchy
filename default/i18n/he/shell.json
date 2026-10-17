@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "סריקת השימוש של %1 נכשלה",
   "agents.helpSignInExpired": "ההתחברות השמורה של %1 פגה. הפעילו את %1 כדי לרענן אותה.",
   "agents.helpStartOrRunToSignIn": "הפעילו את %1, או הריצו את %2, כדי להתחבר.",
-  "agents.helpStartToSeeLimits": "הפעילו את %1 כדי לראות את מגבלותיו; אין צורך להתחבר שוב.",
   "agents.lastUpdatedAgo": "עודכן לאחרונה לפני %1",
   "agents.lastUpdatedJustNow": "עודכן לאחרונה לפני פחות מדקה",
   "agents.lastUpdatedUnknown": "שעת העדכון האחרון אינה זמינה",

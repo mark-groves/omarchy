@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "Skeniranje potrošnje za %1 nije uspjelo",
   "agents.helpSignInExpired": "Spremljena prijava za %1 istekla je. Pokrenite %1 za osvježavanje.",
   "agents.helpStartOrRunToSignIn": "Pokrenite %1 ili pokrenite %2 za prijavu.",
-  "agents.helpStartToSeeLimits": "Pokrenite %1 za prikaz ograničenja; ponovna prijava nije potrebna.",
   "agents.lastUpdatedAgo": "Posljednje ažurirano prije %1",
   "agents.lastUpdatedJustNow": "Posljednje ažurirano prije manje od minute",
   "agents.lastUpdatedUnknown": "Vrijeme posljednjeg ažuriranja nije dostupno",

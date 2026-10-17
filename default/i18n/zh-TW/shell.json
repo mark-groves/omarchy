@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "%1 用量掃描失敗",
   "agents.helpSignInExpired": "%1 已儲存的登入已過期。啟動 %1 以更新。",
   "agents.helpStartOrRunToSignIn": "啟動 %1，或執行 %2 以登入。",
-  "agents.helpStartToSeeLimits": "啟動 %1 以查看用量限制；無需再次登入。",
   "agents.lastUpdatedAgo": "最後更新 %1 前",
   "agents.lastUpdatedJustNow": "最後更新不到一分鐘前",
   "agents.lastUpdatedUnknown": "最後更新時間無法取得",

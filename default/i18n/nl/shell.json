@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "Gebruiksscan van %1 mislukt",
   "agents.helpSignInExpired": "Opgeslagen aanmelding van %1 is verlopen. Start %1 om deze te vernieuwen.",
   "agents.helpStartOrRunToSignIn": "Start %1, of voer %2 uit, om je aan te melden.",
-  "agents.helpStartToSeeLimits": "Start %1 om de limieten te zien; opnieuw aanmelden is niet nodig.",
   "agents.lastUpdatedAgo": "Laatst bijgewerkt %1 geleden",
   "agents.lastUpdatedJustNow": "Laatst bijgewerkt minder dan een minuut geleden",
   "agents.lastUpdatedUnknown": "Laatste updatetijd niet beschikbaar",

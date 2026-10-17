@@ -30,7 +30,6 @@
   "agents.helpScanFailed": "Imbasan penggunaan %1 gagal",
   "agents.helpSignInExpired": "Log masuk tersimpan %1 telah tamat. Mulakan %1 untuk memperbaharuinya.",
   "agents.helpStartOrRunToSignIn": "Mulakan %1, atau jalankan %2, untuk log masuk.",
-  "agents.helpStartToSeeLimits": "Mulakan %1 untuk melihat hadnya; tidak perlu log masuk semula.",
   "agents.lastUpdatedAgo": "Terakhir dikemas kini %1 lalu",
   "agents.lastUpdatedJustNow": "Terakhir dikemas kini kurang daripada seminit lalu",
   "agents.lastUpdatedUnknown": "Masa kemas kini terakhir tidak tersedia",

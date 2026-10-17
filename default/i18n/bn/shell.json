@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1 ব্যবহার স্ক্যান ব্যর্থ হয়েছে",
   "agents.helpSignInExpired": "%1-এর সংরক্ষিত সাইন-ইনের মেয়াদ শেষ। রিফ্রেশ করতে %1 চালু করুন।",
   "agents.helpStartOrRunToSignIn": "সাইন-ইন করতে %1 চালু করুন, অথবা %2 চালান।",
-  "agents.helpStartToSeeLimits": "এর সীমা দেখতে %1 চালু করুন; আবার সাইন-ইন করতে হবে না।",
   "agents.lastUpdatedAgo": "শেষ আপডেট %1 আগে",
   "agents.lastUpdatedJustNow": "শেষ আপডেট এক মিনিটেরও কম আগে",
   "agents.lastUpdatedUnknown": "শেষ আপডেটের সময় পাওয়া যাচ্ছে না",

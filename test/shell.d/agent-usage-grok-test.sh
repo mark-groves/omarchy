@@ -43,8 +43,17 @@ end = os.environ["PERIOD_END"]
 # percentage of zero.
 def urlopen(request, timeout=None):
   assert request.full_url == collector.CREDITS_URL
+  assert not os.environ.get("NO_REQUEST"), "the credits endpoint was asked"
   token = request.get_header("Authorization").split(" ", 1)[1]
+  failure = os.environ.get("CREDITS_FAILURE")
+  if failure == "network":
+    raise collector.urllib.error.URLError("unreachable")
+  if failure:
+    body = io.BytesIO(b'{"error":"Failed to serialize billing response"}')
+    raise collector.urllib.error.HTTPError(request.full_url, int(failure), "error", {}, body)
   config = {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "end": end}, "billingPeriodEnd": end}
+  if os.environ.get("UNIFIED_ANSWER"):
+    config["isUnifiedBillingUser"] = True
   if used.get(token):
     config["creditUsagePercent"] = used[token]
   return io.BytesIO(json.dumps({"config": config}).encode())
@@ -108,12 +117,167 @@ next_reset=$(jq -r '.limits[0].resetsAt' <<<"$record")
   fail "a week that reset while Grok was idle starts over a week later" "$record"
 pass "a week that reset while Grok was idle starts over a week later"
 
-# Without cached numbers there's nothing to show, so it says how to get them.
+# The credits endpoint answering with a server error (as it does for unified
+# X subscriptions) or not at all is not a lapsed sign-in: the last numbers say
+# nothing about now, so the meter hides, quietly, and the cache is dropped so
+# a later lapsed token can't roll them forward as current.
+signed_in "$HOME/.grok" token-main u-main "$future" "X Premium+"
 rm -f "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json
 record=$(collect)
-[[ $(jq -c '{usageStatusText, limits}' <<<"$record") == '{"usageStatusText":"Limits paused","limits":[]}' ]] ||
-  fail "a lapsed token with nothing cached says to start Grok" "$record"
-pass "a lapsed token with nothing cached says to start Grok"
+[[ $(jq -r '.limits[0].percent' <<<"$record") == 0.42 ]] || fail "the credits are read before the endpoint fails" "$record"
+for failure in 500 network; do
+  record=$(CREDITS_FAILURE=$failure collect)
+  [[ $(jq -c '{ready, tierLabel, limits, stale: .limitsStale, usageStatusText, authHelpText}' <<<"$record") == '{"ready":true,"tierLabel":"X Premium+","limits":[],"stale":true,"usageStatusText":"Limits paused","authHelpText":""}' ]] ||
+    fail "a Grok credits endpoint that fails ($failure) hides the limit instead of serving the cached one" "$record"
+  [[ $(jq -r '.totalSessions' <<<"$record") == 0 ]] || fail "a failed Grok credits call keeps the local stats" "$record"
+done
+pass "a Grok credits endpoint that does not respond hides the limit"
+
+ls "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json >/dev/null 2>&1 &&
+  fail "a failed Grok credits call drops the cached limit" "$(ls "$XDG_CACHE_HOME"/omarchy/agent-usage)"
+jq '.[].refresh_token = "r" | .[].expires_at = $at' --arg at "$past" "$HOME/.grok/auth.json" >"$test_tmp/auth.json"
+mv "$test_tmp/auth.json" "$HOME/.grok/auth.json"
+record=$(collect)
+[[ $(jq -c '{limits, usageStatusText}' <<<"$record") == '{"limits":[],"usageStatusText":"Limits paused"}' ]] ||
+  fail "a token that lapses after a failed credits call doesn't resurrect the old limit" "$record"
+pass "a token that lapses after a failed credits call doesn't resurrect the old limit"
+
+# Unified X subscription accounts have one weekly pool, shared with Grok Bot
+# (and Cursor's own models). Their credits answer says so and carries the pool.
+# The endpoint has been answering them with a server error, so the pool comes
+# from the answer when it works, else from the one Grok's own CLI logged
+# lately. With neither, the record still says it is unified, which is how the
+# panel shows "Usage unavailable" rather than hiding the section, or shows the
+# Cursor record's pool in its place. Nothing here defers to the Cursor record.
+signed_in "$HOME/.grok" token-main u-main "$future" "SuperGrok Heavy"
+clear_cache() { rm -f "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json; }
+clear_cache
+unified_log() {
+  # unified?, age of the logged answer in seconds, percent used
+  mkdir -p "$HOME/.grok/logs"
+  local at
+  at=$(python3 -c 'import datetime as dt, sys; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=int(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%S.000Z"))' "$2")
+  jq -nc --argjson unified "$1" --arg at "$at" --argjson percent "$3" --arg end "$PERIOD_END" \
+    '{ts: $at, msg: "billing: fetched credits config", ctx: {config: ({creditUsagePercent: $percent, currentPeriod: {type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-10-13T00:03:29.173+00:00", end: $end}} + (if $unified then {isUnifiedBillingUser: true} else {} end))}}' >"$HOME/.grok/logs/unified.jsonl"
+}
+cursor_record() {
+  mkdir -p "$XDG_STATE_HOME/omarchy/agents/usage"
+  jq -nc --argjson unified "$1" '{id: "cursor", unified: $unified}' >"$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
+}
+identity() { jq -c '{name, icon, unified, coverage: [.coverage[]?.id], limits: [.limits[]? | {label, percent: (.percent * 100 | round)}], status: .usageStatusText, help: .authHelpText, stale: .limitsStale}' <<<"$1"; }
+pool='{"name":"X Subscription","icon":"grok","unified":true,"coverage":["grok","grok-bot"]'
+
+# A credits answer that says unified carries the pool, shown as the X Subscription.
+record=$(UNIFIED_ANSWER=1 collect)
+[[ $(identity "$record") == "$pool"',"limits":[{"label":"Weekly","percent":42}],"status":"","help":"","stale":false}' ]] ||
+  fail "a credits answer from a unified account gives the shared pool, named X Subscription" "$record"
+[[ $(jq -r '.tierLabel' <<<"$record") == "SuperGrok Heavy" ]] || fail "a unified Grok record keeps its plan" "$record"
+[[ $(jq -r '.totalSessions' <<<"$record") == 0 ]] || fail "a unified Grok record keeps the local stats" "$record"
+pass "a credits answer from a unified account gives the shared pool, named X Subscription"
+
+# Once seen, the account stays known as unified when the endpoint stops answering.
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
+  fail "a unified account whose credits endpoint fails and has no logged answer shows no pool but is still unified" "$record"
+pass "a unified account whose credits endpoint fails and has no logged answer shows no pool but is still unified"
+
+# The CLI's own recent answer stands in for the failing endpoint, marked stale by its age.
+clear_cache
+unified_log true 600 31
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(identity "$record") == "$pool"',"limits":[{"label":"Weekly","percent":31}],"status":"","help":"","stale":true}' ]] ||
+  fail "a unified account with a failing credits endpoint shows the pool Grok's CLI logged lately" "$record"
+age=$(jq -r '(now * 1000 - .limitsFetchedAt) / 1000 | round' <<<"$record")
+(( age >= 595 && age <= 615 )) || fail "the logged pool is dated by when Grok logged it, not by now" "$age"
+[[ -n $(jq -r '.limits[0].resetsAt' <<<"$record") ]] || fail "the logged pool says when the week ends" "$record"
+pass "a unified account with a failing credits endpoint shows the pool Grok's CLI logged lately"
+
+# An answer too old says nothing about now.
+clear_cache
+unified_log true 7200 31
+record=$(CREDITS_FAILURE=network collect)
+[[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
+  fail "a logged pool older than an hour is not used" "$record"
+pass "a logged pool older than an hour is not used"
+
+# A logged answer from a legacy account is no pool.
+clear_cache
+unified_log false 60 31
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '{unified, limits, status: .usageStatusText}' <<<"$record") == '{"unified":false,"limits":[],"status":"Limits paused"}' ]] ||
+  fail "a logged legacy answer is never shown as a pool" "$record"
+pass "a logged legacy answer is never shown as a pool"
+
+# The endpoint is asked even when the log already says unified, so it can supply the numbers once fixed.
+clear_cache
+unified_log true 60 5
+record=$(UNIFIED_ANSWER=1 collect)
+[[ $(jq -c '[.limits[0].percent, .unified, (.limitsStale | not)]' <<<"$record") == '[0.42,true,true]' ]] ||
+  fail "a live unified credits answer wins over the logged one" "$record"
+pass "a live unified credits answer wins over the logged one"
+rm -f "$HOME/.grok/logs/unified.jsonl"
+clear_cache
+
+# Without a log, the Cursor collector's explicit unified field hints it (primary home only).
+cursor_record true
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
+  fail "a unified Cursor record marks a failing Grok as unified, with no pool of its own" "$record"
+pass "a unified Cursor record marks a failing Grok as unified, with no pool of its own"
+clear_cache
+
+# Grok's answer outranks any hint: a plan that is not unified is read as it always was.
+record=$(collect)
+[[ $(identity "$record") == '{"name":"Grok","icon":null,"unified":false,"coverage":[],"limits":[{"label":"Weekly","percent":42}],"status":"","help":"","stale":false}' ]] ||
+  fail "a legacy credits answer is a Grok record even when the Cursor record says unified" "$record"
+cursor_record false
+clear_cache
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '{name, unified}' <<<"$record") == '{"name":"Grok","unified":false}' ]] || fail "a legacy Cursor record leaves Grok alone" "$record"
+printf '{"id":"cursor","icon":"grok"}\n' >"$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
+clear_cache
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '{name, unified}' <<<"$record") == '{"name":"Grok","unified":false}' ]] || fail "a Cursor record without the unified field is not guessed from its icon" "$record"
+pass "a legacy Grok record is unchanged"
+rm -f "$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
+clear_cache
+
+# A lapsed access token with a refresh token keeps a unified pool's last numbers
+# but marks them stale: Cursor spends the same pool while Grok sits idle.
+UNIFIED_ANSWER=1 collect >/dev/null
+signed_in "$HOME/.grok" token-main u-main "$past" "SuperGrok Heavy"
+jq '.[].refresh_token = "r"' "$HOME/.grok/auth.json" >"$test_tmp/auth.json"
+mv "$test_tmp/auth.json" "$HOME/.grok/auth.json"
+record=$(collect)
+[[ $(identity "$record") == "$pool"',"limits":[{"label":"Weekly","percent":42}],"status":"","help":"","stale":true}' ]] ||
+  fail "a unified pool read before the token lapsed is kept, marked stale" "$record"
+pass "a unified pool read before the token lapsed is kept, marked stale"
+signed_in "$HOME/.grok" token-main u-main "$future" "SuperGrok Heavy"
+clear_cache
+
+# A rejected token is still a sign-in problem, and keeps the last credits.
+signed_in "$HOME/.grok" token-main u-main "$future" "X Premium+"
+rm -f "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json
+collect >/dev/null
+record=$(CREDITS_FAILURE=401 collect)
+[[ $(jq -c '{usageStatusText, first: .limits[0].percent, stale: .limitsStale}' <<<"$record") == '{"usageStatusText":"Waiting for auth","first":0.42,"stale":true}' ]] ||
+  fail "a rejected Grok token keeps the last credits and asks for a sign-in" "$record"
+pass "a rejected Grok token keeps the last credits and asks for a sign-in"
+
+# Back to the lapsed token with a refresh token, and nothing cached, for what follows.
+signed_in "$HOME/.grok" token-main u-main "$past" "X Premium+"
+jq '.[].refresh_token = "r"' "$HOME/.grok/auth.json" >"$test_tmp/auth.json"
+mv "$test_tmp/auth.json" "$HOME/.grok/auth.json"
+rm -f "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json
+
+# Without cached numbers there's nothing to show and nothing to do (Grok renews
+# its own token), so the record is paused with no help text, which the panel
+# takes as a section to leave out.
+rm -f "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json
+record=$(collect)
+[[ $(jq -c '{usageStatusText, limits, authHelpText}' <<<"$record") == '{"usageStatusText":"Limits paused","limits":[],"authHelpText":""}' ]] ||
+  fail "a lapsed token with nothing cached is paused with nothing to act on" "$record"
+pass "a lapsed token with nothing cached is paused with nothing to act on"
 
 # A refresh token past Grok's 30-day sign-in can't renew anything: signed out.
 long_ago=$(python3 -c 'import datetime as dt; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)).isoformat())')
@@ -143,6 +307,20 @@ record=$(collect)
 [[ $(jq -c '{tierLabel, first: .limits[0].percent, accounts: [.accounts[] | {id, active, plan, percent: .limits[0].percent}], switch: .accountSwitch}' <<<"$record") == '{"tierLabel":"SuperGrok","first":0.07,"accounts":[{"id":"main","active":false,"plan":"X Premium+","percent":0.42},{"id":"side","active":true,"plan":"SuperGrok","percent":0.07}],"switch":{"mode":"auto","threshold":90}}' ]] ||
   fail "every Grok account reports its own plan and credits" "$record"
 pass "every Grok account reports its own plan and credits"
+
+# The Cursor record's plan is one account's: it only hints at the primary home,
+# and every account's own credits answer outranks a hint.
+cursor_record true
+clear_cache
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '[.accounts[] | {id, unified, limits: (.limits | length)}]' <<<"$record") == '[{"id":"main","unified":true,"limits":0},{"id":"side","unified":false,"limits":0}]' ]] ||
+  fail "a unified Cursor record hints only the primary Grok home" "$record"
+clear_cache
+record=$(collect)
+[[ $(jq -c '[.accounts[] | {id, unified, percent: .limits[0].percent}]' <<<"$record") == '[{"id":"main","unified":false,"percent":0.42},{"id":"side","unified":false,"percent":0.07}]' ]] ||
+  fail "every account's own credits answer outranks the Cursor record's hint" "$record"
+pass "a unified Cursor record only hints at the primary Grok home"
+rm -f "$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
 
 # Sessions come from each session's summary; tokens and today's prompts from
 # its usage.json, one entry per finished turn, with cached input kept apart.
@@ -178,3 +356,52 @@ mv "$test_tmp/stats.json" "$XDG_CACHE_HOME/omarchy/agent-usage/grok-stats.json"
 record=$(COLLECT_ARGS="--limits-only" collect)
 [[ $(jq -r '.totalSessions' <<<"$record") == 4 ]] || fail "a scan from another day is made again" "$record"
 pass "a scan from another day is made again"
+
+# Plan labels: Grok's display name verbatim, else its tier enum, one case each.
+plan_of() {
+  COLLECTOR="$ROOT/bin/omarchy-agent-usage-grok" SETTINGS="$1" python3 - <<'PY'
+import importlib.machinery, importlib.util, json, os, sys, tempfile
+from pathlib import Path
+
+loader = importlib.machinery.SourceFileLoader("collector", os.environ["COLLECTOR"])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+collector = importlib.util.module_from_spec(spec)
+loader.exec_module(collector)
+home = Path(tempfile.mkdtemp())
+raw = os.environ["SETTINGS"]
+if raw != "NONE":
+  (home / "settings_cache.json").write_text(json.dumps({"payload": json.dumps({"settings": json.loads(raw)})}))
+print(collector.plan(home))
+PY
+}
+check_plan() {
+  local got
+  got=$(plan_of "$1")
+  [[ $got == "$2" ]] || fail "Grok's plan label for $1 is '$2'" "$got"
+}
+check_plan '{"subscription_tier_display":"SuperGrok Heavy","subscription_tier":null}' "SuperGrok Heavy"
+check_plan '{"subscription_tier_display":"Custom Name","subscription_tier":"supergrok"}' "Custom Name"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"x_basic"}' "X Basic"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"x_premium"}' "X Premium"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"x_premium_plus"}' "X Premium+"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"supergrok_lite"}' "SuperGrok Lite"
+check_plan '{"subscription_tier_display":"","subscription_tier":"supergrok"}' "SuperGrok"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"supergrok_plus"}' "SuperGrok Plus"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"supergrok_heavy"}' "SuperGrok Heavy"
+check_plan '{"subscription_tier_display":null,"subscription_tier":"x_future_tier"}' "X Future Tier"
+check_plan '{"subscription_tier_display":null,"subscription_tier":null}' ""
+check_plan '{}' ""
+check_plan NONE ""
+pass "Grok's plan label is its display name, else the tier enum, else the tier title-cased"
+
+# Plus and Free have no Grok Bot; every other tier's pool pays for it.
+rm -f "$XDG_STATE_HOME/omarchy/agents/accounts/grok.json"
+for tier in Plus Free Premium Super Ultra "SuperGrok Heavy"; do
+  signed_in "$HOME/.grok" token-main user-main "$future" "$tier"
+  clear_cache
+  record=$(UNIFIED_ANSWER=1 collect)
+  want='["grok","grok-bot"]'
+  if [[ $tier == "Plus" || $tier == "Free" ]]; then want='["grok"]'; fi
+  [[ $(jq -c '[.coverage[].id]' <<<"$record") == "$want" ]] || fail "a unified $tier record covers $want" "$record"
+done
+pass "a unified Grok record drops Grok Bot from coverage on the Plus and Free tiers"

@@ -34,7 +34,6 @@
   "agents.helpScanFailed": "%1 lietojuma skenēšana neizdevās",
   "agents.helpSignInExpired": "%1 saglabātā pierakstīšanās ir beigusies. Palaid %1, lai to atsvaidzinātu.",
   "agents.helpStartOrRunToSignIn": "Palaid %1 vai izpildi %2, lai pierakstītos.",
-  "agents.helpStartToSeeLimits": "Palaid %1, lai redzētu tā limitus; atkārtota pierakstīšanās nav vajadzīga.",
   "agents.lastUpdatedAgo": "Atjaunināts pirms %1",
   "agents.lastUpdatedJustNow": "Atjaunināts pirms mazāk nekā minūtes",
   "agents.lastUpdatedUnknown": "Atjaunināšanas laiks nav pieejams",

@@ -70,7 +70,7 @@ Adding an agent needs no QML changes: ship a collector that prints the record co
 | `claude` | Anthropic's OAuth usage endpoint (5-hour session + 7-day weekly) | `~/.claude/projects` transcripts, opencode sessions on an Anthropic provider, plus `stats-cache.json` and `history.jsonl` as fallback |
 | `codex` | The Codex app-server RPC | native Codex CLI session files on the built-in `openai` provider (plus pi and opencode sessions) |
 | `cursor` | Cursor's dashboard session API, in one of two shapes (see _Cursor's two shapes_ below) | Aggregated token totals by model for the billing cycle, plus the last week of usage events |
-| `grok` | The credits endpoint behind Grok's `/usage` view (the billing period's included usage) | Each session's `usage.json` (the ledger `grok usage` prints: tokens by model per finished turn), plus `summary.json` for sessions |
+| `grok` | The credits endpoint behind Grok's `/usage` view (the billing period's included usage; the unified X subscription's shared weekly pool), else the answer Grok's own log last recorded for a unified account | Each session's `usage.json` (the ledger `grok usage` prints: tokens by model per finished turn), plus `summary.json` for sessions |
 | `fireworks` | Estimated prepaid balance: configured funding minus rated account costs | Fireworks billing API, grouped by day and model for the last 30 days |
 | `kimi` | Kimi Code quotas (5-hour session, weekly, and monthly allowances) | none; quota only |
 
@@ -91,8 +91,21 @@ The label beside the section name comes from the plan the account is actually on
 
 - **Unified X subscription** (tiers Free, Plus, Premium, Super, Ultra; teams get per-seat Premium, Super, and Ultra, and Enterprise is custom): Cursor's sand usage status `cursorPlanName`, which is the name the Grok Bot app shows, but only when the same status says `isUnified`. `get-plan-info`'s `planName` cross-checks it when the status has none. Cursor's saved or dashboard `membershipType` is not reliable for the unified tiers (its client enum is free, pro, pro_plus, enterprise, free_trial, ultra, pro_student, express, premium, plus, super and unified_ultra, and an unknown value reads as free), so it is the last resort: a `unified_` prefix is dropped and the value mapped to Free, Pro, Pro+, Trial, Student, Enterprise, Express, Ultra, Premium, Plus, or Super, and an unknown one is title-cased. The sand status's `grokPlanLabel` ("Grok Bot Plan") is a placeholder and is ignored.
 - **Cursor subscription** (legacy Cursor Pro, Pro+, Ultra): `get-plan-info`'s `planName` verbatim, else the membership mapped as above.
+- **Grok alone** (SuperGrok without Cursor): `subscription_tier_display` from `~/.grok/settings_cache.json` verbatim, else the `subscription_tier` enum (x_basic is X Basic, x_premium X Premium, x_premium_plus X Premium+, supergrok_lite SuperGrok Lite, supergrok SuperGrok, supergrok_plus SuperGrok Plus, supergrok_heavy SuperGrok Heavy), and an unknown value is title-cased with underscores as spaces. A unified Grok-only record shows this value, which can name the legacy plan the account was linked from (SuperGrok Heavy where Cursor says Ultra).
 
 The Plus and Free tiers include no Grok Bot, so on either one both collectors leave it out of `coverage`.
+
+### Grok limits
+
+Grok's credits endpoint answering with an error, or not at all, is different from a lapsed sign-in. A rejected token (401/403) keeps the last credits and asks to sign in, and an access token that has merely expired while Grok wasn't running rolls the last credits forward, as before. But when the request was made and failed (a server error, a network failure, an answer that isn't credits), the cached numbers are dropped and the record says `Limits paused` with no help text.
+
+Accounts on the unified X subscription share one weekly pool with Grok Bot and Cursor's own models. The collector always asks the credits endpoint: an answer with `isUnifiedBillingUser` carries `creditUsagePercent` and `currentPeriod`, which becomes the _Weekly_ limit. The endpoint has been answering these accounts with a server error, so the collector falls back to the last `billing: fetched credits config` entry in Grok's own log (`logs/unified.jsonl` in the Grok home), but only a unified one logged within the last hour, rolled past a reset, and dated by when Grok logged it (so the panel marks it stale as it ages). Whether an account is unified is known from, in order, the credits answer, that log entry, the Cursor record's `unified: true` (primary home only), and what an earlier run remembered in the limits cache. Nothing in `settings_cache.json` or `auth.json` says it. A unified Grok record is named _X Subscription_ (`"icon": "grok"`, `"coverage"` of Grok and Grok Bot, `"unified": true`); with no pool obtainable it keeps those fields and `Limits paused`, which the panel shows as a quiet "Usage unavailable" instead of hiding the section. Because Cursor spends the same pool while Grok sits idle, a unified pool kept past a lapsed access token is marked stale rather than treated as current.
+
+The collector never defers to another record. The panel decides which record draws the pool: a unified Grok record is left out when another shown record whose `coverage` lists Grok has a pool of its own to draw (Cursor's X Subscription), so an X Subscription section appears once. Without such a record (SuperGrok without Cursor, or Cursor signed out), Grok's own section shows the pool.
+
+### Sections with nothing to show
+
+An agent whose record says `Limits paused` (Grok does so after a failed credits call, or when its token has lapsed with no numbers cached), has no limits, no balance, no help text (`authHelpText`), and fewer than two accounts has nothing to draw and nothing to act on, so the panel leaves its section out (and its keyboard stop and drag slot). Its local stats still count in the hero's totals and the bar. So it isn't mistaken for missing, a small dim line at the foot of the page reads "<agent> limits unavailable", unless a shown subscription covers it (see `coverage`), whose coverage marks already account for it, in which case there is no line. An agent that is still loading (no status yet), signed out, or carrying any help line (Claude Code's lapsed access token while a refresh keeps failing, for one) keeps its section, so those messages are never hidden. A record with `"unified": true` is the exception in both directions: it is never left out for having nothing to show (it reads "Usage unavailable"), and always left out when a shown record covers it.
 
 When `~/.local/state/omarchy/agents/accounts/<claude|codex|grok>.json`
 registers more than one account, the `claude`, `codex`, and `grok` records
@@ -117,7 +130,7 @@ reads the session the Cursor app already stored in `state.vscdb` (or
 `CURSOR_SESSION_TOKEN`). Grok's plan comes from the settings it caches in
 its home, and its limit from the credits endpoint its own `/usage` view
 reads, asked with each account's sign-in; a sign-in left to lapse shows the
-last credits until Grok runs again. Fireworks reads
+last credits until Grok runs again, while a credits request that fails drops them (a unified account falls back to the pool Grok last logged). Fireworks reads
 `FIREWORKS_API_KEY` and `FIREWORKS_ACCOUNT_ID` first, then
 `~/.fireworks/auth.ini` (which `firectl set-api-key` creates), then the key
 pi stores in `~/.pi/agent/auth.json` when Fireworks is signed in there

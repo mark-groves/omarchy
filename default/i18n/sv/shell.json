@@ -32,7 +32,6 @@
   "agents.helpScanFailed": "%1-användningsskanning misslyckades",
   "agents.helpSignInExpired": "Den sparade inloggningen för %1 har löpt ut. Starta %1 för att uppdatera den.",
   "agents.helpStartOrRunToSignIn": "Starta %1 eller kör %2 för att logga in.",
-  "agents.helpStartToSeeLimits": "Starta %1 för att se dess gränser; du behöver inte logga in igen.",
   "agents.lastUpdatedAgo": "Senast uppdaterad för %1 sedan",
   "agents.lastUpdatedJustNow": "Senast uppdaterad för mindre än en minut sedan",
   "agents.lastUpdatedUnknown": "Tid för senaste uppdatering otillgänglig",
