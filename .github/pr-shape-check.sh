@@ -12,7 +12,7 @@ fail() {
 
 is_sync_ref() {
   local ref=$1
-  [[ $ref == cursor/upstream-changes-pr-* || $ref == cursor/fork-upstream-updates-* ]]
+  [[ $ref == cursor/upstream-changes-pr-* || $ref == cursor/fork-upstream-updates-* || $ref == "i18n-sync" ]]
 }
 
 if [[ -n ${PR_OPEN_JSON_FILE:-} ]]; then
@@ -43,7 +43,9 @@ if is_sync_ref "$PR_HEAD_REF"; then
   if [[ $PR_BASE_REF != "quattro" ]]; then
     fail "A sync targets quattro. Retarget this pull request to quattro."
   fi
-  if [[ -n $sync_heads ]]; then
+  # The translation branch is its own job. An upstream import does not block
+  # it, and it does not block an upstream import.
+  if [[ $PR_HEAD_REF != "i18n-sync" && -n $sync_heads ]]; then
     fail "Another sync is already open:
 ${sync_heads}
 Push onto that branch, or wait until it merges."

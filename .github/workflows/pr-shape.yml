@@ -1,8 +1,8 @@
 name: Check pull request shape
 
 # Syncs, topics on quattro, and one-deep stacks are the three shapes an agent
-# can open without landing an import on the wrong base. The two shell tests
-# are the layout and polkit checks that already exist. This job runs them.
+# can open without landing an import on the wrong base. i18n-sync is a sync.
+# This job runs the shape tests plus the layout and polkit checks.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, closed]
@@ -43,8 +43,9 @@ jobs:
         if: github.event.action != 'closed'
         with:
           node-version: 24
-      - name: Layout and polkit tests
+      - name: Shape, layout, and polkit tests
         if: github.event.action != 'closed'
         run: |
+          bash test/shell.d/pr-shape-check-test.sh
           bash test/shell.d/hyprland-floating-workspaces-test.sh
           bash test/shell.d/polkit-face-test.sh
