@@ -892,33 +892,53 @@ Panel {
     }
 
     var phrases = []
-    if (week > 0) phrases.push(Commons.I18n.tn("agents.tokensThisWeek", week).arg(usage.formatTokenCount(week)))
-    if (today > 0) phrases.push(Commons.I18n.tn("agents.tokensToday", today).arg(usage.formatTokenCount(today)))
+    if (week > 0) phrases.push({ kind: "week", text: Commons.I18n.tn("agents.tokensThisWeek", week).arg(usage.formatTokenCount(week)) })
+    if (today > 0) phrases.push({ kind: "today", text: Commons.I18n.tn("agents.tokensToday", today).arg(usage.formatTokenCount(today)) })
     var topModel = ""
     for (var model in byModel) if (topModel === "" || byModel[model] > byModel[topModel]) topModel = model
-    if (topModel !== "" && byModel[topModel] > 0) phrases.push(Commons.I18n.t("agents.mostlyModel").arg(topModel))
+    if (topModel !== "" && byModel[topModel] > 0) phrases.push({ kind: "model", text: Commons.I18n.t("agents.mostlyModel").arg(topModel) })
     var busiest = ""
     for (var date in byDay) if (busiest === "" || byDay[date] > byDay[busiest]) busiest = date
-    if (busiest !== "" && byDay[busiest] > 0) phrases.push(Commons.I18n.t("agents.busiestDay").arg(dayName(busiest)))
-    if (prompts > 0) phrases.push(Commons.I18n.tn("agents.promptsToday", prompts).arg(Commons.I18n.formatNumber(prompts)))
-    if (sessions > 0) phrases.push(Commons.I18n.tn("agents.sessionsToday", sessions).arg(Commons.I18n.formatNumber(sessions)))
+    if (busiest !== "" && byDay[busiest] > 0) phrases.push({ kind: "busiest", text: Commons.I18n.t("agents.busiestDay").arg(dayName(busiest)) })
+    if (prompts > 0) phrases.push({ kind: "prompts", text: Commons.I18n.tn("agents.promptsToday", prompts).arg(Commons.I18n.formatNumber(prompts)) })
+    if (sessions > 0) phrases.push({ kind: "sessions", text: Commons.I18n.tn("agents.sessionsToday", sessions).arg(Commons.I18n.formatNumber(sessions)) })
     return phrases
   }
   property int phraseIndex: 0
   // Every record that lands rebuilds the phrases, and opening the panel
   // refreshes each agent in turn. Indexing the live list would swap the line
-  // on each of those, so the hero holds what it shows until the next fade.
+  // on each of those, so the hero holds which line it shows until the next
+  // fade, but the numbers in it follow the records: a line held from a
+  // half-loaded first pass must not keep a total that left agents out.
   property string shownPhrase: ""
+  property string shownKind: ""
   readonly property string heroPhrase: addStage !== "" || blankSlate
     ? addHeading
     : (shownPhrase !== "" ? shownPhrase : Commons.I18n.t("agents.subscriptions"))
 
   function showPhrase() {
     var n = summaryPhrases.length
-    shownPhrase = n > 0 ? summaryPhrases[phraseIndex % n] : ""
+    var entry = n > 0 ? summaryPhrases[phraseIndex % n] : null
+    shownKind = entry ? entry.kind : ""
+    shownPhrase = entry ? entry.text : ""
   }
 
-  onSummaryPhrasesChanged: if (shownPhrase === "" || summaryPhrases.length <= 1) showPhrase()
+  // The current text of the held line's kind, or "" once that line is gone.
+  function phraseTextFor(phrases, kind) {
+    for (var i = 0; i < phrases.length; i++)
+      if (phrases[i].kind === kind) return phrases[i].text
+    return ""
+  }
+
+  function refreshShownPhrase() {
+    var text = phraseTextFor(summaryPhrases, shownKind)
+    if (text !== "") shownPhrase = text
+  }
+
+  onSummaryPhrasesChanged: {
+    if (shownPhrase === "" || summaryPhrases.length <= 1) showPhrase()
+    else refreshShownPhrase()
+  }
 
   // The held line was written in the language it was shown in; once a new
   // language's strings arrive and the phrases rebuild, show it again.

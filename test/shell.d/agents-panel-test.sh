@@ -151,6 +151,18 @@ assertEqual(names([pool, { ...grokPool, usageStatusText: 'Sign-in expired' }]), 
 assertEqual(names([grokLegacy]), 'grok', 'a legacy Grok record is untouched')
 assertEqual(names([{ ...grokLegacy, limits: [], usageStatusText: 'Limits paused', unified: false }]), '', 'a legacy Grok that is paused with nothing to say is still left out')
 assert(/text: section\.provider && section\.provider\.coverage && section\.provider\.coverage\.length > 0 \? root\.coveredTokensText\(section\.provider\) : ""/.test(panelSource), 'the shared-pool line shows only for a record with coverage')
+// The hero's held line follows the records: a total shown from a half-loaded first pass must not outlive the data that completes it.
+const phraseStart = panelSource.indexOf('function phraseTextFor(phrases, kind)')
+assert(phraseStart > noteEnd, 'agents panel exposes the held-line lookup')
+eval(panelSource.slice(phraseStart, panelSource.indexOf('function refreshShownPhrase()')))
+const before = [{ kind: 'week', text: '36.0M tokens this week' }, { kind: 'today', text: '29.2M tokens today' }]
+const after = [{ kind: 'week', text: '219.7M tokens this week' }, { kind: 'today', text: '29.2M tokens today' }]
+assertEqual(phraseTextFor(before, 'week'), '36.0M tokens this week', 'the held line is found by its kind')
+assertEqual(phraseTextFor(after, 'week'), '219.7M tokens this week', 'a held weekly total picks up an agent that loaded after it was first shown')
+assertEqual(phraseTextFor(after, 'prompts'), '', 'a line that has gone is not found, so the hero keeps what it shows')
+assert(/onSummaryPhrasesChanged: \{\s*if \(shownPhrase === "" \|\| summaryPhrases\.length <= 1\) showPhrase\(\)\s*else refreshShownPhrase\(\)/.test(panelSource), 'records landing refresh the held line instead of leaving it stale')
+for (const kind of ['week', 'today', 'model', 'busiest', 'prompts', 'sessions'])
+  assert(new RegExp('kind: "' + kind + '"').test(panelSource), 'the ' + kind + ' summary line carries its kind')
 // The header's weekly total and the shared pool's are the same sum of the same records.
 assertEqual(weekTokens({ recentDays: week(900000) }), 900000, 'one agent\'s week is the sum of its days')
 const everyAgent = [pool, grok].reduce((sum, p) => sum + weekTokens(p), 0)
