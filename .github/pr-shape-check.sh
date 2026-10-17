@@ -81,15 +81,45 @@ else
   fi
 fi
 
+# The closed event's base SHA is a snapshot of the base branch and often lags
+# the tip GitHub actually merged onto. A rebase of more than one commit also
+# has a first parent that is not that snapshot. Resolve the named branch
+# instead, and accept the merge when that branch contains it.
+first_parent_reaches() {
+  local commit=$1
+  local tip=$2
+  local i cursor
+
+  cursor=$commit
+  for (( i = 0; i < 1000; i++ )); do
+    if [[ $cursor == "$tip" ]]; then
+      return 0
+    fi
+    git rev-parse --verify --quiet "${cursor}^1" >/dev/null || return 1
+    cursor=$(git rev-parse "${cursor}^1")
+  done
+  return 1
+}
+
 if [[ ${PR_MERGED:-false} == "true" ]]; then
   : "${MERGE_SHA:?MERGE_SHA is required once the pull request has merged}"
-  : "${BASE_SHA:?BASE_SHA is required once the pull request has merged}"
   if ! git cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
-    git fetch --no-tags origin "$MERGE_SHA"
+    git fetch --no-tags origin "$MERGE_SHA" ||
+      fail "Could not fetch merge commit ${MERGE_SHA}."
   fi
+  git fetch --no-tags origin "$PR_BASE_REF" ||
+    fail "Could not fetch ${PR_BASE_REF}. The shape check needs that branch to see where the merge landed."
+  base_tip=$(git rev-parse "origin/${PR_BASE_REF}^{commit}")
   first=$(git rev-parse "${MERGE_SHA}^1")
-  if [[ $first != "$BASE_SHA" ]]; then
-    fail "The merge commit ${MERGE_SHA} has first parent ${first}. The pull request named ${PR_BASE_REF} at ${BASE_SHA}. Merge this pull request into ${PR_BASE_REF}. Merge only the sync pull request into quattro."
+
+  # A merge or squash parents the live tip of the named branch. Once that
+  # branch contains the merge commit, its first parent is the pre-merge tip,
+  # and a longer rebase still sits on the same branch. When the ref has not
+  # moved, the fetched tip is the pre-merge tip and the first-parent chain
+  # has to reach it. The event base SHA is neither commit.
+  if ! git merge-base --is-ancestor "$MERGE_SHA" "$base_tip" &&
+    ! first_parent_reaches "$MERGE_SHA" "$base_tip"; then
+    fail "The merge commit ${MERGE_SHA} has first parent ${first}. ${PR_BASE_REF} was at ${base_tip} before the merge. Merge this pull request into ${PR_BASE_REF}. Merge only the sync pull request into quattro."
   fi
 fi
 
