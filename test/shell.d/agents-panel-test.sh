@@ -50,6 +50,50 @@ const catcherSource = fs.readFileSync(root + '/shell/Ui/PanelKeyCatcher.qml', 'u
 assert(/if \(reorderable && \(event\.modifiers & Qt\.ControlModifier\)\)/.test(catcherSource), 'only panels that ask for it turn Ctrl+Up/Down into a reorder')
 assert(/if \(\["account", "autoswitch", "signin"\]\.indexOf\(target\.kind\) < 0\) return -1/.test(panelSource), 'Ctrl+Up/Down does nothing outside an agent')
 
+assert(/providerIcon: String\(record\.icon \|\| record\.id\)/.test(mainSource), 'a record can ask for another agent\'s mark without changing its id')
+assert(/var mark = p\.providerIcon \|\| p\.providerId/.test(panelSource) && /"assets\/" \+ mark \+ "-light\.svg"/.test(panelSource), 'the panel resolves marks from the requested icon before the id')
+assert(/window\.valueText = String\(extras\.valueText\)/.test(panelSource) && /lines\.push\(compact\.window\.detail\)/.test(panelSource), 'a limit with no reset can show what is left in place of a countdown, and detail in its tooltip')
+
+assert(/coverage: coverageList\(record\.coverage\)/.test(mainSource), 'a record can list the agents a subscription covers')
+assert(/coverage: section\.provider \? section\.provider\.coverage : \[\]/.test(panelSource) && /textFallback: false/.test(panelSource), 'the section header draws a mark for each covered agent, with no bar glyph standing in for a missing one')
+assert(/PanelToolTip \{\s*visible: coverageHover\.hovered/.test(panelSource), 'each covered agent names itself on hover')
+for (const mark of ['grok', 'grok-bot', 'cursor', 'claude', 'codex']) {
+  assert(fs.existsSync(root + '/shell/plugins/agents/assets/' + mark + '.svg'), mark + ' has a mark')
+}
+for (const mark of ['grok', 'grok-bot', 'cursor', 'codex']) {
+  assert(fs.existsSync(root + '/shell/plugins/agents/assets/' + mark + '-light.svg'), mark + ' has a light-surface twin')
+}
+for (const file of fs.readdirSync(root + '/shell/plugins/agents/assets')) {
+  const svg = fs.readFileSync(root + '/shell/plugins/agents/assets/' + file, 'utf8')
+  assert(!/<script|href=|url\(|<image|<style/i.test(svg.replace(/url\(#[^)]*\)/g, '')), file + ' carries no script, external reference, or embedded image')
+}
+
+// The shared pool's tokens: run the real functions.
+const noteStart = panelSource.indexOf('function weekTokens(p)')
+const noteEnd = panelSource.indexOf('// Sign an account that\'s already here in again')
+assert(noteStart > 0 && noteEnd > noteStart, 'agents panel exposes the shared-pool helpers')
+let providers = []
+const Commons = { I18n: {
+  tn: (key, count) => ({ arg: value => value + (count === 1 ? ' token' : ' tokens') + ' this week' }),
+} }
+const usage = { formatTokenCount: n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n) }
+const week = tokens => [0, 0, 0, 0, 0, 0, tokens].map((messageCount, i) => ({ date: '2026-10-1' + i, messageCount }))
+const pool = { providerId: 'cursor', providerName: 'X Subscription', ready: true, unified: true, limits: [{ title: 'Weekly', percent: 0.22 }], recentDays: week(900000), coverage: [{ id: 'grok', name: 'Grok' }, { id: 'grok-bot', name: 'Grok Bot' }, { id: 'cursor', name: 'Cursor' }] }
+const grok = { providerId: 'grok', providerName: 'Grok', ready: true, unified: true, recentDays: week(300000), coverage: [{ id: 'grok', name: 'Grok' }, { id: 'grok-bot', name: 'Grok Bot' }] }
+eval(panelSource.slice(noteStart, noteEnd))
+providers = [pool, grok]
+assertEqual(coveredTokensText(pool), '1.2M tokens this week \u00b7 Grok 300.0K \u00b7 Cursor 900.0K', 'the shared pool adds up its covered agents\' week and names each share')
+providers = [{ ...pool, recentDays: [] }, grok]
+assertEqual(coveredTokensText(providers[0]), '300.0K tokens this week', 'a single contributor is not itemized')
+providers = [{ ...pool, recentDays: [] }, { ...grok, recentDays: [] }]
+assertEqual(coveredTokensText(providers[0]), '', 'no tokens this week, no line')
+assertEqual(coveredTokensText({ ...pool, coverage: [] }), '', 'an agent that covers nothing gets no shared-pool line')
+assert(/text: section\.provider && section\.provider\.coverage && section\.provider\.coverage\.length > 0 \? root\.coveredTokensText\(section\.provider\) : ""/.test(panelSource), 'the shared-pool line shows only for a record with coverage')
+// The header's weekly total and the shared pool's are the same sum of the same records.
+assertEqual(weekTokens({ recentDays: week(900000) }), 900000, 'one agent\'s week is the sum of its days')
+const everyAgent = [pool, grok].reduce((sum, p) => sum + weekTokens(p), 0)
+assertEqual(everyAgent, 1200000, 'the header adds every agent\'s week, the pool\'s included')
+
 const formatStart = panelSource.indexOf('function formatLimitPercent')
 const formatEnd = panelSource.indexOf('// ---------------------------------------------------------------- balance')
 assert(formatStart > 0 && formatEnd > formatStart, 'agents panel exposes usage format helpers')

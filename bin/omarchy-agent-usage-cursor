@@ -5,11 +5,16 @@
 """Collect Cursor usage into one display-ready JSON record.
 
 Limits and plan come from Cursor's dashboard session API using the sign-in
-already stored by the Cursor app. The three meters match the spending page:
-Cursor Models and Other Models for the billing cycle, plus Grok Bot's own
-weekly pool. Token totals by model come from the aggregated events endpoint;
-the last week of daily tokens and prompt/session counts come from paginated
-usage events. The agents panel only ever reads the JSON this prints.
+already stored by the Cursor app. The shape depends on the plan. A legacy
+Cursor subscription has three meters that match the spending page: Cursor
+Models and Other Models for the billing cycle, plus Grok Bot's own weekly
+pool. An account on the unified X subscription is recorded as an "X
+Subscription" with one weekly pool shared by Grok, Grok Bot and Cursor's own
+models, plus a Top-up Credit meter once credit has been bought, since
+third-party models are paid from that credit instead. Token totals by model
+come from the aggregated events endpoint; the last week of daily tokens and
+prompt/session counts come from paginated usage events. The agents panel only
+ever reads the JSON this prints.
 """
 
 from __future__ import annotations
@@ -29,6 +34,36 @@ from typing import Any
 
 AGENT_ID = "cursor"
 AGENT_NAME = "Cursor"
+UNIFIED_NAME = "X Subscription"
+# The record keeps the id caches, accounts and settings know it by; the mark
+# is asked for separately.
+UNIFIED_ICON = "grok"
+# What the one weekly pool pays for, in the order the panel draws the marks.
+UNIFIED_COVERAGE = [
+  {"id": "grok", "name": "Grok"},
+  {"id": "grok-bot", "name": "Grok Bot"},
+  {"id": "cursor", "name": "Cursor"},
+]
+# X Subscription tiers that include no Grok Bot (Free is the signed-out floor).
+NO_GROK_BOT_TIERS = ("plus", "free")
+# Cursor's client names its plans with this enum; the unified tiers carry a
+# unified_ prefix when they are the unified plan. Anything else is title-cased.
+MEMBERSHIP_LABELS = {
+  "free": "Free",
+  "free_trial": "Trial",
+  "pro": "Pro",
+  "pro_plus": "Pro+",
+  "pro_student": "Student",
+  "enterprise": "Enterprise",
+  "express": "Express",
+  "ultra": "Ultra",
+  "premium": "Premium",
+  "plus": "Plus",
+  "super": "Super",
+}
+# The plan last detected, so a dashboard that doesn't answer doesn't turn the
+# section back into "Cursor".
+PLAN_CACHE = "cursor-plan.json"
 AUTH_HELP = "Sign in to Cursor to restore authoritative usage."
 API_BASE_URL = "https://cursor.com"
 SCAN_REUSE_SECONDS = 20
@@ -214,11 +249,88 @@ def membership_from_state(state_db: Path) -> str:
   return read_state_value(state_db, "cursorAuth/stripeMembershipType")
 
 
+def session_user(session: str) -> str:
+  return session.split("::", 1)[0] if "::" in session else ""
+
+
+def unified_coverage(tier: str) -> list[dict[str, str]]:
+  """What the pool pays for on this tier: Plus and Free have no Grok Bot."""
+  without_bot = tier.strip().lower() in NO_GROK_BOT_TIERS
+  return [dict(entry) for entry in UNIFIED_COVERAGE if not (without_bot and entry["id"] == "grok-bot")]
+
+
+def unified_identity(tier: str = "") -> dict[str, Any]:
+  return {"name": UNIFIED_NAME, "icon": UNIFIED_ICON, "coverage": unified_coverage(tier), "unified": True}
+
+
+def remember_plan(session: str, unified: bool, tier: str) -> None:
+  """Keep the last detection per account: a unified plan is written, a legacy one clears it."""
+  path = cache_root() / PLAN_CACHE
+  user = session_user(session)
+  if unified and user:
+    write_json(path, {"user": user, "unified": True, "tierLabel": tier})
+  else:
+    path.unlink(missing_ok=True)
+
+
+def last_plan(session: str, membership: str) -> tuple[dict[str, Any], str] | None:
+  """The identity and tier for a record whose dashboard call failed, or None.
+
+  Cursor's own saved membership is the freshest word on the plan: a legacy
+  one clears what was remembered, a unified one stands on its own. Without
+  either, the last detection for the same account stands.
+  """
+  path = cache_root() / PLAN_CACHE
+  cached = read_json(path) or {}
+  user = session_user(session)
+  mine = cached.get("unified") is True and user != "" and cached.get("user") == user
+  tier = str(cached.get("tierLabel") or "") if mine else ""
+  if membership.startswith("unified_"):
+    tier = tier or membership_label(membership)
+    return unified_identity(tier), tier
+  if membership != "":
+    path.unlink(missing_ok=True)
+    return None
+  return (unified_identity(tier), tier) if mine else None
+
+
 def title_plan(value: str) -> str:
   text = value.strip()
   if text == "":
     return ""
   return text[:1].upper() + text[1:]
+
+
+def membership_label(value: str) -> str:
+  """A plan label from Cursor's saved membership type, the last resort.
+
+  Cursor's client enum is free, pro, pro_plus, enterprise, free_trial, ultra,
+  pro_student, express, premium, plus, super and unified_ultra; the unified_
+  prefix is dropped. A type outside it is shown title-cased, spaced out.
+  """
+  key = value.strip().lower().removeprefix("unified_")
+  if key == "":
+    return ""
+  if key in MEMBERSHIP_LABELS:
+    return MEMBERSHIP_LABELS[key]
+  return " ".join(title_plan(word) for word in key.split("_") if word)
+
+
+def unified_tier(sand: dict[str, Any], plan_info: dict[str, Any], membership: str) -> str:
+  """The X Subscription tier, as the Grok Bot app names it.
+
+  The sand status's cursorPlanName is what that app shows, but only means a
+  tier when the status itself says the account is unified. planInfo.planName
+  cross-checks it; the saved membership is not reliable for the unified
+  tiers, so it only fills in when neither answered.
+  """
+  named = str(sand.get("cursorPlanName") or "").strip() if sand.get("isUnified") is True else ""
+  return named or str(plan_info.get("planName") or "").strip() or membership_label(membership)
+
+
+def legacy_tier(plan_info: dict[str, Any], membership: str) -> str:
+  """The Cursor plan name (Pro, Pro+, Ultra, ...) for a legacy subscription."""
+  return str(plan_info.get("planName") or "").strip() or membership_label(membership)
 
 
 def add_tokens(bucket: dict[str, int], usage: dict[str, Any]) -> int:
@@ -352,6 +464,92 @@ def plan_limits(summary: dict[str, Any], period: dict[str, Any], sand: dict[str,
   return limits, reset_at
 
 
+def is_unified(summary: dict[str, Any], sand: dict[str, Any]) -> bool:
+  flag = sand.get("isUnified") if isinstance(sand, dict) else None
+  if isinstance(flag, bool):
+    return flag
+  return str(summary.get("membershipType") or "").startswith("unified_")
+
+
+def money(cents: int) -> str:
+  dollars = cents / 100.0
+  return f"${dollars:,.0f}" if cents >= 100_000 else f"${dollars:,.2f}"
+
+
+def topup_limit(summary: dict[str, Any], credits: dict[str, Any]) -> dict[str, Any] | None:
+  """The top-up credit as {percent used, remaining and total cents}, or None.
+
+  Credit grants come first; protobuf JSON leaves out a field holding zero, so
+  a missing balance reads as none left. Without grants, an on-demand spend
+  limit that is switched on stands in for it.
+  """
+  total = number(credits.get("totalCents"))
+  balance = number(credits.get("creditBalanceCents"))
+  if credits.get("hasCreditGrants") is True or total > 0:
+    if total <= 0:
+      total = number(credits.get("usedCents")) + balance
+    if total > 0:
+      if "usedCents" in credits:
+        used = number(credits.get("usedCents"))
+      elif "creditBalanceCents" in credits:
+        used = max(0, total - balance)
+      else:
+        used = 0
+      used = min(used, total)
+      remaining = balance if "creditBalanceCents" in credits else total - used
+      return {"percent": used / total, "remaining": remaining, "total": total}
+
+  individual = summary.get("individualUsage")
+  on_demand = individual.get("onDemand") if isinstance(individual, dict) else None
+  if isinstance(on_demand, dict) and on_demand.get("enabled") is True:
+    limit = number(on_demand.get("limit"))
+    if limit > 0:
+      used = min(number(on_demand.get("used")), limit)
+      return {"percent": used / limit, "remaining": limit - used, "total": limit}
+  return None
+
+
+def unified_limits(
+  summary: dict[str, Any],
+  period: dict[str, Any],
+  plan_info: dict[str, Any],
+  sand: dict[str, Any],
+  credits: dict[str, Any],
+) -> list[dict[str, Any]]:
+  usage = period.get("planUsage") if isinstance(period.get("planUsage"), dict) else {}
+  percent = sand.get("usagePercent")
+  if percent is None:
+    percent = usage.get("totalPercentUsed", usage.get("autoPercentUsed"))
+  reset_at = (
+    iso_from_cycle(sand.get("nextResetTimestampUtc"))
+    or iso_from_cycle(period.get("billingCycleEnd"))
+    or iso_from_cycle(plan_info.get("includedUsageResetsAt"))
+  )
+  started = sand.get("currentPeriodStart") or period.get("billingCycleStart")
+
+  limits: list[dict[str, Any]] = []
+  append_limit(
+    limits,
+    "Weekly",
+    spending_page_fraction(percent),
+    reset_at,
+    "X Subscription (weekly)",
+    **grok_limit_extra({"currentPeriodStart": started}, reset_at),
+  )
+
+  topup = topup_limit(summary, credits)
+  if topup:
+    append_limit(
+      limits,
+      "Top-up Credit",
+      topup["percent"],
+      "",
+      valueText=money(topup["remaining"]),
+      detail=f"{money(topup['remaining'])} left of {money(topup['total'])}",
+    )
+  return limits
+
+
 def base_record(**overrides: Any) -> dict[str, Any]:
   record: dict[str, Any] = {
     "schemaVersion": 1,
@@ -413,6 +611,12 @@ class DashboardClient:
 
   def sand_usage(self) -> dict[str, Any]:
     return self.request("POST", "/api/dashboard/get-sand-usage-status", {})
+
+  def credit_grants(self) -> dict[str, Any]:
+    return self.request("POST", "/api/dashboard/get-credit-grants-balance", {
+      "includeAllProducts": True,
+      "includePersonalTeam": True,
+    })
 
   def aggregated(self, start_ms: int, end_ms: int) -> dict[str, Any]:
     return self.request("POST", "/api/dashboard/get-aggregated-usage-events", {
@@ -537,8 +741,20 @@ def collect_dashboard(client: DashboardClient, include_events: bool, force: bool
     sand = {}
 
   plan_info = plan.get("planInfo") if isinstance(plan.get("planInfo"), dict) else {}
-  tier = str(plan_info.get("planName") or title_plan(str(summary.get("membershipType") or "")))
-  limits, _reset = plan_limits(summary, period, sand)
+  membership = str(summary.get("membershipType") or "")
+  identity: dict[str, Any] = {"unified": False}
+  if is_unified(summary, sand):
+    try:
+      credits = client.credit_grants()
+    except CursorError:
+      credits = {}
+    tier = unified_tier(sand, plan_info, membership)
+    limits = unified_limits(summary, period, plan_info, sand, credits)
+    identity = unified_identity(tier)
+  else:
+    tier = legacy_tier(plan_info, membership)
+    limits, _reset = plan_limits(summary, period, sand)
+  remember_plan(client.session, identity["unified"], tier)
   now = datetime.now().astimezone()
   today = now.date()
   record = base_record(
@@ -546,6 +762,7 @@ def collect_dashboard(client: DashboardClient, include_events: bool, force: bool
     hasLocalStats=True,
     tierLabel=tier or "Subscription",
     limits=limits,
+    **identity,
   )
 
   cycle_start, cycle_end = cycle_bounds_ms(summary, period, now)
@@ -583,7 +800,7 @@ def scan(state_db: Path, base_url: str, include_events: bool, force: bool) -> di
     return base_record(
       usageStatusText="Waiting for auth",
       authHelpText=AUTH_HELP,
-      tierLabel=title_plan(membership_from_state(state_db)),
+      tierLabel=membership_label(membership_from_state(state_db)),
     )
   client = DashboardClient(session, base_url)
   try:
@@ -591,10 +808,13 @@ def scan(state_db: Path, base_url: str, include_events: bool, force: bool) -> di
   except CursorError as error:
     help_text = str(error)
     retry = "Couldn't reach" in help_text
+    membership = membership_from_state(state_db)
+    remembered = last_plan(session, membership)
     record = base_record(
       usageStatusText="Cursor limits unavailable" if "expired" not in help_text.lower() else "Sign-in expired",
       authHelpText=help_text if help_text else AUTH_HELP,
-      tierLabel=title_plan(membership_from_state(state_db)),
+      tierLabel=remembered[1] if remembered else membership_label(membership),
+      **(remembered[0] if remembered else {}),
     )
     if retry:
       record["retryAdvised"] = True

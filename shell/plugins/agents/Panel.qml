@@ -435,6 +435,34 @@ Panel {
     return !!item && item.usageStatusText === "Limits paused" && limitWindows(item).length === 0
   }
 
+  function weekTokens(p) {
+    var days = p && p.recentDays ? p.recentDays : []
+    var total = 0
+    for (var d = 0; d < days.length; d++) total += Number(days[d].messageCount || 0)
+    return total
+  }
+
+  // What one shared pool paid for this week: the covering record's own
+  // tokens plus those of every covered agent that has a record of its own,
+  // from the records the panel already has.
+  function coveredTokensText(covering) {
+    var list = covering && covering.coverage ? covering.coverage : []
+    var parts = []
+    var total = 0
+    for (var i = 0; i < list.length; i++) {
+      var source = list[i].id === covering.providerId ? covering : null
+      for (var j = 0; !source && j < providers.length; j++)
+        if (providers[j].providerId === list[i].id) source = providers[j]
+      var tokens = source ? weekTokens(source) : 0
+      if (tokens <= 0) continue
+      total += tokens
+      parts.push(list[i].name + " " + usage.formatTokenCount(tokens))
+    }
+    if (total <= 0) return ""
+    var text = Commons.I18n.tn("agents.tokensThisWeek", total).arg(usage.formatTokenCount(total))
+    return parts.length > 1 ? text + " \u00b7 " + parts.join(" \u00b7 ") : text
+  }
+
   // Sign an account that's already here in again, following along in the
   // add view just like adding one.
   function signInAgain(p, account) {
@@ -531,6 +559,13 @@ Panel {
       window.periodStartedAt = String(extras.periodStartedAt)
     if (extras.resetEarly === true)
       window.resetEarly = true
+    // A window that has no clock to count down (a credit balance) can say
+    // what is left instead: valueText sits where the countdown would, and
+    // detail adds a line to the tooltip.
+    if (extras.valueText)
+      window.valueText = String(extras.valueText)
+    if (extras.detail)
+      window.detail = String(extras.detail)
     return window
   }
 
@@ -836,13 +871,14 @@ Panel {
 
   // Marks resolve by convention, so a new agent's data file needs nothing
   // from this panel: assets/<id>.svg if it ships one, the module's bar glyph
-  // if it doesn't.
+  // if it doesn't. A record can ask for another agent's mark with `icon`.
   function iconCandidatesForProvider(p, surfaceColor) {
     if (!p) return []
+    var mark = p.providerIcon || p.providerId
     var candidates = []
     if (colorLuminance(surfaceColor || Commons.Color.background) >= 0.5)
-      candidates.push(Qt.resolvedUrl("assets/" + p.providerId + "-light.svg"))
-    candidates.push(Qt.resolvedUrl("assets/" + p.providerId + ".svg"))
+      candidates.push(Qt.resolvedUrl("assets/" + mark + "-light.svg"))
+    candidates.push(Qt.resolvedUrl("assets/" + mark + ".svg"))
     return candidates
   }
 
@@ -1444,6 +1480,14 @@ Panel {
         font.bold: true
       }
 
+      // The agents one subscription pays for, as small marks beside its name.
+      CoverageMarks {
+        anchors.left: sectionName.right
+        anchors.leftMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        coverage: section.provider ? section.provider.coverage : []
+      }
+
       Text {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -1510,6 +1554,25 @@ Panel {
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+      }
+    }
+
+    // What a shared pool paid for this week.
+    Column {
+      visible: !section.multi && sharedTokens.text !== ""
+      width: parent.width
+      spacing: Style.space(4)
+
+      Text {
+        id: sharedTokens
+        textFormat: Text.PlainText
+        visible: text !== ""
+        width: parent.width
+        text: section.provider && section.provider.coverage && section.provider.coverage.length > 0 ? root.coveredTokensText(section.provider) : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
       }
     }
 
@@ -1621,6 +1684,7 @@ Panel {
     property int candidateIndex: 0
     onCandidatesKeyChanged: candidateIndex = 0
     property real size: Style.font.heading
+    property bool textFallback: true
 
     width: size
     height: size
@@ -1640,12 +1704,42 @@ Panel {
 
     Text {
       anchors.centerIn: parent
-      visible: markImage.status !== Image.Ready
+      visible: mark.textFallback && markImage.status !== Image.Ready
       textFormat: Text.PlainText
       text: button.text
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: mark.size
+    }
+  }
+
+  // A row of small marks for the agents a subscription covers, each naming
+  // its agent on hover. A mark that has no asset is left out rather than
+  // standing in the bar's glyph, which would say nothing about that agent.
+  component CoverageMarks: Row {
+    id: marks
+    property var coverage: []
+    spacing: Style.space(6)
+    visible: coverage.length > 0
+
+    Repeater {
+      model: marks.coverage
+
+      ProviderIcon {
+        id: coverageMark
+        required property var modelData
+        provider: ({ providerId: String(modelData.id || ""), providerName: String(modelData.name || modelData.id || "") })
+        size: Style.font.body
+        opacity: 0.75
+        textFallback: false
+
+        HoverHandler { id: coverageHover }
+
+        PanelToolTip {
+          visible: coverageHover.hovered && coverageMark.provider.providerName !== ""
+          text: coverageMark.provider.providerName
+        }
+      }
     }
   }
 
@@ -2038,6 +2132,8 @@ Panel {
               ? Commons.I18n.t("agents.windowUsedResets").arg(windowName).arg(used.slice(0, -1)).arg(root.formatDuration(compact.resetMs))
               : Commons.I18n.t("agents.windowUsed").arg(windowName).arg(used.slice(0, -1)))
         }
+        if (compact.window && compact.window.detail)
+          lines.push(compact.window.detail)
         if (compact.stale)
           lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000
             ? Commons.I18n.t("agents.lastUpdatedAgo").arg(root.formatDuration(root.nowMs - compact.fetchedAt))
@@ -2080,8 +2176,9 @@ Panel {
       text: "00h 00m"
     }
 
-    // How long until the window resets. The meter says how full it is; the
-    // exact percentage is in the row's tooltip.
+    // How long until the window resets, or what is left when it has no reset.
+    // The meter says how full it is; the exact percentage is in the row's
+    // tooltip.
     Text {
       id: compactValue
       width: Math.ceil(compactValueMetrics.advanceWidth)
@@ -2089,7 +2186,8 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       horizontalAlignment: Text.AlignRight
-      text: compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : ""
+      text: compact.resetMs > 0 ? root.formatDuration(compact.resetMs) : (compact.window && compact.window.valueText ? compact.window.valueText : "")
+      elide: Text.ElideRight
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

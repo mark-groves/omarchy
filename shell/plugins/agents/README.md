@@ -69,10 +69,30 @@ Adding an agent needs no QML changes: ship a collector that prints the record co
 |---|---|---|
 | `claude` | Anthropic's OAuth usage endpoint (5-hour session + 7-day weekly) | `~/.claude/projects` transcripts, opencode sessions on an Anthropic provider, plus `stats-cache.json` and `history.jsonl` as fallback |
 | `codex` | The Codex app-server RPC | native Codex CLI session files on the built-in `openai` provider (plus pi and opencode sessions) |
-| `cursor` | Cursor's dashboard session API (Cursor Models and Other Models for the billing cycle, plus Grok Bot's weekly pool, including complimentary mid-week resets) | Aggregated token totals by model for the billing cycle, plus the last week of usage events |
+| `cursor` | Cursor's dashboard session API, in one of two shapes (see _Cursor's two shapes_ below) | Aggregated token totals by model for the billing cycle, plus the last week of usage events |
 | `grok` | The credits endpoint behind Grok's `/usage` view (the billing period's included usage) | Each session's `usage.json` (the ledger `grok usage` prints: tokens by model per finished turn), plus `summary.json` for sessions |
 | `fireworks` | Estimated prepaid balance: configured funding minus rated account costs | Fireworks billing API, grouped by day and model for the last 30 days |
 | `kimi` | Kimi Code quotas (5-hour session, weekly, and monthly allowances) | none; quota only |
+
+### Cursor's two shapes
+
+The `cursor` collector decides per account which subscription it is looking at, from the dashboard's sand usage status (`isUnified`), falling back to a `unified_*` membership type when that status is unavailable, and prints a different record for each.
+
+- **Cursor subscription** (legacy plans): a section named _Cursor_ with Cursor Models and Other Models meters for the billing cycle, plus Grok Bot's own weekly meter, which counts down to its own reset and notes a complimentary mid-week reset.
+- **X subscription** (the unified plan): a section named _X Subscription_ that wears Grok's mark, shows the tier at its right (Free, Plus, Premium, Super, or Ultra; see _Plan names_ below), and carries small marks for Grok, Grok Bot, and Cursor beside the name (hover one for its name). Cursor's own models, Grok, and Grok Bot all draw from one weekly pool, so there is one _Weekly_ meter for it, with its reset and any mid-week start. Third-party models (Anthropic, OpenAI, Gemini, …) are paid from separately bought top-up credit instead, which gets a _Top-up Credit_ meter, but only once credit exists: bought credit grants, or an on-demand spend limit that is switched on. The meter fills as the credit is spent, shows the dollars left where a countdown would be (the tooltip gives left of total), and has no reset.
+
+The last unified detection is remembered per account in `~/.cache/omarchy/agent-usage/cursor-plan.json` (the user id and plan name, never the session), so a dashboard that errors out (a lapsed session, no network) still prints the section as _X Subscription_ instead of flipping back to _Cursor_. Cursor's saved membership in `state.vscdb` outranks the memory when it is readable: `unified_*` stands on its own, anything else clears it, and a legacy detection from the dashboard clears it too.
+
+The record keeps `id: "cursor"` in both shapes, so caches, ordering, and the `providers` setting are unaffected. A record asks for another agent's mark with `"icon": "<id>"`; the panel looks for `assets/<icon>.svg` (and its `-light` twin) before falling back to the id. A record can also carry `"coverage": [{"id": "grok", "name": "Grok"}, …]`, the agents one subscription pays for: each draws its `assets/<id>.svg` mark (and `-light` twin) in a small row beside the section name, with `name` as the tooltip. Only the unified X subscription sets it, together with `"unified": true` (a legacy record says `false`); the Grok collector reads that flag as a hint that its own account is unified. Under the meter the section adds a dim line with the week's tokens across the covered agents that have records (Cursor's own plus Grok's local stats, itemized when more than one contributed), and, when a covered agent's own section is left out (see below), a note that its usage counts toward the subscription. A limit with no reset can carry `valueText` (shown where the countdown would be) and `detail` (an extra tooltip line).
+
+### Plan names
+
+The label beside the section name comes from the plan the account is actually on.
+
+- **Unified X subscription** (tiers Free, Plus, Premium, Super, Ultra; teams get per-seat Premium, Super, and Ultra, and Enterprise is custom): Cursor's sand usage status `cursorPlanName`, which is the name the Grok Bot app shows, but only when the same status says `isUnified`. `get-plan-info`'s `planName` cross-checks it when the status has none. Cursor's saved or dashboard `membershipType` is not reliable for the unified tiers (its client enum is free, pro, pro_plus, enterprise, free_trial, ultra, pro_student, express, premium, plus, super and unified_ultra, and an unknown value reads as free), so it is the last resort: a `unified_` prefix is dropped and the value mapped to Free, Pro, Pro+, Trial, Student, Enterprise, Express, Ultra, Premium, Plus, or Super, and an unknown one is title-cased. The sand status's `grokPlanLabel` ("Grok Bot Plan") is a placeholder and is ignored.
+- **Cursor subscription** (legacy Cursor Pro, Pro+, Ultra): `get-plan-info`'s `planName` verbatim, else the membership mapped as above.
+
+The Plus and Free tiers include no Grok Bot, so on either one both collectors leave it out of `coverage`.
 
 When `~/.local/state/omarchy/agents/accounts/<claude|codex|grok>.json`
 registers more than one account, the `claude`, `codex`, and `grok` records
