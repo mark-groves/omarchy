@@ -279,13 +279,6 @@ def logged_credits(home):
   return None
 
 
-# Whether Grok's own CLI last saw this account on unified billing, or None when
-# its log says nothing. Nothing in settings_cache.json or auth.json says it.
-def logged_unified(home):
-  logged = logged_credits(home)
-  return None if logged is None else logged[0].get("isUnifiedBillingUser") is True
-
-
 # The shared weekly pool as the CLI last logged it, with when, for a credits
 # endpoint that is not answering (it has failed for unified accounts). Only a
 # unified answer recent enough counts; the window is rolled past a reset.
@@ -303,21 +296,37 @@ def logged_pool(home):
 # The Cursor collector's record says when the X subscription covers Grok.
 # That is one account's plan, so it is only taken for the primary home. The
 # panel, not this collector, decides which record shows the shared pool.
-def cursor_unified():
-  record = read_json(state_root() / "omarchy" / "agents" / "usage" / "cursor.json")
-  return isinstance(record, dict) and record.get("unified") is True
+# Returns when the record last said so, or 0.
+def cursor_unified_at():
+  path = state_root() / "omarchy" / "agents" / "usage" / "cursor.json"
+  record = read_json(path)
+  if not (isinstance(record, dict) and record.get("unified") is True):
+    return 0.0
+  updated = parse_time(record.get("updatedAt"))
+  try:
+    return updated.timestamp() if updated else path.stat().st_mtime
+  except OSError:
+    return 0.0
 
 
 # What is known about this account being on the unified X subscription before
-# the credits endpoint answers: Grok's own log, else the Cursor record, else
-# what an earlier run remembered.
+# the credits endpoint answers, as (unified, when it was last seen so). Grok's
+# own log, the Cursor record and the flag an earlier run remembered all count,
+# and a unified sign wins over a legacy log entry unless that entry is newer.
+# An old legacy entry (logged before an upgrade, with Grok not run since) must
+# not hide the plan while the credits endpoint fails; a newer one is a
+# downgrade.
 def unified_hint(home, cached):
-  logged = logged_unified(home)
-  if logged is not None:
-    return logged
-  if Path(home) in (Path.home() / ".grok", default_home()) and cursor_unified():
-    return True
-  return cached.get("unified") is True
+  logged = logged_credits(home)
+  logged_unified = bool(logged) and logged[0].get("isUnifiedBillingUser") is True
+  seen = logged[1] if logged_unified else 0.0
+  if Path(home) in (Path.home() / ".grok", default_home()):
+    seen = max(seen, cursor_unified_at())
+  if cached.get("unified") is True:
+    seen = max(seen, float(cached.get("unifiedAtMs") or cached.get("fetchedAtMs") or 0) / 1000)
+  if logged and not logged_unified and logged[1] > seen:
+    return False, 0.0
+  return seen > 0, seen
 
 
 def collect_limits(home, key, force):
@@ -332,7 +341,8 @@ def collect_limits(home, key, force):
   cached = read_json(cache) or {}
   fetched_at = float(cached.get("fetchedAtMs") or 0)
   result["fetchedAtMs"] = fetched_at
-  unified = result["unified"] = unified_hint(home, cached)
+  unified, unified_at = unified_hint(home, cached)
+  result["unified"] = unified
 
   expires = parse_time(entry.get("expires_at"))
   if expires and expires.timestamp() <= time.time():
@@ -383,7 +393,7 @@ def collect_limits(home, key, force):
   if limit:
     unified = result["unified"] = answered_unified
     result.update(limits=[limit], live=True, fetchedAtMs=round(time.time() * 1000), authHelpText="")
-    write_json(cache, {"fetchedAtMs": result["fetchedAtMs"], "limits": result["limits"], **({"unified": True} if unified else {})})
+    write_json(cache, {"fetchedAtMs": result["fetchedAtMs"], "limits": result["limits"], **({"unified": True, "unifiedAtMs": round(time.time() * 1000)} if unified else {})})
   elif rejected:
     result["limits"] = cached.get("limits") or []
   else:
@@ -398,7 +408,7 @@ def collect_limits(home, key, force):
     cache.unlink(missing_ok=True)
     result.update(usageStatusText="Limits paused", authHelpText="", fetchedAtMs=0)
     if unified:
-      write_json(cache, {"fetchedAtMs": 0, "limits": [], "unified": True})
+      write_json(cache, {"fetchedAtMs": 0, "limits": [], "unified": True, "unifiedAtMs": round(unified_at * 1000)})
       logged = logged_pool(home)
       if logged:
         result.update(limits=[logged[0]], fetchedAtMs=logged[1], usageStatusText="")

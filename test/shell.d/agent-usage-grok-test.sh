@@ -161,8 +161,11 @@ unified_log() {
     '{ts: $at, msg: "billing: fetched credits config", ctx: {config: ({creditUsagePercent: $percent, currentPeriod: {type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-10-13T00:03:29.173+00:00", end: $end}} + (if $unified then {isUnifiedBillingUser: true} else {} end))}}' >"$HOME/.grok/logs/unified.jsonl"
 }
 cursor_record() {
+  # unified?, optional age of the record in seconds (default: just now)
   mkdir -p "$XDG_STATE_HOME/omarchy/agents/usage"
-  jq -nc --argjson unified "$1" '{id: "cursor", unified: $unified}' >"$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
+  local at
+  at=$(python3 -c 'import datetime as dt, sys; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=int(sys.argv[1]))).isoformat())' "${2:-0}")
+  jq -nc --argjson unified "$1" --arg at "$at" '{id: "cursor", unified: $unified, updatedAt: $at}' >"$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
 }
 identity() { jq -c '{name, icon, unified, coverage: [.coverage[]?.id], limits: [.limits[]? | {label, percent: (.percent * 100 | round)}], status: .usageStatusText, help: .authHelpText, stale: .limitsStale}' <<<"$1"; }
 pool='{"name":"X Subscription","icon":"grok","unified":true,"coverage":["grok","grok-bot"]'
@@ -224,6 +227,50 @@ record=$(CREDITS_FAILURE=500 collect)
 [[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
   fail "a unified Cursor record marks a failing Grok as unified, with no pool of its own" "$record"
 pass "a unified Cursor record marks a failing Grok as unified, with no pool of its own"
+clear_cache
+
+# A legacy log entry is only a verdict as of when it was logged. One older than
+# the Cursor record's unified plan (the account upgraded since, and Grok hasn't
+# run) must not hide it while the credits endpoint fails; a newer one is a
+# downgrade and wins.
+clear_cache
+unified_log false 7200 31
+cursor_record true 60
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
+  fail "an old legacy log does not override a newer unified Cursor record" "$record"
+pass "an old legacy log does not override a newer unified Cursor record"
+
+clear_cache
+unified_log false 60 31
+cursor_record true 7200
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '{unified, limits, status: .usageStatusText}' <<<"$record") == '{"unified":false,"limits":[],"status":"Limits paused"}' ]] ||
+  fail "a legacy log newer than the Cursor record's unified plan is a downgrade" "$record"
+pass "a legacy log newer than the Cursor record's unified plan is a downgrade"
+rm -f "$XDG_STATE_HOME/omarchy/agents/usage/cursor.json"
+
+# The same holds for the flag an earlier run remembered, dated by when unified was last seen.
+clear_cache
+unified_log true 7200 31
+UNIFIED_ANSWER=1 collect >/dev/null
+unified_log false 60 31
+jq '.unifiedAtMs -= 3600000' "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json >"$test_tmp/cache.json"
+cp "$test_tmp/cache.json" "$(ls "$XDG_CACHE_HOME"/omarchy/agent-usage/grok-limits-*.json)"
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -c '{unified, limits, status: .usageStatusText}' <<<"$record") == '{"unified":false,"limits":[],"status":"Limits paused"}' ]] ||
+  fail "a legacy log newer than the remembered unified flag is a downgrade" "$record"
+clear_cache
+unified_log true 7200 31
+UNIFIED_ANSWER=1 collect >/dev/null
+unified_log false 7200 31
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(identity "$record") == "$pool"',"limits":[],"status":"Limits paused","help":"","stale":true}' ]] ||
+  fail "an old legacy log does not override the remembered unified flag" "$record"
+record=$(CREDITS_FAILURE=500 collect)
+[[ $(jq -r .unified <<<"$record") == "true" ]] || fail "the remembered unified flag survives repeated failures" "$record"
+pass "the remembered unified flag is dated and outranks only older legacy log entries"
+rm -f "$HOME/.grok/logs/unified.jsonl"
 clear_cache
 
 # Grok's answer outranks any hint: a plan that is not unified is read as it always was.
