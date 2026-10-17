@@ -1115,6 +1115,14 @@ def now_ms() -> int:
   return round(time.time() * 1000)
 
 
+def age_seconds(at_ms: Any) -> float:
+  """Seconds since a timestamp written by now_ms(). Both ends are rounded to
+  the millisecond the same way, so a stamp taken a moment ago is never in the
+  future; comparing it with the raw clock reads up to half a millisecond
+  negative, which the "clock went backwards" guards treat as a stale stamp."""
+  return (now_ms() - number(at_ms)) / 1000
+
+
 def load_credentials(home: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
   """The credential file, its claudeAiOauth login, and the file's raw text."""
   try:
@@ -1379,7 +1387,7 @@ def refresh_login(home: Path, marker_name: str, force: bool) -> dict[str, Any]:
   if marker.get("refreshToken") == token_digest(refresh_token):
     if marker.get("kind") == "rejected":
       return refresh_outcome("rejected")
-    age = time.time() - number(marker.get("atMs")) / 1000
+    age = age_seconds(marker.get("atMs"))
     if not force and 0 <= age < REFRESH_RETRY_SECONDS:
       return refresh_outcome("unavailable")
 
@@ -1512,8 +1520,7 @@ def collect_limits(access_token: str, expires_at_ms: int, refresh_expires_at_ms:
   # --force is a person asking for fresh numbers, so it skips the reuse window
   # entirely; the interval is there to absorb repeated panel opens, not to
   # overrule someone who pressed refresh.
-  fetched_at = number(cached.get("fetchedAtMs")) / 1000
-  fetched_age = time.time() - fetched_at
+  fetched_age = age_seconds(cached.get("fetchedAtMs"))
   if fallback and not force and 0 <= fetched_age < PROBE_MIN_INTERVAL_SECONDS:
     result["limits"] = fallback
     result["live"] = True
@@ -1535,7 +1542,7 @@ def collect_limits(access_token: str, expires_at_ms: int, refresh_expires_at_ms:
     result["retryAdvised"] = True
   if fallback:
     result["limits"] = fallback
-    fetched_age = time.time() - result["fetchedAtMs"] / 1000
+    fetched_age = age_seconds(result["fetchedAtMs"])
     result["live"] = 0 <= fetched_age < CURRENT_ENOUGH_SECONDS
   else:
     result["usageStatusText"] = "Claude limits unavailable"
