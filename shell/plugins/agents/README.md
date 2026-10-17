@@ -95,6 +95,14 @@ The label beside the section name comes from the plan the account is actually on
 
 The Plus and Free tiers include no Grok Bot, so on either one both collectors leave it out of `coverage`.
 
+### Claude sign-in refresh
+
+Claude's limits are read with the access token in the CLI's `.credentials.json`, which lives about eight hours. Only the CLI used to mint a new one, so a machine used through the Claude desktop app (which keeps its own sign-in and never touches that file) found it lapsed and froze on stale numbers. The collector now refreshes it itself, once the token has lapsed or is within five minutes of it, for each account's own home, using the CLI's own protocol: a JSON `refresh_token` grant against the OAuth token endpoint with the CLI's client id and the login's scopes. The constants and where they come from are at the top of `bin/omarchy-agent-usage-claude`.
+
+- **Locking.** Refresh tokens rotate, so spending one twice signs the account out. The collector takes the CLI's own locks (the `.oauth_refresh.lock` directory in the config home, and `<home>.lock` for older CLIs), waits a few seconds when the CLI holds one, and after taking it reads `.credentials.json` again: a login another process saved first is adopted and no request is made. The write itself runs under the CLI's `.storage-write.lock`.
+- **Write-back.** Only `accessToken`, `refreshToken`, `expiresAt`, `refreshTokenExpiresAt` and `scopes` change; every other key (subscription type, rate-limit tier, client id, anything else in the file) is kept. The file is replaced atomically from a temp file beside it with the same permissions (0600) and owner. No token is ever printed or logged.
+- **Failures.** A refresh token the server refuses (`invalid_grant`, or any 401), or one the file says has expired, is a real sign-out: the record says _Sign-in expired_ and asks for `claude auth login`, the file is left alone, and the refused token is not sent again (the collector remembers a short digest of it in `claude-refresh-*.json` under `~/.cache/omarchy/agent-usage/`) until a new sign-in replaces it. A network failure or a server error leaves the file untouched and the record `Limits paused` on the last numbers, with a line saying the refresh didn't work and will be retried; the retry waits five minutes unless a person presses refresh (`--force`).
+
 ### Grok limits
 
 Grok's credits endpoint answering with an error, or not at all, is different from a lapsed sign-in. A rejected token (401/403) keeps the last credits and asks to sign in, and an access token that has merely expired while Grok wasn't running rolls the last credits forward, as before. But when the request was made and failed (a server error, a network failure, an answer that isn't credits), the cached numbers are dropped and the record says `Limits paused` with no help text.

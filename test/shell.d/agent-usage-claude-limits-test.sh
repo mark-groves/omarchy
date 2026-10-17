@@ -107,10 +107,10 @@ pass "Claude collector labels a Team seat by its subscription, not its rate-limi
   fail "Claude collector labels a plan without a multiplier by its subscription alone" "$(plan_label default_claude_pro pro) / $(plan_label "" team)"
 pass "Claude collector keeps Max multipliers and plain plan names"
 
-# Only the Claude Code CLI refreshes the saved tokens, so between its runs the
-# collector can find the access token lapsed while the refresh token behind it
-# is still good. Drive collect_limits over a planted cache with the network
-# unreachable, so nothing but the credential state decides the answer.
+# The access token lapses about every eight hours while the refresh token
+# behind it stays good. Drive collect_limits over a planted cache with the
+# network unreachable and no home to refresh in, so nothing but the credential
+# state decides the answer; the refresh itself is covered further down.
 CACHE_HOME=$(mktemp -d)
 trap 'rm -rf "$CACHE_HOME"' EXIT
 
@@ -196,9 +196,308 @@ paused=$(collect_limits "token" 1000 "$live_refresh" "$cache")
   fail "Claude collector calls a lapsed access token paused, not signed out" "$paused"
 [[ $(jq -r '.authHelpText' <<<"$paused") != *"claude auth login"* ]] ||
   fail "Claude collector does not send a signed-in machine back through login" "$paused"
+# Without a home to refresh, the only thing left to say is how to get a new
+# token by hand; with one, the same text appears only after a refresh failed.
+[[ $(jq -r '.authHelpText' <<<"$paused") == *"couldn't refresh it just now"* && $(jq -r '.authHelpText' <<<"$paused") == *'`claude` in a terminal'* ]] ||
+  fail "Claude collector words a paused token as a refresh that did not work" "$paused"
 [[ $(jq -c '[.limits[].label]' <<<"$paused") == '["Session (5-hour)","Weekly (7-day)"]' ]] ||
   fail "Claude collector keeps open cached windows while the access token is stale" "$paused"
 pass "Claude collector calls a lapsed access token paused, not signed out"
+
+# The Claude desktop app keeps its own sign-in and never rewrites the CLI's
+# credential file, so the collector refreshes a lapsed access token itself,
+# speaking the CLI's own refresh protocol. These drive a scenario against a
+# planted home with the HTTP layer stubbed (no network, fake tokens) and print
+# what the scenario observed, never a token.
+refresh_run() {
+  # The collector reports a failed refresh on stderr, which these scenarios
+  # provoke on purpose; a crash still shows as missing output.
+  COLLECTOR="$ROOT/bin/omarchy-agent-usage-claude" SCENARIO="$1" python3 - 2>/dev/null <<'PY'
+import hashlib, importlib.machinery, importlib.util, io, json, os, pathlib, stat, tempfile, time, urllib.error
+
+loader = importlib.machinery.SourceFileLoader("collector", os.environ["COLLECTOR"])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+collector = importlib.util.module_from_spec(spec)
+loader.exec_module(collector)
+
+scenario = os.environ["SCENARIO"]
+base = pathlib.Path(tempfile.mkdtemp())
+os.environ["XDG_CACHE_HOME"] = str(base / "cache")
+collector.lock_sleep = lambda: None
+collector.time.sleep = lambda seconds: None
+
+now = round(time.time() * 1000)
+HOUR = 3600 * 1000
+OTHER = {"mcpOAuth": {"server": {"accessToken": "mcp-token"}}, "organizationUuid": "org"}
+
+def plant(name, access="old-access", refresh="old-refresh", expires=now - HOUR, refresh_expires=now + 30 * 24 * HOUR):
+  home = base / name
+  home.mkdir()
+  path = home / ".credentials.json"
+  login = {
+    "accessToken": access, "refreshToken": refresh, "expiresAt": expires,
+    "refreshTokenExpiresAt": refresh_expires, "scopes": ["user:inference", "user:profile"],
+    "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x", "clientId": "custom-client",
+  }
+  path.write_text(json.dumps({"claudeAiOauth": login, **OTHER}), encoding="utf-8")
+  path.chmod(0o600)
+  return home
+
+def creds(home):
+  return json.loads((home / ".credentials.json").read_text(encoding="utf-8"))
+
+def digest(home):
+  return hashlib.sha256((home / ".credentials.json").read_bytes()).hexdigest()
+
+token_requests, usage_requests, replaces = [], [], []
+answers = {}
+
+def respond(refresh_token):
+  answer = answers.get(refresh_token)
+  if isinstance(answer, Exception):
+    raise answer
+  if isinstance(answer, int):
+    body = {"error": "invalid_grant"} if answer in (400, 401) else {}
+    raise urllib.error.HTTPError(collector.TOKEN_URL, answer, "err", {}, io.BytesIO(json.dumps(body).encode()))
+  return io.BytesIO(json.dumps(answer).encode())
+
+def urlopen(request, timeout=None):
+  if request.full_url == collector.TOKEN_URL:
+    body = json.loads(request.data)
+    token_requests.append({
+      "method": request.get_method(), "type": request.get_header("Content-type"),
+      "grant": body["grant_type"], "client": body["client_id"], "scope": body["scope"],
+      "refresh": body["refresh_token"],
+    })
+    return respond(body["refresh_token"])
+  usage_requests.append(request.get_header("Authorization"))
+  return io.BytesIO(b'{"five_hour":{"utilization":44.0}}')
+
+collector.urllib.request.urlopen = urlopen
+
+# Record, at the moment of the swap, what os.replace is handed.
+real_replace = os.replace
+def replace(src, dst, *a, **k):
+  source = pathlib.Path(src)
+  if pathlib.Path(dst).name != ".credentials.json":
+    return real_replace(src, dst, *a, **k)
+  replaces.append({
+    "sameDirectory": source.parent == pathlib.Path(dst).parent,
+    "mode": stat.S_IMODE(source.stat().st_mode),
+    "complete": isinstance(json.loads(source.read_text(encoding="utf-8")).get("claudeAiOauth"), dict),
+    "lockHeld": (pathlib.Path(dst).parent / collector.STORAGE_LOCK_NAME).is_dir(),
+  })
+  return real_replace(src, dst, *a, **k)
+collector.os.replace = replace
+
+fresh = lambda access, refresh: {
+  "access_token": access, "refresh_token": refresh, "expires_in": 28800,
+  "refresh_token_expires_in": 2592000, "scope": "user:inference user:profile user:sessions:claude_code",
+}
+out = {}
+
+def run(home, force=False, cache="claude-limits.json"):
+  login = collector.oauth_login(home)
+  result = collector.collect_limits(login[0], login[1], login[2], force, cache, home)
+  return {
+    "status": result["usageStatusText"], "help": result["authHelpText"], "live": result["live"],
+    "percents": [l["percent"] for l in result["limits"]],
+  }
+
+def leftovers(home):
+  return sorted(p.name for p in home.iterdir() if p.name != ".credentials.json")
+
+home = plant("a")
+before = digest(home)
+
+if scenario in ("refreshed", "near_expiry", "stale_lock"):
+  if scenario == "near_expiry":
+    home = plant("n", expires=now + 120 * 1000)
+  if scenario == "stale_lock":
+    # A holder that died long ago must not block the refresh.
+    lock = home / collector.REFRESH_LOCK_NAME
+    lock.mkdir()
+    old = time.time() - 600
+    os.utime(lock, (old, old))
+  rt = creds(home)["claudeAiOauth"]["refreshToken"]
+  answers[rt] = fresh("new-access", "new-refresh")
+  out["run"] = run(home)
+  after = creds(home)
+  login = after["claudeAiOauth"]
+  out["file"] = {
+    "access": login["accessToken"] == "new-access", "refresh": login["refreshToken"] == "new-refresh",
+    "expiresInFuture": login["expiresAt"] > now + 7 * HOUR, "refreshExpiresInFuture": login["refreshTokenExpiresAt"] > now + 29 * 24 * HOUR,
+    "scopes": login["scopes"], "kept": [login["subscriptionType"], login["rateLimitTier"], login["clientId"]],
+    "otherKeys": {k: after[k] for k in OTHER} == OTHER, "mode": stat.S_IMODE((home / ".credentials.json").stat().st_mode),
+    "leftovers": leftovers(home), "legacyLockLeft": pathlib.Path(str(home) + ".lock").exists(),
+  }
+  out["usageBearer"] = usage_requests
+
+elif scenario == "raced_busy":
+  # The CLI holds the lock; by the time it lets go it has saved a fresh login.
+  lock = home / collector.REFRESH_LOCK_NAME
+  lock.mkdir()
+  def finish():
+    peer = creds(home)
+    peer["claudeAiOauth"].update(accessToken="peer-access", refreshToken="peer-refresh", expiresAt=now + 8 * HOUR)
+    (home / ".credentials.json").write_text(json.dumps(peer), encoding="utf-8")
+    lock.rmdir()
+  collector.lock_sleep = finish
+  out["run"] = run(home)
+  out["usageBearer"] = usage_requests
+  out["refresh"] = creds(home)["claudeAiOauth"]["refreshToken"] == "peer-refresh"
+
+elif scenario == "raced_unseen":
+  # Nothing contends, but another process saved a login after this one looked.
+  acquire = collector.DirLock.acquire
+  def acquire_after_peer(self):
+    if self.path.name == collector.REFRESH_LOCK_NAME and not getattr(acquire_after_peer, "done", False):
+      acquire_after_peer.done = True
+      peer = creds(home)
+      peer["claudeAiOauth"].update(accessToken="peer-access", refreshToken="peer-refresh", expiresAt=now + 8 * HOUR)
+      (home / ".credentials.json").write_text(json.dumps(peer), encoding="utf-8")
+    return acquire(self)
+  collector.DirLock.acquire = acquire_after_peer
+  out["run"] = run(home)
+  out["usageBearer"] = usage_requests
+  out["refresh"] = creds(home)["claudeAiOauth"]["refreshToken"] == "peer-refresh"
+
+elif scenario in ("rejected_400", "rejected_401"):
+  answers["old-refresh"] = int(scenario[-3:])
+  out["run"] = run(home)
+  out["again"] = run(home)
+  out["forced"] = run(home, force=True)
+  out["unchanged"] = digest(home) == before
+  out["replacesBefore"] = list(replaces)
+  # A new sign-in replaces the refresh token, and is tried again.
+  home2 = plant("b", refresh="relogin-refresh")
+  answers["relogin-refresh"] = fresh("relogin-access", "relogin-refresh-2")
+  out["relogin"] = run(home2)
+
+elif scenario in ("server_error", "transport_error"):
+  answers["old-refresh"] = 503 if scenario == "server_error" else OSError("no route to host")
+  out["run"] = run(home)
+  out["requestsAfterFirst"] = len(token_requests)
+  out["again"] = run(home)
+  out["requestsAfterBackoff"] = len(token_requests)
+  out["forced"] = run(home, force=True)
+  out["unchanged"] = digest(home) == before
+  out["leftovers"] = leftovers(home)
+
+elif scenario == "refresh_expired":
+  home = plant("e", refresh_expires=now - HOUR)
+  before = digest(home)
+  out["run"] = run(home)
+  out["unchanged"] = digest(home) == before
+
+elif scenario == "two_homes":
+  a, b = plant("one", refresh="refresh-one"), plant("two", refresh="refresh-two")
+  answers["refresh-one"] = fresh("access-one", "refresh-one-next")
+  answers["refresh-two"] = fresh("access-two", "refresh-two-next")
+  accounts = [{"id": "one", "home": str(a), "active": True}, {"id": "two", "home": str(b), "active": False}]
+  out["accounts"] = [collector.account_limits(account, False)["usageStatusText"] for account in accounts]
+  out["tokens"] = [[creds(h)["claudeAiOauth"][k] for k in ("accessToken", "refreshToken")] for h in (a, b)]
+  out["usageBearer"] = sorted(usage_requests)
+
+out["tokenRequests"] = [
+  {k: v for k, v in r.items() if k != "refresh"} | {"refreshMatches": r["refresh"] in ("old-refresh", "refresh-one", "refresh-two", "relogin-refresh")}
+  for r in token_requests
+]
+out["replaces"] = replaces
+print(json.dumps(out))
+PY
+}
+
+# A lapsed access token is refreshed with the saved refresh token, the way the
+# CLI does it: a JSON POST to the OAuth token endpoint with the CLI's client id
+# and the login's own scopes.
+refreshed=$(refresh_run refreshed)
+[[ $(jq -c '[.tokenRequests[] | [.method, .type, .grant, .client, .scope, .refreshMatches]]' <<<"$refreshed") == '[["POST","application/json","refresh_token","custom-client","user:inference user:profile",true]]' ]] ||
+  fail "Claude collector refreshes a lapsed token with one JSON refresh_token request" "$refreshed"
+[[ $(jq -r '.run.status' <<<"$refreshed") == "" && $(jq -r '.run.live' <<<"$refreshed") == "true" && $(jq -c '.run.percents' <<<"$refreshed") == "[0.44]" ]] ||
+  fail "Claude collector goes on to read the limits after refreshing" "$refreshed"
+[[ $(jq -c '.usageBearer' <<<"$refreshed") == '["Bearer new-access"]' ]] ||
+  fail "Claude collector asks for the limits with the refreshed token" "$refreshed"
+pass "Claude collector refreshes a lapsed access token and reads the limits with it"
+
+# The new tokens and expiries land in the file; everything else in it stays,
+# at the same permissions, swapped in whole from beside it under the CLI's
+# storage lock.
+[[ $(jq -c '.file | [.access, .refresh, .expiresInFuture, .refreshExpiresInFuture]' <<<"$refreshed") == "[true,true,true,true]" ]] ||
+  fail "Claude collector saves the refreshed tokens and their expiries" "$refreshed"
+[[ $(jq -c '.file | [.kept, .otherKeys, .scopes]' <<<"$refreshed") == '[["max","default_claude_max_5x","custom-client"],true,["user:inference","user:profile","user:sessions:claude_code"]]' ]] ||
+  fail "Claude collector keeps every other field of the credential file" "$refreshed"
+[[ $(jq -r '.file.mode' <<<"$refreshed") == "384" ]] ||
+  fail "Claude collector keeps the credential file private (0600)" "$refreshed"
+[[ $(jq -c '.replaces' <<<"$refreshed") == '[{"sameDirectory":true,"mode":384,"complete":true,"lockHeld":true}]' ]] ||
+  fail "Claude collector writes the credential file atomically from a private temp file under the storage lock" "$refreshed"
+[[ $(jq -c '.file.leftovers' <<<"$refreshed") == "[]" && $(jq -r '.file.legacyLockLeft' <<<"$refreshed") == "false" ]] ||
+  fail "Claude collector leaves no temp file or lock behind" "$refreshed"
+pass "Claude collector writes the refreshed login atomically and keeps the rest of the file"
+
+# An access token about to lapse is refreshed too, as the CLI does within five
+# minutes of expiry, and a lock left by a dead holder does not block it.
+near=$(refresh_run near_expiry)
+[[ $(jq -r '.file.access' <<<"$near") == "true" && $(jq -r '.tokenRequests | length' <<<"$near") == "1" ]] ||
+  fail "Claude collector refreshes an access token about to lapse" "$near"
+stale_lock=$(refresh_run stale_lock)
+[[ $(jq -r '.file.access' <<<"$stale_lock") == "true" && $(jq -c '.file.leftovers' <<<"$stale_lock") == "[]" ]] ||
+  fail "Claude collector clears a stale refresh lock and refreshes" "$stale_lock"
+pass "Claude collector refreshes shortly before expiry and past a stale lock"
+
+# Refresh tokens rotate, so spending the old one twice signs the account out.
+# Another process that refreshed first (before we locked, or while we waited
+# for its lock) is adopted after re-reading the file, with no second request.
+for scenario in raced_busy raced_unseen; do
+  raced=$(refresh_run "$scenario")
+  [[ $(jq -r '.tokenRequests | length' <<<"$raced") == "0" ]] ||
+    fail "Claude collector does not refresh again after another process did ($scenario)" "$raced"
+  [[ $(jq -c '.usageBearer' <<<"$raced") == '["Bearer peer-access"]' && $(jq -r '.refresh' <<<"$raced") == "true" && $(jq -c '.replaces' <<<"$raced") == "[]" ]] ||
+    fail "Claude collector adopts the login another process saved ($scenario)" "$raced"
+done
+pass "Claude collector re-reads the credentials under the lock and adopts a refresh another process made"
+
+# A refresh token the server refuses (invalid_grant, or any 401) is a real
+# sign-out. The file is not touched, the request is not repeated for the same
+# token, and a new sign-in is tried again.
+for scenario in rejected_400 rejected_401; do
+  rejected=$(refresh_run "$scenario")
+  [[ $(jq -r '.run.status' <<<"$rejected") == "Sign-in expired" && $(jq -r '.run.help' <<<"$rejected") == *"claude auth login"* ]] ||
+    fail "Claude collector reports a refused refresh token as an expired sign-in ($scenario)" "$rejected"
+  [[ $(jq -r '.unchanged' <<<"$rejected") == "true" && $(jq -c '.replacesBefore' <<<"$rejected") == "[]" ]] ||
+    fail "Claude collector leaves the credential file alone after a refused refresh ($scenario)" "$rejected"
+  [[ $(jq -r '[.again.status, .forced.status] | unique | .[]' <<<"$rejected") == "Sign-in expired" ]] ||
+    fail "Claude collector keeps reporting the expired sign-in ($scenario)" "$rejected"
+  [[ $(jq -r '.tokenRequests | map(select(.refreshMatches)) | length' <<<"$rejected") == "2" && $(jq -r '.relogin.live' <<<"$rejected") == "true" ]] ||
+    fail "Claude collector does not retry a refused token but tries a new sign-in ($scenario)" "$rejected"
+done
+pass "Claude collector reports a refused refresh token as an expired sign-in and stops asking"
+
+# A server or network failure may pass: the panel stays paused on the last
+# numbers, the file is untouched, and the next panel refreshes inside the
+# backoff do not ask again (only --force does).
+for scenario in server_error transport_error; do
+  failed=$(refresh_run "$scenario")
+  [[ $(jq -r '.run.status' <<<"$failed") == "Limits paused" && $(jq -r '.run.help' <<<"$failed") == *"couldn't refresh it just now"* ]] ||
+    fail "Claude collector pauses on a transient refresh failure ($scenario)" "$failed"
+  [[ $(jq -r '.unchanged' <<<"$failed") == "true" && $(jq -c '.leftovers' <<<"$failed") == "[]" && $(jq -c '.replaces' <<<"$failed") == "[]" ]] ||
+    fail "Claude collector leaves the credential file alone after a transient failure ($scenario)" "$failed"
+  [[ $(jq -c '[.requestsAfterFirst, .requestsAfterBackoff, (.tokenRequests | length)]' <<<"$failed") == "[1,1,2]" && $(jq -r '.again.status' <<<"$failed") == "Limits paused" ]] ||
+    fail "Claude collector backs off after a transient refresh failure ($scenario)" "$failed"
+done
+pass "Claude collector pauses without touching the file on a transient failure and backs off"
+
+# A refresh token past its own expiry cannot work, so nothing is requested.
+dead=$(refresh_run refresh_expired)
+[[ $(jq -r '.tokenRequests | length' <<<"$dead") == "0" && $(jq -r '.run.status' <<<"$dead") == "Sign-in expired" && $(jq -r '.unchanged' <<<"$dead") == "true" ]] ||
+  fail "Claude collector makes no request with an expired refresh token" "$dead"
+pass "Claude collector makes no request with an expired refresh token"
+
+# Every registered account refreshes in its own home, under its own locks.
+homes=$(refresh_run two_homes)
+[[ $(jq -c '.tokens' <<<"$homes") == '[["access-one","refresh-one-next"],["access-two","refresh-two-next"]]' && $(jq -c '.usageBearer' <<<"$homes") == '["Bearer access-one","Bearer access-two"]' ]] ||
+  fail "Claude collector refreshes each account's own login" "$homes"
+pass "Claude collector refreshes each account's own login"
 
 # A signed-out machine says so, and still shows what it last knew.
 signed_out=$(collect_limits "" 0 0 "$cache")

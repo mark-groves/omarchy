@@ -20,6 +20,7 @@ import fcntl
 import hashlib
 import json
 import os
+import random
 import re
 import sqlite3
 import sys
@@ -39,6 +40,49 @@ PROBE_MIN_INTERVAL_SECONDS = 15
 # numbers this recent still describes the account; only older ones are
 # reported as stale.
 CURRENT_ENOUGH_SECONDS = 900
+
+# The refresh contract of the Claude Code CLI, read out of its own bundle
+# (2.1.301: the OAuth config object, the refresh function and the credential
+# writer next to it), so this collector mints tokens exactly as the CLI does.
+#   POST TOKEN_URL, Content-Type: application/json
+#     {"grant_type":"refresh_token","refresh_token":...,"client_id":...,"scope":"<space-separated>"}
+#   200 -> {access_token, refresh_token (rotates; the CLI keeps the old one if
+#     absent), expires_in (seconds), refresh_token_expires_in (seconds,
+#     optional), scope (space-separated), account{}, organization{}}
+#   400/401 {"error":"invalid_grant"} (or {"error":{"type":...}}) -> the
+#     refresh token is dead and only a new login helps; anything else is
+#     transient.
+#   .credentials.json -> claudeAiOauth{accessToken, refreshToken, expiresAt (ms),
+#     refreshTokenExpiresAt (ms), scopes[], subscriptionType, rateLimitTier,
+#     clientId?}; a refresh replaces the first five and keeps the rest.
+# The CLI refreshes once the access token is within five minutes of expiry.
+TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+DEFAULT_SCOPES = [
+  "user:profile", "user:inference", "user:sessions:claude_code",
+  "user:mcp_servers", "user:file_upload", "user:plugins",
+]
+REFRESH_LEEWAY_MS = 5 * 60 * 1000
+REFRESH_TIMEOUT_SECONDS = 15
+REFRESH_USER_AGENT = "omarchy-agent-usage"
+# A refresh that failed for a reason that may pass (no network, a 5xx) is not
+# retried on every panel refresh; --force skips this wait.
+REFRESH_RETRY_SECONDS = 300
+
+# The CLI serializes refreshes and credential writes with proper-lockfile
+# directory locks, and this collector takes the same ones so the two never
+# race: a rotated refresh token spent twice signs the account out.
+#   <home>/.oauth_refresh.lock   held across the whole refresh (stale 60s)
+#   <home>.lock                  the same, for CLIs before that lock (stale 60s)
+#   <home>/.storage-write.lock   held while the credential file is rewritten (stale 15s)
+REFRESH_LOCK_NAME = ".oauth_refresh.lock"
+REFRESH_LOCK_STALE_SECONDS = 60
+STORAGE_LOCK_NAME = ".storage-write.lock"
+STORAGE_LOCK_STALE_SECONDS = 15
+# Like the CLI, a busy refresh lock is waited for a few seconds (the holder is
+# usually a CLI finishing the very refresh we wanted).
+REFRESH_LOCK_ATTEMPTS = 4
+STORAGE_LOCK_ATTEMPTS = 10
 
 
 def config_dir() -> Path:
@@ -1057,7 +1101,352 @@ def usable_cached_limits(cached: dict[str, Any]) -> list[dict[str, Any]]:
   ]
 
 
-def collect_limits(access_token: str, expires_at_ms: int, refresh_expires_at_ms: int, force: bool, cache_name: str = "claude-limits.json") -> dict[str, Any]:
+# ------------------------------------------------------------ token refresh
+#
+# The Claude desktop app keeps its own sign-in and never rewrites the CLI's
+# credential file, so a machine used through the app finds the saved access
+# token lapsed (it lives about eight hours) while the refresh token behind it
+# is good for weeks. When that happens the collector mints a new access token
+# itself and writes the result back where the CLI will find it. Nothing here
+# ever prints or logs a token.
+
+
+def now_ms() -> int:
+  return round(time.time() * 1000)
+
+
+def load_credentials(home: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+  """The credential file, its claudeAiOauth login, and the file's raw text."""
+  try:
+    raw = (home / ".credentials.json").read_text(encoding="utf-8")
+    data = json.loads(raw)
+  except Exception:
+    return None, None, ""
+  login = data.get("claudeAiOauth") if isinstance(data, dict) else None
+  return (data, login, raw) if isinstance(login, dict) else (None, None, "")
+
+
+def access_token_due(login: dict[str, Any]) -> bool:
+  expires_at = number(login.get("expiresAt"))
+  return expires_at > 0 and expires_at <= now_ms() + REFRESH_LEEWAY_MS
+
+
+# 0 means the file does not say (the server only sometimes states it), and
+# then the server decides.
+def refresh_token_dead(login: dict[str, Any]) -> bool:
+  expires_at = number(login.get("refreshTokenExpiresAt"))
+  return expires_at > 0 and expires_at <= now_ms()
+
+
+def token_digest(token: str) -> str:
+  return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+class DirLock:
+  """proper-lockfile's lock, which is what the CLI uses: a directory made
+  atomically with mkdir, stale once its mtime is older than `stale` seconds."""
+
+  def __init__(self, path: Path, stale: float) -> None:
+    self.path = path
+    self.stale = stale
+    self.held = False
+
+  def acquire(self) -> bool:
+    """True when taken, False when someone else holds it. Any other failure
+    (no such directory, no permission) raises OSError."""
+    for _ in range(2):
+      try:
+        os.mkdir(self.path)
+        self.held = True
+        return True
+      except FileExistsError:
+        pass
+      try:
+        age = time.time() - self.path.stat().st_mtime
+      except FileNotFoundError:
+        continue
+      if age <= self.stale:
+        return False
+      # Left behind by a holder that died; clear it and take it.
+      try:
+        os.rmdir(self.path)
+      except FileNotFoundError:
+        pass
+      except OSError:
+        return False
+    return False
+
+  def release(self) -> None:
+    if self.held:
+      self.held = False
+      try:
+        os.rmdir(self.path)
+      except OSError:
+        pass
+
+
+def lock_sleep() -> None:
+  time.sleep(1 + random.random())
+
+
+def try_refresh_locks(home: Path) -> list[DirLock] | None:
+  """Both of the CLI's refresh locks, or None while someone else holds one."""
+  current = DirLock(home / REFRESH_LOCK_NAME, REFRESH_LOCK_STALE_SECONDS)
+  if not current.acquire():
+    return None
+  legacy = DirLock(Path(str(home) + ".lock"), REFRESH_LOCK_STALE_SECONDS)
+  try:
+    if not legacy.acquire():
+      current.release()
+      return None
+  except OSError:
+    # The legacy lock lives beside the config directory, which may not be
+    # writable; the CLI carries on without it too.
+    pass
+  return [current, legacy]
+
+
+def atomic_write_text(target: Path, text: str, mode: int) -> None:
+  """Replace `target` with `text` in one step, from a temp file beside it with
+  the target's permissions and owner, so a reader sees the old file or the new
+  one and never half of either."""
+  target = Path(os.path.realpath(target))
+  try:
+    stat = target.stat()
+    mode, owner = stat.st_mode & 0o777, (stat.st_uid, stat.st_gid)
+  except OSError:
+    owner = None
+  handle_fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
+  try:
+    with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+      os.fchmod(handle.fileno(), mode)
+      if owner is not None and owner != (os.getuid(), os.getgid()):
+        try:
+          os.fchown(handle.fileno(), *owner)
+        except OSError:
+          pass
+      handle.write(text)
+      handle.flush()
+      os.fsync(handle.fileno())
+    os.replace(tmp_name, target)
+  except BaseException:
+    Path(tmp_name).unlink(missing_ok=True)
+    raise
+  try:
+    directory = os.open(target.parent, os.O_RDONLY)
+    try:
+      os.fsync(directory)
+    finally:
+      os.close(directory)
+  except OSError:
+    pass
+
+
+class RefreshRejected(Exception):
+  """The server refused the refresh token itself."""
+
+
+class RefreshUnavailable(Exception):
+  """The refresh did not happen, and may work later."""
+
+
+def post_refresh(login: dict[str, Any], refresh_token: str) -> dict[str, Any]:
+  scopes = login.get("scopes")
+  scopes = [str(s) for s in scopes] if isinstance(scopes, list) and scopes else DEFAULT_SCOPES
+  body = {
+    "grant_type": "refresh_token",
+    "refresh_token": refresh_token,
+    "client_id": str(login.get("clientId") or CLIENT_ID),
+    "scope": " ".join(scopes),
+  }
+  request = urllib.request.Request(
+    TOKEN_URL,
+    data=json.dumps(body).encode("utf-8"),
+    headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": REFRESH_USER_AGENT},
+    method="POST",
+  )
+  try:
+    with urllib.request.urlopen(request, timeout=REFRESH_TIMEOUT_SECONDS) as response:
+      payload = json.loads(response.read().decode("utf-8", errors="replace"))
+  except urllib.error.HTTPError as error:
+    code = ""
+    try:
+      detail = json.loads(error.read().decode("utf-8", errors="replace")).get("error")
+      code = str(detail.get("type") if isinstance(detail, dict) else detail or "")
+    except Exception:
+      pass
+    if error.code == 401 or (error.code == 400 and code == "invalid_grant"):
+      raise RefreshRejected(f"HTTP {error.code}") from None
+    raise RefreshUnavailable(f"HTTP {error.code}") from None
+  except Exception as error:
+    raise RefreshUnavailable(type(error).__name__) from None
+
+  if (
+    not isinstance(payload, dict)
+    or not isinstance(payload.get("access_token"), str)
+    or not payload["access_token"]
+    or number(payload.get("expires_in")) <= 0
+  ):
+    raise RefreshUnavailable("malformed answer")
+  return payload
+
+
+def merge_refreshed(login: dict[str, Any], payload: dict[str, Any], refresh_token: str) -> dict[str, Any]:
+  """The login after a refresh: what the CLI replaces, replaced; everything
+  else (subscription type, rate-limit tier, client id, unknown fields) kept."""
+  merged = dict(login)
+  merged["accessToken"] = payload["access_token"]
+  merged["refreshToken"] = str(payload.get("refresh_token") or refresh_token)
+  merged["expiresAt"] = now_ms() + number(payload["expires_in"]) * 1000
+  if number(payload.get("refresh_token_expires_in")) > 0:
+    merged["refreshTokenExpiresAt"] = now_ms() + number(payload["refresh_token_expires_in"]) * 1000
+  scopes = [s for s in str(payload.get("scope") or "").split(" ") if s]
+  if scopes:
+    merged["scopes"] = scopes
+  return merged
+
+
+def store_refreshed(home: Path, posted_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+  """Write the refreshed login into the credential file, under the CLI's
+  storage lock, and return the login now on disk. The file is read again
+  first: a login someone else saved since is theirs to keep."""
+  storage = DirLock(home / STORAGE_LOCK_NAME, STORAGE_LOCK_STALE_SECONDS)
+  # The refresh token was spent by the request, so the write goes ahead even
+  # if the lock stays busy; the replace is atomic either way.
+  for attempt in range(STORAGE_LOCK_ATTEMPTS):
+    try:
+      if storage.acquire():
+        break
+    except OSError:
+      break
+    if attempt + 1 < STORAGE_LOCK_ATTEMPTS:
+      time.sleep(0.1 + 0.9 * random.random())
+  try:
+    last_error: OSError | None = None
+    for attempt in range(3):
+      data, login, raw = load_credentials(home)
+      if login is None or data is None:
+        raise last_error or OSError("credential file unreadable")
+      if str(login.get("refreshToken") or "") != posted_token:
+        return login
+      data = dict(data, claudeAiOauth=merge_refreshed(login, payload, posted_token))
+      indent = 2 if "\n" in raw.strip() else None
+      text = json.dumps(data, indent=indent, ensure_ascii=False, separators=None if indent else (",", ":"))
+      try:
+        atomic_write_text(home / ".credentials.json", text + ("\n" if raw.endswith("\n") else ""), 0o600)
+        return data["claudeAiOauth"]
+      except OSError as error:
+        last_error = error
+        time.sleep(0.1 * (attempt + 1))
+    raise last_error or OSError("credential file not written")
+  finally:
+    storage.release()
+
+
+def refresh_marker_path(marker_name: str) -> Path:
+  return cache_root() / marker_name
+
+
+def refresh_outcome(status: str, login: dict[str, Any] | None = None) -> dict[str, Any]:
+  outcome: dict[str, Any] = {"status": status}
+  if login is not None:
+    outcome.update(
+      accessToken=str(login.get("accessToken") or ""),
+      expiresAt=number(login.get("expiresAt")),
+      refreshExpiresAt=number(login.get("refreshTokenExpiresAt")),
+    )
+  return outcome
+
+
+def refresh_login(home: Path, marker_name: str, force: bool) -> dict[str, Any]:
+  """Mint a new access token from the saved refresh token. The status says
+  how it went: "refreshed" (new token written), "current" (someone else
+  already did it), "rejected" (the refresh token is dead; a person must sign in
+  again), "unavailable" (could not be done now, try later), or "skipped" (nothing
+  to refresh with)."""
+  _, login, _ = load_credentials(home)
+  if login is None:
+    return refresh_outcome("skipped")
+  refresh_token = str(login.get("refreshToken") or "")
+  if refresh_token == "" or refresh_token_dead(login):
+    return refresh_outcome("skipped")
+
+  # A refresh token the server refused fails the same way every time, so it is
+  # not asked again until a new sign-in replaces it. A transient failure waits
+  # out its backoff, unless a person pressed refresh.
+  marker_file = refresh_marker_path(marker_name)
+  marker = read_json(marker_file) or {}
+  if marker.get("refreshToken") == token_digest(refresh_token):
+    if marker.get("kind") == "rejected":
+      return refresh_outcome("rejected")
+    age = time.time() - number(marker.get("atMs")) / 1000
+    if not force and 0 <= age < REFRESH_RETRY_SECONDS:
+      return refresh_outcome("unavailable")
+
+  held: list[DirLock] | None = None
+  for attempt in range(REFRESH_LOCK_ATTEMPTS):
+    try:
+      held = try_refresh_locks(home)
+    except OSError as error:
+      print(f"Could not lock Claude sign-in refresh in {home}: {error.strerror or type(error).__name__}", file=sys.stderr)
+      return refresh_outcome("unavailable")
+    if held is not None:
+      break
+    # Whoever holds the lock is most likely refreshing this very login.
+    _, login, _ = load_credentials(home)
+    if login is not None and not access_token_due(login):
+      return refresh_outcome("current", login)
+    if attempt + 1 < REFRESH_LOCK_ATTEMPTS:
+      lock_sleep()
+  if held is None:
+    return refresh_outcome("unavailable")
+
+  try:
+    # Refresh tokens rotate, so spending an old one twice signs the account
+    # out. Whatever was decided before the lock was taken is decided again.
+    _, login, _ = load_credentials(home)
+    if login is None:
+      return refresh_outcome("skipped")
+    if not access_token_due(login):
+      return refresh_outcome("current", login)
+    refresh_token = str(login.get("refreshToken") or "")
+    if refresh_token == "" or refresh_token_dead(login):
+      return refresh_outcome("skipped")
+
+    try:
+      payload = post_refresh(login, refresh_token)
+    except (RefreshRejected, RefreshUnavailable) as failure:
+      # Another process may have saved a new login while this request ran.
+      _, latest, _ = load_credentials(home)
+      if latest is not None and str(latest.get("refreshToken") or "") != refresh_token and not access_token_due(latest):
+        return refresh_outcome("current", latest)
+      rejected = isinstance(failure, RefreshRejected)
+      try:
+        write_json(marker_file, {
+          "kind": "rejected" if rejected else "unavailable",
+          "refreshToken": token_digest(refresh_token),
+          "atMs": now_ms(),
+        })
+      except Exception:
+        pass
+      print(f"Claude sign-in refresh failed ({failure})", file=sys.stderr)
+      return refresh_outcome("rejected" if rejected else "unavailable")
+
+    try:
+      stored = store_refreshed(home, refresh_token, payload)
+    except OSError as error:
+      # The new tokens exist only in memory now. Use them for this probe; the
+      # next run finds the old, spent refresh token and asks for a sign-in.
+      print(f"Could not save the refreshed Claude sign-in in {home}: {error.strerror or type(error).__name__}", file=sys.stderr)
+      stored = merge_refreshed(login, payload, refresh_token)
+    refresh_marker_path(marker_name).unlink(missing_ok=True)
+    return refresh_outcome("refreshed", stored)
+  finally:
+    for lock in reversed(held):
+      lock.release()
+
+
+def collect_limits(access_token: str, expires_at_ms: int, refresh_expires_at_ms: int, force: bool, cache_name: str = "claude-limits.json", home: Path | None = None) -> dict[str, Any]:
   # `live` says the numbers came from Anthropic just now (or within the reuse
   # window) rather than from a cache kept past a failed or impossible probe.
   result = {"limits": [], "usageStatusText": "", "authHelpText": AUTH_HELP, "live": False}
@@ -1075,35 +1464,48 @@ def collect_limits(access_token: str, expires_at_ms: int, refresh_expires_at_ms:
   fallback = usable_cached_limits(cached)
   result["fetchedAtMs"] = number(cached.get("fetchedAtMs"))
 
-  # Probing needs a live token and only the Claude Code CLI can mint one: it
-  # refreshes the credential file when it runs, so a machine left alone long
-  # enough finds the saved token lapsed. Say so — an empty limits list with
-  # nothing else set hides the whole section and explains nothing — and keep
-  # showing the last numbers, resetting elapsed windows to zero.
   if access_token == "":
     result["limits"] = fallback
     result["usageStatusText"] = "Waiting for auth"
     return result
+
+  # Probing needs a live token. The CLI mints one whenever it runs, but a
+  # machine used through the Claude desktop app never runs it, so a token that
+  # has lapsed (or is about to) is refreshed here from the refresh token. Only
+  # a home whose credentials are known can be refreshed.
+  refresh = None
+  if home is not None and 0 < expires_at_ms <= (time.time() + REFRESH_LEEWAY_MS / 1000) * 1000:
+    refresh = refresh_login(home, cache_name.replace("claude-limits", "claude-refresh", 1), force)
+    if refresh["status"] in ("refreshed", "current") and refresh["accessToken"]:
+      access_token = refresh["accessToken"]
+      expires_at_ms = refresh["expiresAt"]
+      refresh_expires_at_ms = refresh["refreshExpiresAt"]
+
   if expires_at_ms > 0 and expires_at_ms <= time.time() * 1000:
     result["limits"] = fallback
-    # A lapsed access token is routine, not a sign-out: it lives about eight
-    # hours, and the CLI mints a new one from the refresh token the next time
-    # it runs. Only a lapsed *refresh* token is a sign-in a person must redo,
-    # and saying so either way sends people to `claude auth login` nightly --
-    # which does not restore anything the CLI would not have restored itself.
-    if refresh_expires_at_ms > time.time() * 1000:
+    # A lapsed access token alone is routine, not a sign-out: it lives about
+    # eight hours and the refresh token behind it is good for weeks. Only a
+    # refresh token that is itself spent is a sign-in a person must redo.
+    alive = refresh_expires_at_ms > time.time() * 1000
+    if refresh is not None and refresh["status"] == "unavailable":
+      alive = True
+    elif refresh is not None and refresh["status"] == "rejected":
+      alive = False
+    if alive:
+      # Refreshing here failed for a reason that may pass.
       result["usageStatusText"] = "Limits paused"
       result["authHelpText"] = (
         "Claude Code's access token has lapsed"
         + (" — showing the last known limits." if fallback else ".")
-        + " Start Claude Code to refresh it; signing in again is not needed."
+        + " Omarchy couldn't refresh it just now and will try again shortly;"
+        + " if that keeps failing, run `claude` in a terminal."
       )
       return result
     result["usageStatusText"] = "Sign-in expired"
     result["authHelpText"] = (
       "Claude Code's saved sign-in expired"
       + (" — showing the last known limits." if fallback else ".")
-      + " Start Claude Code, or run `claude auth login`, to refresh it."
+      + " Run `claude auth login` to sign in again."
     )
     return result
 
@@ -1192,7 +1594,7 @@ def account_limits(account: dict[str, Any], force: bool) -> dict[str, Any]:
     cache_name = "claude-limits.json"
   else:
     cache_name = f"claude-limits-{key}.json"
-  limits = collect_limits(access_token, expires_at_ms, refresh_expires_at_ms, force, cache_name)
+  limits = collect_limits(access_token, expires_at_ms, refresh_expires_at_ms, force, cache_name, home)
   return {
     "id": account["id"],
     "label": str(account.get("label") or account["id"]),
@@ -1253,7 +1655,7 @@ def main() -> int:
     stale, fetched_at = current["stale"], current["fetchedAt"]
   else:
     access_token, expires_at_ms, refresh_expires_at_ms, plan = oauth_login(claude_dir)
-    limits = collect_limits(access_token, expires_at_ms, refresh_expires_at_ms, args.force)
+    limits = collect_limits(access_token, expires_at_ms, refresh_expires_at_ms, args.force, home=claude_dir)
     stale, fetched_at = not limits["live"], limits["fetchedAtMs"]
 
   record = {
