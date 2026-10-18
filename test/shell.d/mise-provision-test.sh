@@ -18,31 +18,10 @@ chmod +x "$mock_bin/mise"
 
 source "$ROOT/install/user/mise.sh"
 for agent in kimi muse; do
-  [[ -x $HOME/.local/bin/$agent && ! -L $HOME/.local/bin/$agent ]] ||
-    fail "provisioning creates the missing $agent wrapper"
-  cp "$HOME/.local/bin/$agent" "$test_tmp/$agent-wrapper"
+  [[ ! -e $HOME/.local/bin/$agent ]] || fail "provisioning must not create a handwritten $agent wrapper"
 done
 [[ -e $HOME/.local/bin/cursor-agent ]] && fail "provisioning does not install Cursor through mise"
 mapfile -d '' -t args <"$OMARCHY_TEST_MISE_LOG"
-[[ ${args[*]} == "settings set upgrade.auto_prune false reshim" ]] ||
-  fail "provisioning creates lazy wrappers without installing packages"
-pass "provisioning creates lazy Kimi and Muse wrappers"
-
-for agent in kimi muse; do
-  launcher="$HOME/.local/bin/$agent"
-  for kind in script binary symlink; do
-    rm -f "$launcher"
-    case $kind in
-      script) printf '#!/bin/bash\necho user-managed command\n' >"$launcher" ;;
-      binary) cp /usr/bin/true "$launcher" ;;
-      symlink) ln -s /usr/bin/true "$launcher" ;;
-    esac
-    [[ $kind == "symlink" ]] || chmod +x "$launcher"
-    for attempt in 1 2; do
-      source "$ROOT/install/user/mise.sh"
-      [[ -x $launcher && ! -L $launcher ]] || fail "provisioning replaces the $agent $kind with a wrapper"
-      cmp -s "$launcher" "$test_tmp/$agent-wrapper" || fail "provisioning restores the $agent wrapper"
-    done
-    pass "provisioning restores the $agent wrapper over a $kind on repeated runs"
-  done
-done
+[[ ${args[*]} == "settings set upgrade.auto_prune false reshim --system reshim" ]] ||
+  fail "provisioning builds the lazy shims without installing packages"
+pass "provisioning leaves lazy shims to mise and does not install Cursor"
