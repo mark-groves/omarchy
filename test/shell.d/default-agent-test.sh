@@ -1082,21 +1082,6 @@ mapfile -d '' -t launch_args <"$launch_log"
   fail "OpenClaw receives prompts through --message" "argv: ${launch_args[*]}"
 pass "OpenClaw receives prompts through --message"
 
-printf '%s\n' "copilot" >"$agent_file"
-: >"$launch_log"
-if OMARCHY_TEST_OPENCLAW_INSTALLED=false OMARCHY_TEST_OPENCLAW_INSTALL_FAIL=true \
-  omarchy-default-agent --install openclaw >"$test_tmp/openclaw-install-failure-output" 2>&1; then
-  fail "default agent rejects a failed OpenClaw installation"
-fi
-grep -F "Could not install OpenClaw" "$test_tmp/openclaw-install-failure-output" >/dev/null ||
-  fail "default agent reports a failed OpenClaw installation in the terminal"
-grep -F "mise" "$test_tmp/openclaw-install-failure-output" >/dev/null &&
-  fail "a failed OpenClaw installation blames its own installer, not mise"
-[[ $(omarchy-default-agent) == "copilot" ]] ||
-  fail "failed OpenClaw installation preserves the current default agent"
-[[ ! -s $launch_log ]] || fail "failed OpenClaw installation does not open an agent"
-pass "a failed OpenClaw installation blames its own installer, not mise"
-
 # With the package and no openclaw command, the launcher sets OpenClaw up, so
 # the agent hands over to it rather than calling OpenClaw missing.
 cat >"$mock_bin/omarchy-pkg-present" <<'SH'
@@ -1116,6 +1101,21 @@ if OMARCHY_TEST_MISSING_COMMAND=openclaw OMARCHY_TEST_PACKAGES= omarchy-agent >/
 fi
 [[ ! -s $launch_log ]] || fail "OpenClaw's agent without the package starts nothing"
 pass "OpenClaw's agent hands a missing command to its launcher only when the package is there"
+
+printf '%s\n' "copilot" >"$agent_file"
+: >"$launch_log"
+if OMARCHY_TEST_OPENCLAW_INSTALLED=false OMARCHY_TEST_OPENCLAW_INSTALL_FAIL=true \
+  omarchy-default-agent --install openclaw >"$test_tmp/openclaw-install-failure-output" 2>&1; then
+  fail "default agent rejects a failed OpenClaw installation"
+fi
+grep -F "Could not install OpenClaw" "$test_tmp/openclaw-install-failure-output" >/dev/null ||
+  fail "default agent reports a failed OpenClaw installation in the terminal"
+grep -F "mise" "$test_tmp/openclaw-install-failure-output" >/dev/null &&
+  fail "a failed OpenClaw installation blames its own installer, not mise"
+[[ $(omarchy-default-agent) == "copilot" ]] ||
+  fail "failed OpenClaw installation preserves the current default agent"
+[[ ! -s $launch_log ]] || fail "failed OpenClaw installation does not open an agent"
+pass "a failed OpenClaw installation blames its own installer, not mise"
 
 # Native lazy shims can precede ~/.local/bin. The agent launcher must still run
 # the official command when the default-agent selector recognized one.
