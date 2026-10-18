@@ -46,6 +46,11 @@ QtObject {
   // it can degrade on an older host.
   readonly property int opLevel: 3
 
+  // The quality level the face card last settled on (FaceChromeCanvas). It
+  // is a property of this machine and this plugin, so every surface starts
+  // from it and a new plugin starts again at full quality.
+  property int qualityLevel: 0
+
   property var api: null
   property string failure: ""
   property int revision: 0
@@ -55,6 +60,7 @@ QtObject {
   onSourceUrlChanged: {
     api = null
     failure = ""
+    qualityLevel = 0
     // Surfaces holding a result re-check on revision. A cleared source never
     // loads or rejects, so this is the only revision it will emit.
     revision++
@@ -131,7 +137,8 @@ QtObject {
       // this file, so it has no path to `root`, the FileView, or the registry.
       var factory = new Function(
         src + "\nreturn { frame: typeof frame === 'function' ? frame : null,"
-        + " holdMs: typeof holdMs === 'function' ? holdMs : null };")
+        + " holdMs: typeof holdMs === 'function' ? holdMs : null,"
+        + " scanMs: typeof scanMs === 'function' ? scanMs : null };")
       built = factory()
     } catch (e) {
       root.reject("did not evaluate: " + e)
@@ -168,6 +175,23 @@ QtObject {
       root.reject("threw while painting: " + e)
       return []
     }
+  }
+
+  // Optional: how much of the scanning sequence (typically its boot) a
+  // surface should have presented before it moves on to a result, so a fast
+  // match never cuts into a card that is still drawing itself on. Clamped like holdMs; a
+  // plugin without it gets no minimum.
+  function scanMs() {
+    if (!root.api || !root.api.scanMs) return 0
+    var ms = 0
+    try {
+      ms = Number(root.api.scanMs())
+    } catch (e) {
+      root.reject("threw while reporting scan timing: " + e)
+      return 0
+    }
+    if (!isFinite(ms) || ms <= 0) return 0
+    return Math.min(ms, 3000)
   }
 
   // How long the host holds a result before tearing the card down. Clamped:

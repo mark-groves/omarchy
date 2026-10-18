@@ -289,6 +289,7 @@
   "face.notRecognized": "Face not recognized",
   "face.orTypeYourPassword": "or type your password",
   "face.recognized": "Face recognized",
+  "face.requestHint": "Press Space or click the face to unlock with your face",
   "face.typeYourPassword": "Type your password",
   "imagePicker.deleteTheme": "Do you want to delete %1?",
   "lock.authenticationFailed": "Authentication failed (%1)",

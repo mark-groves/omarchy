@@ -18,6 +18,10 @@ Item {
   property int facePlaybackEpoch: 0
   property int lockPresentEpoch: 0
   property bool faceScanning: false
+  // The lock service decides whether the card belongs on screen; on request
+  // it stays hidden until the user asks.
+  property bool faceCardActive: true
+  property bool faceOnRequest: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
@@ -40,10 +44,17 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: (fingerprintConfigured || (faceConfigured && !faceCardPainting)) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
+  readonly property real fingerprintReserve: (fingerprintConfigured || faceIcon.visible) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
   // The card sits above the field so the mesh scan is large enough to read.
   // Without chrome the in-field glyph keeps the old 381×67 geometry.
-  readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready
+  readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready && faceCardActive
+  // The face button: shown while face can be asked for and is not running.
+  readonly property bool faceRequestAvailable: faceOnRequest && faceConfigured && !fingerprintConfigured
+    && !faceCardActive && inputEnabled && !authenticatingPassword
+  // Latched by the first frame the card puts on screen, so a card whose
+  // surface is not presenting yet never shows a stuck frame.
+  property bool faceCardRevealed: false
+  onFaceCardPaintingChanged: if (!faceCardPainting) faceCardRevealed = false
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -63,6 +74,9 @@ Item {
   signal clearFailureRequested()
   signal wakeRequested()
   signal faceResultPlayed()
+  signal faceRequested()
+  signal faceCancelRequested()
+  signal faceScanShown()
 
   function forcePasswordFocus() {
     passwordInput.forceActiveFocus()
@@ -173,12 +187,15 @@ Item {
       objectName: "faceCard"
       visible: root.faceCardPainting
       enabled: false
+      opacity: root.faceCardRevealed ? 1 : 0
+      Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
       spacing: Style.space(10)
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: inputField.top
       anchors.bottomMargin: Style.space(18)
 
       FaceChromeCanvas {
+        id: faceIndicator
         objectName: "faceCardIndicator"
         anchors.horizontalCenter: parent.horizontalCenter
         width: Style.space(FaceChrome.cardSide)
@@ -189,6 +206,9 @@ Item {
         presentEpoch: root.lockPresentEpoch
         active: !root.displaysBlank && (root.inputEnabled || root.faceScanning)
         onResultPlayed: root.faceResultPlayed()
+        onCyclePresentedChanged: if (cyclePresented && glassLit) root.faceCardRevealed = true
+        onGlassLitChanged: if (cyclePresented && glassLit) root.faceCardRevealed = true
+        onScanShown: root.faceScanShown()
         accent: Commons.Color.lock.borderActive
         foreground: Commons.Color.lock.text
         errorColor: Commons.Color.lock.textError
@@ -280,6 +300,15 @@ Item {
             event.accepted = true
             return
           }
+          // On request, Space or Enter on an empty field asks for face; a
+          // password cannot begin with a space while the button is offered.
+          if (root.faceRequestAvailable && passwordInput.text.length === 0
+              && (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+            root.faceRequested()
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Escape && root.faceOnRequest && root.faceCardActive) root.faceCancelRequested()
           if (event.key === Qt.Key_Escape || (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_U)) {
             root.passwordTextEdited("")
             event.accepted = true
@@ -325,18 +354,50 @@ Item {
       Text {
         id: faceIcon
         objectName: "faceIndicator"
+        textFormat: Text.PlainText
         anchors.right: parent.right
         anchors.rightMargin: inputField.borderRight + 18
         anchors.verticalCenter: parent.verticalCenter
-        visible: root.faceConfigured && !root.fingerprintConfigured && !root.faceCardPainting
-        text: "󰈈"
-        color: Commons.Color.lock.placeholder
+        // Without a card to paint, the glyph also stands in for a running scan.
+        visible: root.faceConfigured && !root.fingerprintConfigured
+          && (root.faceRequestAvailable || (root.faceCardActive && !root.faceCardPainting))
+        // md-face_recognition: a face in corner brackets, the face-ID mark.
+        text: String.fromCodePoint(0xF0C7B)
+        color: faceButton.containsMouse ? Commons.Color.lock.borderActive : Commons.Color.lock.placeholder
+
+        // The face button. Only on request: in automatic mode the glyph is
+        // a hint for a scan that is already running.
+        MouseArea {
+          id: faceButton
+          objectName: "faceButton"
+          anchors.fill: parent
+          anchors.margins: -8
+          enabled: root.faceRequestAvailable
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: { root.faceRequested(); root.forcePasswordFocus() }
+        }
         font.family: Style.font.family
         font.pixelSize: Math.round(root.fieldFontSize * 1.1)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
       }
 
+    }
+
+    Text {
+      objectName: "faceRequestHint"
+      textFormat: Text.PlainText
+      anchors.top: inputField.bottom
+      anchors.topMargin: 18
+      anchors.horizontalCenter: inputField.horizontalCenter
+      visible: root.faceRequestAvailable && passwordInput.text.length === 0 && !root.errorState
+      text: Commons.I18n.t("face.requestHint")
+      color: Commons.Color.lock.text
+      opacity: 0.44
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      horizontalAlignment: Text.AlignHCenter
     }
 
     // The crossed-out icon has no meaning to a user who has never seen it — it

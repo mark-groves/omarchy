@@ -70,6 +70,18 @@ Item {
   property bool missHold: false
   property bool resultHold: false
   property string faceState: "scanning"
+  // Howdy often matches within a second, before the card has shown its scan.
+  // The approval stands; the match card waits, display-only, until the scan
+  // has played (faceScanSeen) or faceMatchWait runs out.
+  property bool faceScanSeen: false
+  property bool facePendingMatch: false
+  // Whether the face card was what the user saw while the request was live.
+  // Only updated while the request is active, so it still holds the last live
+  // answer if the success path runs after the flow has ended and the
+  // presentation has fallen back to a password card.
+  property bool faceCardLive: false
+  onShowFaceChromeChanged: if (polkitAgent.isActive) faceCardLive = showFaceChrome && cardKind === "face" && !missHold
+  onCardKindChanged: if (polkitAgent.isActive) faceCardLive = showFaceChrome && cardKind === "face" && !missHold
   property int facePlaybackEpoch: 0
   readonly property bool showFaceChrome: root.slotPainting && (root.cardKind !== "password" || root.missHold || root.resultHold)
   readonly property bool showPasswordRow: root.cardKind === "password" && !root.missHold && !root.resultHold
@@ -154,23 +166,67 @@ Item {
     return true
   }
 
+  // True when the match card should wait for the scan to finish first.
+  // Called only for an approval that came in while the face card was live.
+  function deferFaceMatch() {
+    var ms = FaceChrome.ready ? FaceChrome.scanMs() : 0
+    if (root.faceScanSeen || ms <= 0) return false
+    root.facePendingMatch = true
+    // Keeps the dialog and its scanning card up while the scan finishes.
+    root.resultHold = true
+    faceMatchWait.interval = ms + 1500
+    faceMatchWait.restart()
+    return true
+  }
+
+  function playPendingMatch() {
+    if (!root.facePendingMatch) return
+    root.facePendingMatch = false
+    faceMatchWait.stop()
+    if (root.armFacePlayback("recognized")) return
+    // closing first: dialogVisible is isActive || closing || resultHold, and
+    // the request has already ended, so clearing the hold first hid the
+    // dialog for a moment before closing brought it back.
+    root.closing = true
+    root.resultHold = false
+    closeTimer.restart()
+  }
+
+  function noteFaceScanShown() {
+    root.faceScanSeen = true
+    root.playPendingMatch()
+  }
+
+  function clearPendingMatch() {
+    root.facePendingMatch = false
+    faceMatchWait.stop()
+  }
+
   function completeFacePlayback() {
     if (resultHold) {
+      // closing first, so the dialog stays up through the handover (see
+      // playPendingMatch).
+      closing = true
       resultHold = false
       missHold = false
-      closing = true
       closeTimer.restart()
       return
     }
     if (missHold) {
       missHold = false
       faceState = "scanning"
+      faceScanSeen = false
       Qt.callLater(refocus)
     }
   }
 
   function settleFacePlayback() {
     if (!resultHold && !missHold) return
+    // A match still waiting on the scan is not a hold the card is playing.
+    if (facePendingMatch) {
+      if (!FaceChrome.ready) playPendingMatch()
+      return
+    }
     var state = resultHold ? "recognized" : faceState
     var expected = PolkitModel.faceSlotResolved(presentation)
     if (FaceChrome.ready) {
@@ -218,6 +274,10 @@ Item {
     missHold = false
     resultHold = false
     faceState = "scanning"
+    faceScanSeen = false
+    faceCardLive = false
+    authSuccessHandled = false
+    clearPendingMatch()
     closing = false
     submitted = false
     passwordInput.text = ""
@@ -248,9 +308,10 @@ Item {
     var flow = polkitAgent.flow
     passwordInput.text = ""
     submitted = false
+    closing = true
     resultHold = false
     missHold = false
-    closing = true
+    clearPendingMatch()
     closeTimer.restart()
     if (flow) flow.cancelAuthenticationRequest()
   }
@@ -274,6 +335,7 @@ Item {
         root.resolvedUnderLock = true
         root.resultHold = false
         root.missHold = false
+        root.clearPendingMatch()
       }
       return
     }
@@ -281,6 +343,8 @@ Item {
     root.faceState = "scanning"
     root.missHold = false
     root.resultHold = false
+    root.faceScanSeen = false
+    root.clearPendingMatch()
     root.facePlaybackEpoch += 1
     // beginFlow's focus ran while this window was hidden. Ask again now
     // that the card is allowed to show, including a password row that
@@ -291,6 +355,15 @@ Item {
   Connections {
     target: FaceChrome
     function onRevisionChanged() { root.settleFacePlayback() }
+  }
+
+  // Bounds the wait for the scan in wall time, so a card that is not
+  // presenting never keeps an approved dialog up.
+  Timer {
+    id: faceMatchWait
+    interval: 4000
+    repeat: false
+    onTriggered: root.playPendingMatch()
   }
 
   Timer {
@@ -349,6 +422,32 @@ Item {
     }
   }
 
+  // Quickshell hands the result to polkit, which ends the flow and drops
+  // polkitAgent.flow, before it emits authenticationSucceeded, so that signal
+  // never reached this dialog and an approved request closed mid-scan with no
+  // match played. isSuccessful changes before the handover, while the flow is
+  // still ours; both lead here, once per request.
+  property bool authSuccessHandled: false
+  function handleAuthSucceeded() {
+    if (root.authSuccessHandled) return
+    root.authSuccessHandled = true
+    if (!PolkitModel.shouldArmFaceHold(root.sessionLocked)) {
+      root.resolvedUnderLock = true
+      root.resultHold = false
+      root.missHold = false
+      root.clearPendingMatch()
+      return
+    }
+    var faceLive = root.faceCardLive || PolkitModel.shouldHoldFaceSuccess(presentation)
+    root.faceCardLive = false
+    if (faceLive) {
+      if (root.deferFaceMatch()) return
+      if (root.armFacePlayback("recognized")) return
+    }
+    root.closing = true
+    closeTimer.restart()
+  }
+
   Connections {
     target: polkitAgent.flow
 
@@ -369,26 +468,21 @@ Item {
       root.triggerFailureFeedback()
     }
 
-    function onAuthenticationSucceeded() {
-      if (!PolkitModel.shouldArmFaceHold(root.sessionLocked)) {
-        root.resolvedUnderLock = true
-        root.resultHold = false
-        root.missHold = false
-        return
-      }
-      if (PolkitModel.shouldHoldFaceSuccess(presentation) && root.armFacePlayback("recognized")) return
-      root.closing = true
-      closeTimer.restart()
+    function onIsSuccessfulChanged() {
+      if (polkitAgent.flow && polkitAgent.flow.isSuccessful) root.handleAuthSucceeded()
     }
 
+    function onAuthenticationSucceeded() { root.handleAuthSucceeded() }
+
     function onAuthenticationRequestCancelled() {
+      if (!root.sessionLocked) root.closing = true
       root.resultHold = false
       root.missHold = false
+      root.clearPendingMatch()
       if (root.sessionLocked) {
         root.resolvedUnderLock = true
         return
       }
-      root.closing = true
       closeTimer.restart()
     }
   }
@@ -472,6 +566,7 @@ Item {
           playbackEpoch: root.facePlaybackEpoch
           active: root.cardVisible && parent.visible
           onResultPlayed: root.completeFacePlayback()
+          onScanShown: root.noteFaceScanShown()
           accent: root.accent
           foreground: root.foreground
           errorColor: Commons.Color.polkit.textError
