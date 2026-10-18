@@ -1,11 +1,12 @@
 name: Check pull request shape
 
-# Syncs, topics on quattro, and one-deep stacks are the three shapes an agent
-# can open without landing an import on the wrong base. i18n-sync is a sync.
-# This job runs the shape tests plus the layout and polkit checks.
+# Syncs, topics on quattro, and stacks of any depth whose trunk is quattro are
+# the shapes an agent can open. Every topic and stack layer is capped against
+# its own base and may not carry upstream commits. i18n-sync is a sync. This
+# job runs the shape tests plus the layout and polkit checks.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, closed]
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -24,15 +25,12 @@ jobs:
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_BASE_REF: ${{ github.base_ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_MERGED: ${{ github.event.pull_request.merged }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash .github/pr-shape-check.sh
       - name: Install test commands
-        if: github.event.action != 'closed'
         run: |
           sudo apt-get update
           sudo apt-get install -y jq lua5.4
@@ -40,11 +38,9 @@ jobs:
             sudo ln -sf "$(command -v lua5.4)" /usr/bin/lua
           fi
       - uses: actions/setup-node@v7
-        if: github.event.action != 'closed'
         with:
           node-version: 24
       - name: Shape, layout, and polkit tests
-        if: github.event.action != 'closed'
         run: |
           bash test/shell.d/pr-shape-check-test.sh
           bash test/shell.d/hyprland-floating-workspaces-test.sh

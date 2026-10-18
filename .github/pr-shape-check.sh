@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# A pull request into this fork is a sync onto quattro, a topic onto quattro,
+# or a layer of a stack whose trunk is quattro. Every topic and layer is held
+# to the file cap against its own base and may not carry upstream commits;
+# those arrive only through a sync.
+
+FILE_CAP=40
+
 fail() {
   printf '%s\n' "$1" >&2
   exit 1
@@ -15,6 +22,15 @@ is_sync_ref() {
   [[ $ref == cursor/upstream-changes-pr-* || $ref == cursor/fork-upstream-updates-* || $ref == "i18n-sync" ]]
 }
 
+ensure_commit() {
+  local sha=$1
+  local ref=$2
+  if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    git fetch --no-tags origin "$ref" ||
+      fail "Could not fetch ${ref}. The shape check needs it to compare this pull request."
+  fi
+}
+
 if [[ -n ${PR_OPEN_JSON_FILE:-} ]]; then
   open_json=$(cat "$PR_OPEN_JSON_FILE")
 else
@@ -25,19 +41,50 @@ fi
 
 open_count=$(jq 'length' <<<"$open_json")
 if (( open_count == 200 )); then
-  fail "The open pull request list stopped at 200, so a second sync could be missing. Wait, then rerun the check."
+  fail "The open pull request list stopped at 200, so a second sync or a stack layer could be missing. Wait, then rerun the check."
 fi
 
-sync_heads=$(jq -r --arg n "$PR_NUMBER" '
-  [ .[]
-    | select((.number | tostring) != $n)
-    | select(
-        (.headRefName | startswith("cursor/upstream-changes-pr-"))
-        or (.headRefName | startswith("cursor/fork-upstream-updates-"))
-      )
-    | "#\(.number) \(.headRefName) -> \(.baseRefName)"
-  ] | .[]
-' <<<"$open_json")
+# The trunk of the stack this pull request belongs to, from GitHub's native
+# stack metadata. Empty when it is not in a native stack.
+native_stack_trunk() {
+  local owner name
+  if [[ -n ${PR_STACK_JSON_FILE:-} ]]; then
+    jq -r '.baseRefName // empty' "$PR_STACK_JSON_FILE"
+    return
+  fi
+  owner=${GITHUB_REPOSITORY%%/*}
+  name=${GITHUB_REPOSITORY#*/}
+  gh api graphql \
+    -f query='query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) { stack { baseRefName } }
+      }
+    }' \
+    -f owner="$owner" -f name="$name" -F number="$PR_NUMBER" \
+    --jq '.data.repository.pullRequest.stack.baseRefName // empty' 2>/dev/null || true
+}
+
+# Walk a hand-built stack down through open pull requests to its trunk.
+walked_stack_trunk() {
+  local base=$1
+  local depth layers
+  for (( depth = 0; depth < 50; depth++ )); do
+    layers=$(jq -c --arg base "$base" '[.[] | select(.headRefName == $base)]' <<<"$open_json")
+    case $(jq 'length' <<<"$layers") in
+      0)
+        printf '%s\n' "$base"
+        return
+        ;;
+      1)
+        base=$(jq -r '.[0].baseRefName' <<<"$layers")
+        ;;
+      *)
+        fail "More than one open pull request has head ${base}. A stack layer has exactly one pull request."
+        ;;
+    esac
+  done
+  fail "The stack under ${PR_BASE_REF} is more than 50 layers deep or loops back on itself."
+}
 
 if is_sync_ref "$PR_HEAD_REF"; then
   if [[ $PR_BASE_REF != "quattro" ]]; then
@@ -45,82 +92,70 @@ if is_sync_ref "$PR_HEAD_REF"; then
   fi
   # The translation branch is its own job. An upstream import does not block
   # it, and it does not block an upstream import.
-  if [[ $PR_HEAD_REF != "i18n-sync" && -n $sync_heads ]]; then
-    fail "Another sync is already open:
+  if [[ $PR_HEAD_REF != "i18n-sync" ]]; then
+    sync_heads=$(jq -r --arg n "$PR_NUMBER" '
+      .[]
+      | select((.number | tostring) != $n)
+      | select(
+          (.headRefName | startswith("cursor/upstream-changes-pr-"))
+          or (.headRefName | startswith("cursor/fork-upstream-updates-"))
+        )
+      | "#\(.number) \(.headRefName) -> \(.baseRefName)"
+    ' <<<"$open_json")
+    if [[ -n $sync_heads ]]; then
+      fail "Another sync is already open:
 ${sync_heads}
 Push onto that branch, or wait until it merges."
-  fi
-elif [[ $PR_BASE_REF == "quattro" ]]; then
-  if [[ -z ${FILE_COUNT:-} ]]; then
-    : "${HEAD_SHA:?HEAD_SHA is required to count files}"
-    : "${BASE_SHA:?BASE_SHA is required to count files}"
-    if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-      git fetch --no-tags origin "$PR_BASE_REF"
     fi
-    if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
-      git fetch --no-tags origin "$HEAD_SHA"
-    fi
-    FILE_COUNT=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" | grep -c . || true)
   fi
-  if (( FILE_COUNT > 40 )); then
-    fail "This topic changes ${FILE_COUNT} files. The cap is 40. Split it into a stacked pull request set whose root targets quattro."
+  printf 'ok - sync %s into %s\n' "$PR_HEAD_REF" "$PR_BASE_REF"
+  exit 0
+fi
+
+if [[ $PR_BASE_REF != "quattro" ]]; then
+  trunk=$(native_stack_trunk)
+  if [[ -z $trunk ]]; then
+    trunk=$(walked_stack_trunk "$PR_BASE_REF")
   fi
+  if [[ $trunk != "quattro" ]]; then
+    fail "This pull request targets ${PR_BASE_REF}, and the stack under it ends at ${trunk}, not quattro. Build the stack with gh stack so its bottom pull request targets quattro, or retarget this pull request to quattro."
+  fi
+fi
+
+: "${HEAD_SHA:?HEAD_SHA is required}"
+: "${BASE_SHA:?BASE_SHA is required}"
+ensure_commit "$BASE_SHA" "$PR_BASE_REF"
+ensure_commit "$HEAD_SHA" "$HEAD_SHA"
+
+# Each layer is measured against the branch it targets, so a stack splits a
+# large change instead of hiding it above the bottom layer.
+file_count=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" | grep -c . || true)
+if (( file_count > FILE_CAP )); then
+  fail "This pull request changes ${file_count} files against ${PR_BASE_REF}. The cap is ${FILE_CAP} per pull request. Split it into a stack with gh stack, each layer under the cap, with the bottom layer targeting quattro."
+fi
+
+# Upstream commits that this branch carries and its base does not have mean
+# an import is riding in a topic. Stacking on an open sync is fine: the sync
+# branch is then the base and already has them.
+if [[ -n ${UPSTREAM_REF:-} ]]; then
+  upstream_ref=$UPSTREAM_REF
 else
-  root=$(jq -c --arg base "$PR_BASE_REF" '[.[] | select(.headRefName == $base)]' <<<"$open_json")
-  root_count=$(jq 'length' <<<"$root")
-  if (( root_count == 0 )); then
-    fail "This pull request stacks on ${PR_BASE_REF}, and no open pull request from that branch targets quattro. Open that root into quattro, or retarget this pull request to quattro."
-  fi
-  if (( root_count > 1 )); then
-    fail "More than one open pull request has head ${PR_BASE_REF}. Leave one root, and point that root at quattro."
-  fi
-  root_base=$(jq -r '.[0].baseRefName' <<<"$root")
-  root_number=$(jq -r '.[0].number' <<<"$root")
-  if [[ $root_base != "quattro" ]]; then
-    fail "Pull request #${root_number} is the stack root and it targets ${root_base}. The root must target quattro."
-  fi
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+  parent=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.parent.full_name // empty') ||
+    fail "Could not look up the upstream repository of ${GITHUB_REPOSITORY}."
+  [[ -n $parent ]] || fail "${GITHUB_REPOSITORY} has no upstream repository to compare against."
+  git fetch --no-tags "https://github.com/${parent}.git" "+refs/heads/quattro:refs/remotes/upstream/quattro" ||
+    fail "Could not fetch quattro from ${parent}. The shape check needs it to find upstream commits."
+  upstream_ref=refs/remotes/upstream/quattro
 fi
 
-# The closed event's base SHA is a snapshot of the base branch and often lags
-# the tip GitHub actually merged onto. A rebase of more than one commit also
-# has a first parent that is not that snapshot. Resolve the named branch
-# instead, and accept the merge when that branch contains it.
-first_parent_reaches() {
-  local commit=$1
-  local tip=$2
-  local i cursor
-
-  cursor=$commit
-  for (( i = 0; i < 1000; i++ )); do
-    if [[ $cursor == "$tip" ]]; then
-      return 0
-    fi
-    git rev-parse --verify --quiet "${cursor}^1" >/dev/null || return 1
-    cursor=$(git rev-parse "${cursor}^1")
-  done
-  return 1
-}
-
-if [[ ${PR_MERGED:-false} == "true" ]]; then
-  : "${MERGE_SHA:?MERGE_SHA is required once the pull request has merged}"
-  if ! git cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
-    git fetch --no-tags origin "$MERGE_SHA" ||
-      fail "Could not fetch merge commit ${MERGE_SHA}."
-  fi
-  git fetch --no-tags origin "$PR_BASE_REF" ||
-    fail "Could not fetch ${PR_BASE_REF}. The shape check needs that branch to see where the merge landed."
-  base_tip=$(git rev-parse "origin/${PR_BASE_REF}^{commit}")
-  first=$(git rev-parse "${MERGE_SHA}^1")
-
-  # A merge or squash parents the live tip of the named branch. Once that
-  # branch contains the merge commit, its first parent is the pre-merge tip,
-  # and a longer rebase still sits on the same branch. When the ref has not
-  # moved, the fetched tip is the pre-merge tip and the first-parent chain
-  # has to reach it. The event base SHA is neither commit.
-  if ! git merge-base --is-ancestor "$MERGE_SHA" "$base_tip" &&
-    ! first_parent_reaches "$MERGE_SHA" "$base_tip"; then
-    fail "The merge commit ${MERGE_SHA} has first parent ${first}. ${PR_BASE_REF} was at ${base_tip} before the merge. Merge this pull request into ${PR_BASE_REF}. Merge only the sync pull request into quattro."
-  fi
+mapfile -t shared < <(git merge-base --all "$HEAD_SHA" "$upstream_ref" || true)
+upstream_count=0
+if (( ${#shared[@]} > 0 )); then
+  upstream_count=$(git rev-list --count "${shared[@]}" "^${BASE_SHA}")
+fi
+if (( upstream_count > 0 )); then
+  fail "This pull request carries ${upstream_count} upstream commits that ${PR_BASE_REF} does not have. Upstream changes arrive only through a sync branch (cursor/upstream-changes-pr-*). Rebase onto ${PR_BASE_REF} without them, or stack this pull request on the open sync."
 fi
 
-printf 'ok - %s into %s\n' "$PR_HEAD_REF" "$PR_BASE_REF"
+printf 'ok - %s into %s (%s files)\n' "$PR_HEAD_REF" "$PR_BASE_REF" "$file_count"

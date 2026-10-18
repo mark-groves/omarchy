@@ -4,329 +4,202 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-empty_prs=$(mktemp)
-printf '[]\n' >"$empty_prs"
-trap 'rm -f "$empty_prs"' EXIT
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+printf '[]\n' >"$scratch/no-prs.json"
+printf 'null\n' >"$scratch/no-stack.json"
+printf '{"baseRefName":"quattro"}\n' >"$scratch/stack-quattro.json"
+printf '{"baseRefName":"dev"}\n' >"$scratch/stack-dev.json"
+
+# One repository holds the fork and a stand-in for upstream quattro, so every
+# commit the check needs is already local and nothing is fetched.
+repo=$scratch/repo
+git init -q -b quattro "$repo"
+git -C "$repo" config user.email test@example.com
+git -C "$repo" config user.name Test
+git -C "$repo" config commit.gpgsign false
+
+commit_files() {
+  local count=$1
+  local prefix=${2//\//-}
+  local i
+  for (( i = 1; i <= count; i++ )); do
+    printf '%s\n' "$prefix $i" >"$repo/$prefix-$i"
+  done
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "$2"
+}
+
+commit_files 1 base
+git -C "$repo" checkout -q -b upstream
+commit_files 2 upstream-change
+git -C "$repo" checkout -q -b cursor/upstream-changes-pr-aaaa
+git -C "$repo" checkout -q quattro
+
+reset_env() {
+  PR_NUMBER=1
+  PR_OPEN_JSON_FILE=$scratch/no-prs.json
+  PR_STACK_JSON_FILE=$scratch/no-stack.json
+  HEAD_SHA=
+  BASE_SHA=
+}
 
 run_shape() {
   shape_status=0
   shape_output=$(
-    PR_HEAD_REF=$PR_HEAD_REF \
-      PR_BASE_REF=$PR_BASE_REF \
-      PR_NUMBER=${PR_NUMBER:-1} \
-      PR_OPEN_JSON_FILE=${PR_OPEN_JSON_FILE:-$empty_prs} \
-      FILE_COUNT=${FILE_COUNT:-0} \
-      PR_MERGED=${PR_MERGED:-false} \
-      MERGE_SHA=${MERGE_SHA:-} \
-      HEAD_SHA=${HEAD_SHA:-} \
-      BASE_SHA=${BASE_SHA:-} \
-      bash "$ROOT/.github/pr-shape-check.sh" 2>&1
+    cd "$repo" &&
+      PR_HEAD_REF=$PR_HEAD_REF \
+        PR_BASE_REF=$PR_BASE_REF \
+        PR_NUMBER=$PR_NUMBER \
+        PR_OPEN_JSON_FILE=$PR_OPEN_JSON_FILE \
+        PR_STACK_JSON_FILE=$PR_STACK_JSON_FILE \
+        HEAD_SHA=$HEAD_SHA \
+        BASE_SHA=$BASE_SHA \
+        UPSTREAM_REF=upstream \
+        bash "$ROOT/.github/pr-shape-check.sh" 2>&1
   ) || shape_status=$?
 }
 
-PR_NUMBER=1
-PR_OPEN_JSON_FILE=$empty_prs
-PR_MERGED=false
-FILE_COUNT=200
+# A branch off $1 named $2 with $3 changed files; sets HEAD_SHA and BASE_SHA.
+topic() {
+  git -C "$repo" checkout -q -b "$2" "$1"
+  commit_files "$3" "$2"
+  BASE_SHA=$(git -C "$repo" rev-parse "$1")
+  HEAD_SHA=$(git -C "$repo" rev-parse "$2")
+  git -C "$repo" checkout -q quattro
+}
+
+expect_pass() {
+  (( shape_status == 0 )) || fail "$1" "$shape_output"
+  pass "$1"
+}
+
+expect_fail() {
+  (( shape_status == 1 )) && [[ $shape_output == *"$2"* ]] || fail "$1" "$shape_output"
+  pass "$1"
+}
+
+reset_env
 PR_HEAD_REF=i18n-sync
 PR_BASE_REF=quattro
 run_shape
-(( shape_status == 0 )) && [[ $shape_output == *"ok - i18n-sync into quattro"* ]] ||
-  fail "the translation sync is exempt from the file cap" "$shape_output"
-pass "the translation sync is exempt from the file cap"
+expect_pass "the translation sync is exempt from the file cap"
 
 PR_BASE_REF=dev
 run_shape
-(( shape_status == 1 )) && [[ $shape_output == *"A sync targets quattro. Retarget this pull request to quattro."* ]] ||
-  fail "the translation sync still has to target quattro" "$shape_output"
-pass "the translation sync still has to target quattro"
+expect_fail "the translation sync still has to target quattro" "A sync targets quattro. Retarget this pull request to quattro."
 
-other_sync=$(mktemp)
-printf '%s\n' '[{"number":9,"headRefName":"cursor/upstream-changes-pr-aaaa","baseRefName":"quattro"}]' >"$other_sync"
+printf '%s\n' '[{"number":9,"headRefName":"cursor/upstream-changes-pr-aaaa","baseRefName":"quattro"}]' >"$scratch/open-sync.json"
 PR_BASE_REF=quattro
-PR_OPEN_JSON_FILE=$other_sync
+PR_OPEN_JSON_FILE=$scratch/open-sync.json
 run_shape
-(( shape_status == 0 )) ||
-  fail "an open upstream sync does not block the translation sync" "$shape_output"
-pass "an open upstream sync does not block the translation sync"
+expect_pass "an open upstream sync does not block the translation sync"
 
 PR_HEAD_REF=cursor/upstream-changes-pr-bbbb
-PR_OPEN_JSON_FILE=$other_sync
-printf '%s\n' '[{"number":9,"headRefName":"i18n-sync","baseRefName":"quattro"}]' >"$other_sync"
 run_shape
-(( shape_status == 0 )) ||
-  fail "an open translation sync does not block an upstream sync" "$shape_output"
-pass "an open translation sync does not block an upstream sync"
-rm -f "$other_sync"
-PR_OPEN_JSON_FILE=$empty_prs
+expect_fail "a second upstream sync names the open one" "#9 cursor/upstream-changes-pr-aaaa -> quattro"
 
-FILE_COUNT=41
+printf '%s\n' '[{"number":9,"headRefName":"i18n-sync","baseRefName":"quattro"}]' >"$scratch/open-i18n.json"
+PR_OPEN_JSON_FILE=$scratch/open-i18n.json
+run_shape
+expect_pass "an open translation sync does not block an upstream sync"
+
+reset_env
+topic quattro cursor/fits-the-cap 40
+PR_HEAD_REF=cursor/fits-the-cap
+PR_BASE_REF=quattro
+run_shape
+expect_pass "a topic of 40 files passes"
+
+reset_env
+topic quattro cursor/oversized-topic 41
 PR_HEAD_REF=cursor/oversized-topic
 PR_BASE_REF=quattro
 run_shape
-(( shape_status == 1 )) &&
-  [[ $shape_output == *"This topic changes 41 files. The cap is 40. Split it into a stacked pull request set whose root targets quattro."* ]] ||
-  fail "a topic over 40 files is still a hard failure" "$shape_output"
-pass "a topic over 40 files is still a hard failure"
+expect_fail "a topic over 40 files fails with the stack message" "This pull request changes 41 files against quattro. The cap is 40 per pull request. Split it into a stack with gh stack"
 
-FILE_COUNT=200
+reset_env
+topic quattro i18n-sync-extra 41
 PR_HEAD_REF=i18n-sync-extra
-run_shape
-(( shape_status == 1 )) &&
-  [[ $shape_output == *"This topic changes 200 files. The cap is 40. Split it into a stacked pull request set whose root targets quattro."* ]] ||
-  fail "only the i18n-sync branch is the translation sync" "$shape_output"
-pass "only the i18n-sync branch is the translation sync"
-
-FILE_COUNT=40
-PR_HEAD_REF=cursor/fits-the-cap
-run_shape
-(( shape_status == 0 )) ||
-  fail "a topic of 40 files passes" "$shape_output"
-pass "a topic of 40 files passes"
-
-# Merge fixtures. The event BASE_SHA is the stale snapshot. The bare remote
-# is what the check fetches, so the branch tip there is the live one.
-new_fixture() {
-  bare=$(mktemp -d)
-  work=$(mktemp -d)
-  git init --bare -q -b quattro "$bare"
-  git init -q -b quattro "$work"
-  git -C "$work" config user.email cursoragent@cursor.com
-  git -C "$work" config user.name "Cursor Agent"
-  git -C "$work" config commit.gpgsign false
-  git -C "$work" remote add origin "$bare"
-  fixture_dirs+=("$bare" "$work")
-}
-
-commit_on() {
-  local path=$1
-  local message=$2
-  printf '%s\n' "$message" >>"$work/$path"
-  git -C "$work" add "$path"
-  git -C "$work" commit -q -m "$message"
-}
-
-push_branch() {
-  git -C "$work" push -q origin "$1"
-}
-
-fixture_dirs=()
-trap 'rm -rf "$empty_prs" "${fixture_dirs[@]}"' EXIT
-
-new_fixture
-commit_on file "base A"
-stale=$(git -C "$work" rev-parse HEAD)
-git -C "$work" branch feature
-commit_on file "base moved"
-live=$(git -C "$work" rev-parse HEAD)
-git -C "$work" checkout -q feature
-commit_on extra "feature"
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --no-ff feature -m "Merge feature"
-merge_sha=$(git -C "$work" rev-parse HEAD)
-push_branch quattro
-pushd "$work" >/dev/null
-PR_HEAD_REF=feature
 PR_BASE_REF=quattro
-PR_NUMBER=82
-FILE_COUNT=1
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse feature)
-BASE_SHA=$stale
-PR_OPEN_JSON_FILE=$empty_prs
 run_shape
-popd >/dev/null
-(( shape_status == 0 )) ||
-  fail "a stale event base SHA does not fail a merge onto the live tip" "$shape_output"
-pass "a stale event base SHA does not fail a merge onto the live tip"
+expect_fail "only the i18n-sync branch is the translation sync" "changes 41 files"
 
-new_fixture
-commit_on file "base A"
-stale=$(git -C "$work" rev-parse HEAD)
-git -C "$work" branch feature
-commit_on file "base moved"
-git -C "$work" checkout -q feature
-commit_on extra "squashed change"
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --squash feature >/dev/null 2>&1
-git -C "$work" commit -q -m "Squashed feature (#82)"
-merge_sha=$(git -C "$work" rev-parse HEAD)
-push_branch quattro
-pushd "$work" >/dev/null
-PR_HEAD_REF=feature
+# A native stack three layers deep: quattro <- layer-1 <- layer-2 <- layer-3.
+reset_env
+topic quattro layer-1 30
+topic layer-1 layer-2 30
+topic layer-2 layer-3 30
+PR_STACK_JSON_FILE=$scratch/stack-quattro.json
+PR_HEAD_REF=layer-3
+PR_BASE_REF=layer-2
+run_shape
+expect_pass "a native stack layer is capped against its own base, not quattro"
+
+topic layer-2 layer-3-oversized 41
+PR_HEAD_REF=layer-3-oversized
+run_shape
+expect_fail "an oversized layer above the bottom of a stack fails" "changes 41 files against layer-2"
+
+topic layer-2 layer-3-dev 1
+PR_STACK_JSON_FILE=$scratch/stack-dev.json
+PR_HEAD_REF=layer-3-dev
+run_shape
+expect_fail "a native stack whose trunk is not quattro fails" "the stack under it ends at dev, not quattro"
+
+# Without native metadata the check walks open pull requests to the trunk.
+printf '%s\n' '[
+  {"number":11,"headRefName":"layer-1","baseRefName":"quattro"},
+  {"number":12,"headRefName":"layer-2","baseRefName":"layer-1"}
+]' >"$scratch/walked.json"
+reset_env
+PR_OPEN_JSON_FILE=$scratch/walked.json
+PR_HEAD_REF=layer-3
+PR_BASE_REF=layer-2
+HEAD_SHA=$(git -C "$repo" rev-parse layer-3)
+BASE_SHA=$(git -C "$repo" rev-parse layer-2)
+run_shape
+expect_pass "a hand-built stack of any depth walks down to quattro"
+
+printf '%s\n' '[
+  {"number":11,"headRefName":"layer-1","baseRefName":"dev"},
+  {"number":12,"headRefName":"layer-2","baseRefName":"layer-1"}
+]' >"$scratch/walked-dev.json"
+PR_OPEN_JSON_FILE=$scratch/walked-dev.json
+run_shape
+expect_fail "a hand-built stack that ends off quattro fails" "the stack under it ends at dev, not quattro"
+
+PR_OPEN_JSON_FILE=$scratch/no-prs.json
+run_shape
+expect_fail "a base branch with no pull request under it fails" "the stack under it ends at layer-2, not quattro"
+
+# Upstream commits only arrive through a sync.
+reset_env
+git -C "$repo" checkout -q -b cursor/import-in-topic quattro
+git -C "$repo" merge -q --no-ff upstream -m "Take upstream"
+commit_files 1 import-in-topic
+git -C "$repo" checkout -q quattro
+PR_HEAD_REF=cursor/import-in-topic
 PR_BASE_REF=quattro
-PR_NUMBER=82
-FILE_COUNT=1
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse feature)
-BASE_SHA=$stale
-PR_OPEN_JSON_FILE=$empty_prs
+HEAD_SHA=$(git -C "$repo" rev-parse cursor/import-in-topic)
+BASE_SHA=$(git -C "$repo" rev-parse quattro)
 run_shape
-popd >/dev/null
-(( shape_status == 0 )) ||
-  fail "a stale event base SHA does not fail a squash onto the live tip" "$shape_output"
-pass "a stale event base SHA does not fail a squash onto the live tip"
+expect_fail "a topic carrying upstream commits fails" "carries 1 upstream commits that quattro does not have"
 
-new_fixture
-commit_on file "base A"
-stale=$(git -C "$work" rev-parse HEAD)
-git -C "$work" branch feature
-commit_on file "base moved"
-git -C "$work" checkout -q feature
-commit_on extra "replay one"
-commit_on extra "replay two"
-git -C "$work" rebase -q quattro
-merge_sha=$(git -C "$work" rev-parse HEAD)
-first_parent=$(git -C "$work" rev-parse HEAD^1)
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --ff-only feature
-push_branch quattro
-[[ $first_parent != "$stale" ]] ||
-  fail "the rebase fixture first parent is not the stale snapshot"
-pushd "$work" >/dev/null
-PR_HEAD_REF=feature
+reset_env
+topic cursor/upstream-changes-pr-aaaa cursor/on-the-sync 1
+printf '%s\n' '[{"number":9,"headRefName":"cursor/upstream-changes-pr-aaaa","baseRefName":"quattro"}]' >"$scratch/open-sync.json"
+PR_OPEN_JSON_FILE=$scratch/open-sync.json
+PR_HEAD_REF=cursor/on-the-sync
+PR_BASE_REF=cursor/upstream-changes-pr-aaaa
+run_shape
+expect_pass "a layer stacked on the open sync passes the upstream check"
+
+git -C "$repo" merge -q --no-ff upstream -m "Merge sync"
+reset_env
+topic quattro cursor/after-the-sync 1
+PR_HEAD_REF=cursor/after-the-sync
 PR_BASE_REF=quattro
-PR_NUMBER=40
-FILE_COUNT=2
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse feature)
-BASE_SHA=$stale
-PR_OPEN_JSON_FILE=$empty_prs
 run_shape
-popd >/dev/null
-(( shape_status == 0 )) ||
-  fail "a rebase of two commits is not judged against the stale base SHA" "$shape_output"
-pass "a rebase of two commits is not judged against the stale base SHA"
-
-new_fixture
-commit_on file "base A"
-stale=$(git -C "$work" rev-parse HEAD)
-git -C "$work" branch feature
-commit_on file "base moved"
-live=$(git -C "$work" rev-parse HEAD)
-push_branch quattro
-git -C "$work" checkout -q feature
-commit_on extra "feature"
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --no-ff feature -m "Merge feature"
-merge_sha=$(git -C "$work" rev-parse HEAD)
-pushd "$work" >/dev/null
-PR_HEAD_REF=feature
-PR_BASE_REF=quattro
-PR_NUMBER=82
-FILE_COUNT=1
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse feature)
-BASE_SHA=$stale
-PR_OPEN_JSON_FILE=$empty_prs
-run_shape
-popd >/dev/null
-(( shape_status == 0 )) ||
-  fail "a merge parents the fetched pre-merge tip when the ref has not moved" "$shape_output"
-pass "a merge parents the fetched pre-merge tip when the ref has not moved"
-[[ $live != "$stale" ]] || fail "the live tip fixture did not move the base"
-
-new_fixture
-commit_on file "base A"
-git -C "$work" branch feature
-commit_on file "base moved"
-git -C "$work" checkout -q feature
-commit_on extra "feature"
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --no-ff feature -m "Merge feature"
-merge_sha=$(git -C "$work" rev-parse HEAD)
-git -C "$work" commit -q --allow-empty -m "later commit"
-push_branch quattro
-pushd "$work" >/dev/null
-PR_HEAD_REF=feature
-PR_BASE_REF=quattro
-PR_NUMBER=82
-FILE_COUNT=1
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse feature)
-BASE_SHA=$(git rev-parse 'quattro~3')
-PR_OPEN_JSON_FILE=$empty_prs
-run_shape
-popd >/dev/null
-(( shape_status == 0 )) ||
-  fail "a later commit on the base does not hide a merge that landed there" "$shape_output"
-pass "a later commit on the base does not hide a merge that landed there"
-
-new_fixture
-commit_on file "base A"
-git -C "$work" branch sync
-git -C "$work" checkout -q sync
-commit_on sync-file "sync tip"
-sync_tip=$(git -C "$work" rev-parse HEAD)
-push_branch sync
-git -C "$work" checkout -q quattro
-commit_on file "quattro tip"
-quattro_tip=$(git -C "$work" rev-parse HEAD)
-git -C "$work" checkout -q -b layout sync
-commit_on layout-file "layout"
-git -C "$work" checkout -q quattro
-git -C "$work" merge -q --no-ff layout -m "Merge layout into quattro"
-merge_sha=$(git -C "$work" rev-parse HEAD)
-first_parent=$(git -C "$work" rev-parse HEAD^1)
-push_branch quattro
-root_prs=$(mktemp)
-fixture_dirs+=("$root_prs")
-printf '%s\n' '[{"number":73,"headRefName":"sync","baseRefName":"quattro"}]' >"$root_prs"
-[[ $first_parent == "$quattro_tip" ]] ||
-  fail "the wrong-branch fixture merged onto quattro"
-pushd "$work" >/dev/null
-PR_HEAD_REF=layout
-PR_BASE_REF=sync
-PR_NUMBER=75
-FILE_COUNT=1
-PR_MERGED=true
-MERGE_SHA=$merge_sha
-HEAD_SHA=$(git rev-parse layout)
-BASE_SHA=$quattro_tip
-PR_OPEN_JSON_FILE=$root_prs
-run_shape
-popd >/dev/null
-(( shape_status == 1 )) &&
-  [[ $shape_output == *"first parent ${first_parent}"* ]] &&
-  [[ $shape_output == *"sync was at ${sync_tip}"* ]] ||
-  fail "a merge onto another branch fails even when the event SHA is that parent" "$shape_output"
-pass "a merge onto another branch fails even when the event SHA is that parent"
-
-# Pull request 75 named the sync branch and the merge commit landed on quattro.
-bad_merge=cee24cbf572e8861a13856e20d1a9c6a38bb1119
-bad_base=b493942827fd8fbca26bed5abb6a55b5702bf652
-git -C "$ROOT" cat-file -e "${bad_merge}^{commit}"
-git -C "$ROOT" cat-file -e "${bad_base}^{commit}"
-bad_parent=$(git -C "$ROOT" rev-parse "${bad_merge}^1")
-bare=$(mktemp -d)
-work=$(mktemp -d)
-fixture_dirs+=("$bare" "$work")
-git clone --local --bare -q "$ROOT" "$bare"
-git -C "$bare" update-ref refs/heads/sync "$bad_base"
-git -C "$bare" update-ref refs/heads/landed "$bad_merge"
-git clone --local -q "$bare" "$work"
-git -C "$work" config user.email cursoragent@cursor.com
-git -C "$work" config user.name "Cursor Agent"
-git -C "$work" config commit.gpgsign false
-pushd "$work" >/dev/null
-PR_HEAD_REF=cursor/keep-minimized-layout-a84f
-PR_BASE_REF=sync
-PR_NUMBER=75
-FILE_COUNT=8
-PR_MERGED=true
-MERGE_SHA=$bad_merge
-HEAD_SHA=$(git rev-parse origin/landed^2)
-BASE_SHA=$bad_parent
-PR_OPEN_JSON_FILE=$root_prs
-run_shape
-popd >/dev/null
-(( shape_status == 1 )) &&
-  [[ $shape_output == *"first parent ${bad_parent}"* ]] &&
-  [[ $shape_output == *"sync was at ${bad_base}"* ]] ||
-  fail "the layout merge that landed on quattro still fails" "$shape_output"
-pass "the layout merge that landed on quattro still fails"
+expect_pass "a topic after the sync merged does not count upstream commits"
