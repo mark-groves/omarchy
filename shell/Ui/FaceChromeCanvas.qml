@@ -71,6 +71,10 @@ Item {
   property bool resultLatched: false
 
   signal resultPlayed()
+  // The scanning sequence has presented FaceChrome.scanMs() of frames this
+  // cycle, so a result may now replace it without cutting the scan short.
+  signal scanShown()
+  property bool scanShownLatched: false
 
   // The 2D context is dropped across suspend. A swap while it is gone is
   // not a frame of this card.
@@ -113,15 +117,20 @@ Item {
 
   // When a frame takes longer than slowPaintMs to reach the screen, the card
   // steps down a quality level: the sharp layer rasterises smaller and is
-  // scaled up on the GPU, and the bloom source repaints less often. Each
-  // time the card starts presenting it starts again at full quality.
+  // scaled up on the GPU, and the bloom source repaints less often. The level
+  // a card settles on is kept in FaceChrome for every surface, so each new
+  // showing starts where the last one ended instead of spending its first
+  // second on frames the machine already proved too slow. A long run of fast
+  // frames steps back up.
   readonly property var qualityLevels: [
     { sharp: 1, glowEvery: 1 },
     { sharp: 0.75, glowEvery: 2 },
     { sharp: 0.5, glowEvery: 3 }
   ]
   readonly property int slowPaintMs: 60
+  readonly property int fastPaintMs: 20
   readonly property int qualitySamples: 6
+  readonly property int recoverSamples: 40
   property int qualityLevel: 0
   property real paintLatencyMs: 0
   property int paintSamples: 0
@@ -135,19 +144,28 @@ Item {
   readonly property int glowEvery: root.qualityLevels[root.qualityLevel].glowEvery
 
   function resetQuality() {
-    root.qualityLevel = 0
+    root.qualityLevel = Math.max(0, Math.min(root.qualityLevels.length - 1, FaceChrome.qualityLevel))
     root.paintLatencyMs = 0
     root.paintSamples = 0
+  }
+
+  function setQuality(level) {
+    root.qualityLevel = level
+    root.paintSamples = 0
+    FaceChrome.qualityLevel = level
+    console.log("face card paint", Math.round(root.paintLatencyMs), "ms, quality level", root.qualityLevel)
   }
 
   function notePaintLatency(ms) {
     root.paintSamples += 1
     root.paintLatencyMs = root.paintSamples === 1 ? ms : root.paintLatencyMs * 0.7 + ms * 0.3
-    if (root.paintSamples < root.qualitySamples || root.paintLatencyMs <= root.slowPaintMs) return
-    if (root.qualityLevel >= root.qualityLevels.length - 1) return
-    root.qualityLevel += 1
-    root.paintSamples = 0
-    console.log("face card paint", Math.round(root.paintLatencyMs), "ms, quality level", root.qualityLevel)
+    if (root.paintSamples >= root.qualitySamples && root.paintLatencyMs > root.slowPaintMs
+        && root.qualityLevel < root.qualityLevels.length - 1) {
+      root.setQuality(root.qualityLevel + 1)
+    } else if (root.paintSamples >= root.recoverSamples && root.paintLatencyMs < root.fastPaintMs
+        && root.qualityLevel > 0) {
+      root.setQuality(root.qualityLevel - 1)
+    }
   }
 
   function requestLayer(layer) {
@@ -180,7 +198,7 @@ Item {
   function finishResult(why) {
     if (root.resultLatched || !Playback.isHeldState(root.cardState)) return
     root.resultLatched = true
-    console.log("face hold played", root.cardState, "by", why, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed))
+    console.log("face hold played", root.cardState, "by", why, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed), "kicks", root.stallKicks)
     root.resultPlayed()
   }
 
@@ -188,6 +206,7 @@ Item {
     elapsed = 0
     lastSwapMs = 0
     resultLatched = false
+    scanShownLatched = false
     cyclePresented = false
     if (stallCeiling.running) stallCeiling.restart()
     root.repaint()
@@ -210,6 +229,10 @@ Item {
     }
     root.repaint()
     if (Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) root.finishResult("frames")
+    if (root.cardState === "scanning" && !root.scanShownLatched && root.elapsed >= FaceChrome.scanMs()) {
+      root.scanShownLatched = true
+      root.scanShown()
+    }
   }
 
   // True once this cycle has presented a frame.
@@ -247,6 +270,7 @@ Item {
   onShownChanged: {
     if (!root.shown) root.glassLit = false
     if (!root.shown) return
+    root.lastKickMs = 0
     root.resetQuality()
     console.log("face card shown: scene graph api", root.GraphicsInfo.api, "bloom", root.glowOn ? "gpu" : "off",
       "surface", String(root.surface), root.darkSurface ? "dark" : "light")
@@ -259,12 +283,39 @@ Item {
     onTriggered: {
       root.animationTicks += 1
       root.repaint()
+      root.kickIfStalled()
     }
+  }
+
+  // The card is animating but the window has stopped swapping: after resume,
+  // or when the compositor dropped a frame callback, the surface sits on its
+  // last buffer until something else damages it (pointer motion, a key).
+  // Ask the window for a frame, at most once per stallKickMs.
+  readonly property int stallKickMs: 500
+  property real lastAnySwapMs: 0
+  property real lastKickMs: 0
+  property int stallKicks: 0
+
+  function kickIfStalled() {
+    if (!root.presenting || !root.hostWindow) return
+    var now = Date.now()
+    var since = Math.max(root.lastAnySwapMs, root.lastKickMs)
+    if (since === 0) {
+      root.lastKickMs = now
+      return
+    }
+    if (now - since < root.stallKickMs) return
+    root.lastKickMs = now
+    root.stallKicks += 1
+    root.hostWindow.update()
   }
 
   Connections {
     target: root.hostWindow
-    function onFrameSwapped() { root.notePresentedFrame() }
+    function onFrameSwapped() {
+      root.lastAnySwapMs = Date.now()
+      root.notePresentedFrame()
+    }
   }
 
   // The glow layer: ops that carry a glow value, at half the sharp layer's

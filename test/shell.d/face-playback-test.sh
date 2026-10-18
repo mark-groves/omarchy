@@ -113,7 +113,24 @@ assert(/presentedCeilingMs\(root\.holdMs\)/.test(canvasQml) && /stallCeilingMs\(
 assert(/if \(root\.resultLatched \|\| !Playback\.isHeldState\(root\.cardState\)\) return/.test(canvasQml),
   'a hold plays once, whichever of frames or ceiling ends it')
 assert(/slowPaintMs/.test(canvasQml) && /sharp: 0\.5/.test(canvasQml) && /root\.resetQuality\(\)/.test(canvasQml),
-  'a slow raster steps the card down a quality level and each showing starts at full quality')
+  'a slow raster steps the card down a quality level')
+assert(/root\.qualityLevel = Math\.max\(0, Math\.min\(root\.qualityLevels\.length - 1, FaceChrome\.qualityLevel\)\)/.test(canvasQml)
+  && /FaceChrome\.qualityLevel = level/.test(canvasQml),
+  'each showing starts at the quality level the card last settled on, shared by every surface')
+assert(/property int qualityLevel: 0/.test(chromeQml) && /onSourceUrlChanged: \{[\s\S]*?qualityLevel = 0/.test(chromeQml),
+  'a different plugin starts again at full quality')
+assert(/recoverSamples/.test(canvasQml) && /root\.setQuality\(root\.qualityLevel - 1\)/.test(canvasQml),
+  'a long run of fast frames steps the card back up')
+assert(/signal scanShown\(\)/.test(canvasQml) && /root\.cardState === "scanning" && !root\.scanShownLatched && root\.elapsed >= FaceChrome\.scanMs\(\)/.test(canvasQml)
+  && /scanShownLatched = false/.test(canvasQml),
+  'the card reports once per cycle when its scan has presented the plugin minimum, on presented frames')
+assert(/scanMs: typeof scanMs === 'function' \? scanMs : null/.test(chromeQml) && /function scanMs\(\)[\s\S]*?Math\.min\(ms, 3000\)/.test(chromeQml),
+  'scanMs is an optional plugin export, clamped so a plugin cannot pin the lock')
+assert(/function kickIfStalled\(\)[\s\S]*?root\.hostWindow\.update\(\)/.test(canvasQml)
+  && /onTriggered: \{[\s\S]*?root\.kickIfStalled\(\)/.test(canvasQml),
+  'an animating card whose window stopped swapping asks it for a frame instead of waiting for pointer motion')
+assert(!/kickIfStalled[\s\S]{0,400}creditSwap/.test(canvasQml),
+  'a stall kick does not credit the hold')
 assert(
   /readonly property var hostWindow:\s*root\.Window\.window/.test(canvasQml) && !/\.QsWindow\.window/.test(canvasQml),
   'swaps are counted on the QQuickWindow, not the Quickshell wrapper that has no frameSwapped'
