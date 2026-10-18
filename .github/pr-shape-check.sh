@@ -54,6 +54,8 @@ native_stack_trunk() {
   fi
   owner=${GITHUB_REPOSITORY%%/*}
   name=${GITHUB_REPOSITORY#*/}
+  # The $ names are GraphQL variables, not shell expansions.
+  # shellcheck disable=SC2016
   gh api graphql \
     -f query='query($owner: String!, $name: String!, $number: Int!) {
       repository(owner: $owner, name: $name) {
