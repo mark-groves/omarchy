@@ -101,6 +101,16 @@ The experience should be the same on every platform. When a package or feature i
 - Commits should be atomic: include only one coherent change or fix, and do not mix unrelated work.
 - Commit messages should be succinct and describe the change being made.
 
+# Pull Requests
+
+Pull requests go to this fork (`mark-groves/omarchy`), never upstream. `.github/pr-shape-check.sh` enforces the shapes below on every pull request.
+
+- Prefer a stack of small pull requests over one large one. Build it with GitHub's native stacks through `gh stack` (`gh extension install github/gh-stack`): `gh stack init`, `gh stack add <layer>` for each layer, `gh stack submit` to open the linked pull requests, `gh stack view` to check them. Each layer should be reviewable on its own, the way an atomic commit is.
+- The bottom of every stack targets `quattro`. Each layer targets the layer below it.
+- Every pull request, each stack layer included, changes at most 40 files against the branch it targets. Over that, split it into more layers.
+- Merge a stack from GitHub's stack merge, bottom up. Never merge a layer into `quattro` by hand.
+- Upstream changes arrive only through a sync branch (`cursor/upstream-changes-pr-*`), one open at a time, targeting `quattro`. A topic or layer must not carry upstream commits; stack it on the open sync when it needs them.
+
 # Helper Commands
 
 Use these instead of raw shell commands:
