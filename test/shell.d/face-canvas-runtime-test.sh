@@ -22,7 +22,9 @@ if [[ -z $qml_bin ]]; then
 fi
 
 fixture="$SHELL_TEST_DIR/fixtures/face-canvas-runtime"
-output=$(cd "$fixture" && XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 30 "$qml_bin" -I . Harness.qml 2>&1) \
+# Qt logs to journald when stderr is not a terminal; the RESULT lines must
+# reach this capture.
+output=$(cd "$fixture" && QT_FORCE_STDERR_LOGGING=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 30 "$qml_bin" -I . Harness.qml 2>&1) \
   || fail "face canvas harness runs" "$output"
 
 field() {
