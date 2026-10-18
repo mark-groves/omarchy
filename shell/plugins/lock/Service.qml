@@ -434,6 +434,18 @@ Item {
   // used to play as a miss on a surface that had not started presenting.
   // Drop the scan now and start a fresh one once the resume is seen.
   function holdFaceForSleep() {
+    // A result still on the card cannot outlive the suspend. Leaving
+    // faceHolding set once faceState returns to scanning stranded it: a match
+    // neither played out nor hit its ceiling, and a miss kept every later scan
+    // refused until a password unlock. A match is dropped, not honoured: a lid
+    // closed mid-card means stay locked and scan again on wake.
+    if (faceHolding || facePendingMatch) {
+      logEvent("face-result-dropped: sleep")
+      faceHolding = false
+      facePendingMatch = false
+      faceUnlockCeiling.stop()
+      faceMatchWaitTimer.stop()
+    }
     cancelFaceRequest("sleep")
     faceAwaitingResume = true
     faceRetryTimer.stop()

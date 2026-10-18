@@ -135,6 +135,10 @@ assert(
   'an announced suspend drops the in-flight scan and holds new ones'
 )
 assert(
+  /function holdFaceForSleep\(\) \{[\s\S]*?if \(faceHolding \|\| facePendingMatch\) \{[\s\S]*?faceHolding = false\s*facePendingMatch = false\s*faceUnlockCeiling\.stop\(\)\s*faceMatchWaitTimer\.stop\(\)[\s\S]*?\}\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
+  'a suspend drops a held or waiting result before resetting the card, so no hold is stranded across the resume'
+)
+assert(
   /function noteSleepRequested\(\) \{\s*if \(!lockRequested\) return\s*holdFaceForSleep\(\)/.test(serviceQml),
   'every pre-suspend lock request holds face, with or without a fingerprint reader'
 )
@@ -305,7 +309,7 @@ assert(
 assert(
   /if \(password\.length > 0\) root\.cancelFaceRequest\("typing"\)/.test(serviceQml) &&
     /function runBlank\(\) \{\s*root\.displaysBlank = true\s*cancelFaceRequest\("blank"\)/.test(serviceQml) &&
-    /function holdFaceForSleep\(\) \{\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
+    /function holdFaceForSleep\(\) \{[\s\S]{0,800}?cancelFaceRequest\("sleep"\)/.test(serviceQml),
   'typing, a blank or a suspend take the scan back'
 )
 assert(
