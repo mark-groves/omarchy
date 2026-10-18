@@ -351,7 +351,7 @@ assert(
   'a held success still closes the dialog after the card plays'
 )
 assert(
-  /function onAuthenticationRequestCancelled\(\) \{\s*root\.resultHold = false/.test(agentQml),
+  /function onAuthenticationRequestCancelled\(\) \{\s*if \(!root\.sessionLocked\) root\.closing = true\s*root\.resultHold = false/.test(agentQml),
   'cancel clears the success hold without waiting for playback'
 )
 assert(
@@ -441,5 +441,41 @@ const shellQml = fs.readFileSync(path.join(root, 'shell/shell.qml'), 'utf8')
 assert(
   /FaceChrome\.pluginRegistry\s*=\s*pluginRegistry/.test(shellQml),
   'the shell binds face chrome at startup so lock does not wait for polkit'
+)
+
+// Howdy usually matches before the card has shown its scan. The approval
+// stands; the match card waits, display-only, for the plugin's scanMs().
+assert(
+  /var faceLive = root\.faceCardLive \|\| PolkitModel\.shouldHoldFaceSuccess\(presentation\)[\s\S]*?if \(faceLive\) \{\s*if \(root\.deferFaceMatch\(\)\) return\s*if \(root\.armFacePlayback\("recognized"\)\) return/.test(agentQml),
+  'a polkit match plays when the face card was live, even though approval has already ended the request'
+)
+assert(
+  /function onIsSuccessfulChanged\(\) \{\s*if \(polkitAgent\.flow && polkitAgent\.flow\.isSuccessful\) root\.handleAuthSucceeded\(\)/.test(agentQml) &&
+    /function onAuthenticationSucceeded\(\) \{ root\.handleAuthSucceeded\(\) \}/.test(agentQml) &&
+    /function handleAuthSucceeded\(\) \{\s*if \(root\.authSuccessHandled\) return/.test(agentQml),
+  'approval is seen from isSuccessful, which changes before Quickshell ends the flow, not only from the late signal'
+)
+assert(
+  /onShowFaceChromeChanged: if \(polkitAgent\.isActive\) faceCardLive = showFaceChrome && cardKind === "face" && !missHold/.test(agentQml),
+  'whether the face card is live is only updated while the request is active, so approval cannot erase it'
+)
+assert(
+  /function deferFaceMatch\(\) \{[\s\S]*?if \(root\.faceScanSeen \|\| ms <= 0\) return false[\s\S]*?root\.resultHold = true[\s\S]*?faceMatchWait\.restart\(\)/.test(agentQml),
+  'a match that beats the boot waits for it and keeps the dialog up'
+)
+assert(
+  /onScanShown:\s*root\.noteFaceScanShown\(\)/.test(agentQml) && /id:\s*faceMatchWait[\s\S]*?onTriggered:\s*root\.playPendingMatch\(\)/.test(agentQml),
+  'the match plays when the scan has presented, or when a wall-clock ceiling runs out'
+)
+const completeFace = agentQml.match(/function completeFacePlayback\(\) \{[\s\S]*?\n  \}/)
+assert(
+  completeFace && /if \(resultHold\) \{[\s\S]*?closing = true\s*\n\s*resultHold = false/.test(completeFace[0]) &&
+    /root\.closing = true\s*\n\s*root\.resultHold = false/.test(agentQml) &&
+    !/resultHold = false\s*\n\s*(root\.)?missHold = false\s*\n\s*(root\.)?closing = true/.test(agentQml),
+  'a finished match sets closing before dropping the hold, so the dialog does not vanish and come back'
+)
+assert(
+  (agentQml.match(/clearPendingMatch\(\)/g) || []).length >= 6,
+  'every cancel, lock and new flow drops a waiting match'
 )
 JS
