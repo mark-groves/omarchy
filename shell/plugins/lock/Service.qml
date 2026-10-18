@@ -31,6 +31,35 @@ Item {
   // lets the recognised (or miss) frame play out. Completion comes from the
   // canvas, after presented frames, and does not change the PAM result.
   property bool faceHolding: false
+  // Set when a suspend is announced. A scan begun now would freeze inside
+  // the suspend and fail on resume with the camera still gone, so none
+  // starts until the resume is seen (or the announced sleep never comes).
+  property bool faceAwaitingResume: false
+  property double faceStartedAtMs: 0
+  // Failures that cannot have been a look at a face: Howdy returning before
+  // it could capture (the camera is not back yet after resume) or a scan
+  // that spanned a suspend. Retried quietly, still showing the scan.
+  property int faceQuietRetries: 0
+  // A match that came back before the card had shown its scan. PAM has
+  // already succeeded; the result waits only until the scan has booted
+  // (faceScanSeen) or faceMatchWaitTimer runs out, whichever is first.
+  property bool facePendingMatch: false
+  property bool faceScanSeen: false
+  // shell.json lock.face: "request" (the default) keeps the camera off and the
+  // card hidden until the user asks with the face button, Space or Enter on
+  // an empty field; "automatic" scans whenever the lock is up and lit.
+  readonly property var lockConfig: shell && shell.shellConfig && Util.isPlainObject(shell.shellConfig.lock)
+    ? shell.shellConfig.lock : ({})
+  readonly property bool faceOnRequest: String(lockConfig.face || "request") !== "automatic"
+  // The user asked for a scan and the attempt (quiet retries included) is
+  // still theirs. Cleared by a miss, typing, a blank or a suspend.
+  property bool faceRequested: false
+  // Whether the face card belongs on screen at all.
+  readonly property bool faceCardActive: !faceOnRequest || faceRequested || faceHolding || facePendingMatch
+  property double lastResumeMs: 0
+  readonly property int faceNoLookMs: 1500
+  readonly property int faceSpannedSleepMs: 20000
+  readonly property int faceQuietRetryLimit: 8
   property int facePlaybackEpoch: 0
   // Bumped when the lock surface has to commit a buffer again after resume.
   property int lockPresentEpoch: 0
@@ -198,7 +227,12 @@ Item {
 
   function refreshFaceStatus() {
     if (!faceCheckProc.running) faceCheckProc.running = true
-    if (!laptopClosedProc.running) laptopClosedProc.running = true
+    refreshLidState()
+  }
+
+  function refreshLidState() {
+    if (laptopClosedProc.running) laptopClosedProc.again = true
+    else laptopClosedProc.running = true
   }
 
   // Only definitive enrollment results may disable authentication.
@@ -256,6 +290,17 @@ Item {
     fingerprintRetryTimer.stop()
     fingerprintReachTimer.stop()
     faceRetryTimer.stop()
+    faceAwaitingResume = false
+    faceQuietRetries = 0
+    facePendingMatch = false
+    faceScanSeen = false
+    faceRequested = false
+    faceMatchWaitTimer.stop()
+    sleepResumeWatch.stop()
+    resumeSettleTimer.stop()
+    resumePresentTimer.stop()
+    resumeWakeRetryTimer.stop()
+    faceUnlockCeiling.stop()
     faceState = "scanning"
     fingerprintResumeTimer.stop()
     if (passwordPam.active) passwordPam.abort()
@@ -310,7 +355,7 @@ Item {
   function runWake() {
     root.displaysBlank = false
     root.monitorDpmsKnown = false
-    if (!wakeProcess.running) wakeProcess.running = true
+    requestWake()
     if (lockRequested) armBlankTimer()
     // A resume that does not change the lid or the output list never hits
     // the lid or screens handlers. Those were the only commits, so the
@@ -318,6 +363,22 @@ Item {
     root.rearmLockPresentation()
     resumeFingerprint()
     nudgeFingerprint()
+  }
+
+  // A wake asked for while one is still running is queued, not dropped: a
+  // wake script stalled by a resuming compositor used to swallow every key
+  // and click behind it, leaving the panel dark until it finished.
+  function requestWake() {
+    if (wakeProcess.running) wakeProcess.again = true
+    else wakeProcess.running = true
+  }
+
+  // After resume Qt can sit waiting for a frame callback the compositor only
+  // sends once it renders that output again, so the lock stays frozen (or
+  // dark, before its first commit) until the pointer moves. Moving it one
+  // pixel and back is that same nudge without the user.
+  function nudgePointer() {
+    if (!pointerNudgeProcess.running) pointerNudgeProcess.running = true
   }
 
   // After resume the lock surface can keep its pre-suspend buffer while Qt
@@ -359,11 +420,83 @@ Item {
   // countdown then pauses it again if nothing else happens. The idle service
   // repeats the same request without sleeping, so the sleep has to be seen.
   function noteSleepRequested() {
-    if (!lockRequested || !fingerprintPaused) return
+    if (!lockRequested) return
+    holdFaceForSleep()
+    if (!fingerprintPaused) return
     // logind holds a suspend for its inhibitor delay, at most 15 seconds here.
     fingerprintResumeTimer.ticksLeft = 20
     fingerprintResumeTimer.lastTickMs = Date.now()
     fingerprintResumeTimer.restart()
+  }
+
+  // A scan that is in flight when the machine suspends freezes with it, then
+  // fails on resume because the camera is not back yet, and that failure
+  // used to play as a miss on a surface that had not started presenting.
+  // Drop the scan now and start a fresh one once the resume is seen.
+  function holdFaceForSleep() {
+    cancelFaceRequest("sleep")
+    faceAwaitingResume = true
+    faceRetryTimer.stop()
+    faceQuickRetryTimer.stop()
+    resumeSettleTimer.stop()
+    if (facePam.active) facePam.abort()
+    // abort() delivers no completion signal.
+    faceAuthenticating = false
+    faceState = "scanning"
+    // Blanking a panel that is about to suspend buys nothing, and a panel
+    // left off has to be woken again on resume. logind can hold the suspend
+    // for many seconds while other inhibitors finish.
+    idleBlankTimer.stop()
+    // A quarter-second tick finds the resume sooner; 80 of them cover the
+    // longest logind holds seen before a lid suspend.
+    sleepResumeWatch.ticksLeft = 80
+    sleepResumeWatch.lastTickMs = Date.now()
+    sleepResumeWatch.restart()
+  }
+
+  // Lid open and the wall-clock jump after a suspend both land here. Once
+  // resume settles, wake the panel, commit the lock surface again over the
+  // next seconds while the GPU and outputs come back, and start the scan.
+  function handleResume(why) {
+    if (!lockRequested) return
+    // The lid probe and the sleep watch each see the same resume.
+    var now = Date.now()
+    var already = resumeSettleTimer.running || now - lastResumeMs < 3000
+    faceAwaitingResume = false
+    sleepResumeWatch.stop()
+    if (already) {
+      // The settle may have found the lid still reading closed.
+      if (!resumeSettleTimer.running && faceConfigured) startFace()
+      return
+    }
+    lastResumeMs = now
+    logEvent("resume: " + why)
+    faceQuietRetries = 0
+    // Read the lid now rather than on the next poll, so the scan is not
+    // refused for a lid that was closed before the suspend.
+    refreshLidState()
+    // Harmless before the outputs are back, and the sooner the compositor
+    // renders the lock again the shorter the frozen frame.
+    nudgePointer()
+    // The first tick after a suspend can land before the kernel has finished
+    // resuming devices. A DPMS request sent then is lost in the compositor's
+    // own DRM restore, so the wake waits for the settle.
+    resumeSettleTimer.restart()
+  }
+
+  // A failure that came back before Howdy could have captured a frame, or
+  // that spanned a suspend, says nothing about the face in front of it.
+  function retryFaceQuietly() {
+    var took = Date.now() - faceStartedAtMs
+    if (faceStartedAtMs <= 0) return false
+    if (took >= faceNoLookMs && took <= faceSpannedSleepMs) return false
+    if (faceQuietRetries >= faceQuietRetryLimit) return false
+    faceQuietRetries += 1
+    logEvent("face-retry-quiet: took=" + took + "ms try=" + faceQuietRetries)
+    faceState = "scanning"
+    faceQuickRetryTimer.interval = 300 * faceQuietRetries
+    if (!displaysBlank) faceQuickRetryTimer.restart()
+    return true
   }
 
   // User activity advances retries without recreating a busy retry loop.
@@ -418,6 +551,7 @@ Item {
 
   function runBlank() {
     root.displaysBlank = true
+    cancelFaceRequest("blank")
     root.monitorDpmsKnown = false
     pauseFingerprint()
     if (!blankProcess.running) blankProcess.running = true
@@ -546,9 +680,43 @@ Item {
     armFingerprintRetry(FingerprintModel.retryDelayMs(fingerprintUnreachedStreak))
   }
 
+  // The face button, or Space / Enter on an empty field.
+  function requestFace() {
+    if (!lockRequested || !faceConfigured || fingerprintConfigured) return
+    if (faceRequested || faceHolding || facePendingMatch) return
+    faceRequested = true
+    faceQuietRetries = 0
+    faceScanSeen = false
+    faceState = "scanning"
+    // A fresh cycle, so the card boots and sweeps from the start.
+    facePlaybackEpoch += 1
+    logEvent("face-requested")
+    runWake()
+    startFace()
+  }
+
+  // Typing a password, Esc, a blank or a suspend take the scan back. A match
+  // PAM has already approved is never withdrawn.
+  function cancelFaceRequest(why) {
+    if (!faceOnRequest || !faceRequested) return
+    if (faceHolding || facePendingMatch) return
+    faceRequested = false
+    faceRetryTimer.stop()
+    faceQuickRetryTimer.stop()
+    if (facePam.active) facePam.abort()
+    // abort() delivers no completion signal.
+    faceAuthenticating = false
+    faceState = "scanning"
+    logEvent("face-cancelled: " + why)
+  }
+
   function startFace() {
     if (!lockRequested || !sessionLock.secure || !faceConfigured) return
+    if (faceOnRequest && !faceRequested) return
     if (laptopClosed || displaysBlank) return
+    // Resume settling owns the first scan; resumeSettleTimer starts it.
+    if (faceAwaitingResume || resumeSettleTimer.running) return
+    if (facePendingMatch) return
     if (facePam.active || faceAuthenticating) return
     // A result armed while the panel was blank or the frame clock was stopped
     // is still owed its frames. A new scan must not replace that card.
@@ -556,6 +724,8 @@ Item {
 
     faceState = "scanning"
     faceAuthenticating = true
+    faceQuickRetryTimer.stop()
+    faceStartedAtMs = Date.now()
     if (!facePam.start()) {
       faceAuthenticating = false
       if (faceConfigured && !laptopClosed && !displaysBlank) faceRetryTimer.restart()
@@ -569,23 +739,35 @@ Item {
     var chromeExpected = canPresent && FaceChrome.sourceUrl !== ""
     var action = Playback.playbackAction(state, FaceChrome.ready, FaceChrome.holdMs(state), chromeExpected, FaceChrome.failure !== "")
     faceState = state
+    // The next scan starts a new cycle on the card.
+    faceScanSeen = false
     if (!canPresent || action === "immediate") {
       faceHolding = false
       return false
     }
-    if (state === "recognized") faceRetryTimer.stop()
+    if (state === "recognized") {
+      faceRetryTimer.stop()
+      faceUnlockCeiling.interval = Math.max(1, Playback.presentedCeilingMs(FaceChrome.holdMs(state)) || 3000)
+      faceUnlockCeiling.restart()
+    }
     faceHolding = true
     facePlaybackEpoch += 1
     return true
   }
 
   function completeFacePlayback() {
+    faceUnlockCeiling.stop()
     if (!faceHolding) return
     var recognized = faceState === "recognized"
     faceHolding = false
     if (!lockRequested) return
     if (recognized) {
       finishUnlock()
+      return
+    }
+    // On request, a miss hands back to the button rather than scanning again.
+    if (faceOnRequest) {
+      faceRequested = false
       return
     }
     // The retry may already be running. If it fired while the card was still
@@ -609,7 +791,16 @@ Item {
 
   function releaseUnmatchedFace() {
     if (!lockRequested || !faceConfigured || laptopClosed) return
-    root.holdFaceResult("notRecognized")
+    if (faceAwaitingResume) return
+    if (root.retryFaceQuietly()) return
+    faceQuietRetries = 0
+    var held = root.holdFaceResult("notRecognized")
+    if (faceOnRequest) {
+      // The miss card plays, then completeFacePlayback hands back to the
+      // button. With no card to play, hand back now.
+      if (!held) faceRequested = false
+      return
+    }
     if (!displaysBlank) faceRetryTimer.restart()
   }
 
@@ -618,13 +809,33 @@ Item {
 
     if (!lockRequested) return
     if (result === PamResult.Success) {
-      // PAM has already succeeded. Waiting here only keeps the recognised
-      // frame on screen; with no card to play, unlock is immediate.
-      if (root.holdFaceResult("recognized")) return
-      finishUnlock()
+      // PAM has already succeeded. Waiting here only lets the scan finish
+      // and keeps the recognised frame on screen; with no card to play,
+      // unlock is immediate.
+      var scanMs = FaceChrome.ready ? FaceChrome.scanMs() : 0
+      if (!faceScanSeen && scanMs > 0 && faceConfigured && !fingerprintConfigured) {
+        facePendingMatch = true
+        faceMatchWaitTimer.interval = scanMs + 1500
+        faceMatchWaitTimer.restart()
+        return
+      }
+      root.playFaceMatch()
       return
     }
     root.releaseUnmatchedFace()
+  }
+
+  function playFaceMatch() {
+    facePendingMatch = false
+    faceMatchWaitTimer.stop()
+    if (!lockRequested) return
+    if (root.holdFaceResult("recognized")) return
+    finishUnlock()
+  }
+
+  function noteFaceScanShown() {
+    faceScanSeen = true
+    if (facePendingMatch) playFaceMatch()
   }
 
   function handleFingerprintFinished(result) {
@@ -696,7 +907,12 @@ Item {
         facePlaybackEpoch: root.facePlaybackEpoch
         lockPresentEpoch: root.lockPresentEpoch
         faceScanning: root.faceAuthenticating || root.faceHolding
+        faceCardActive: root.faceCardActive
+        faceOnRequest: root.faceOnRequest
+        onFaceRequested: root.requestFace()
+        onFaceCancelRequested: root.cancelFaceRequest("escape")
         onFaceResultPlayed: root.completeFacePlayback()
+        onFaceScanShown: root.noteFaceScanShown()
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
@@ -705,7 +921,10 @@ Item {
         displaysBlank: root.screenBlank(lockSurface.screen ? lockSurface.screen.name : "")
         powerSaverActive: root.powerSaverActive
         passwordText: root.enteredPassword
-        onPasswordTextEdited: function(password) { root.enteredPassword = password }
+        onPasswordTextEdited: function(password) {
+          root.enteredPassword = password
+          if (password.length > 0) root.cancelFaceRequest("typing")
+        }
         onSubmitPassword: function(password) { root.submitPassword(password) }
         onClearFailureRequested: root.failureMessage = ""
         onWakeRequested: root.runWake()
@@ -738,6 +957,7 @@ Item {
       faceConfigured: root.faceConfigured
       faceState: "scanning"
       faceScanning: root.previewVisible && root.faceConfigured
+      faceCardActive: true
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0
@@ -896,6 +1116,115 @@ Item {
     onTriggered: root.timeoutFingerprintReach()
   }
 
+  // Quiet retries for scans that never looked at a face, paced short so the
+  // first real scan after resume starts as soon as the camera is back.
+  // PAM has already said yes. The recognised card is a courtesy, so the
+  // unlock never waits on it longer than a fully presented hold would take,
+  // however the surface is presenting (a panel still coming back after
+  // resume used to keep the user at a dark lock for the whole stall ceiling).
+  Timer {
+    id: faceUnlockCeiling
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (!root.faceHolding || root.faceState !== "recognized") return
+      root.logEvent("face-unlock: card did not finish in " + interval + "ms")
+      root.completeFacePlayback()
+    }
+  }
+
+  // Bounds the wait for the scan to finish, in wall time, so a card that is
+  // not presenting (or presenting slowly) never holds an approved unlock.
+  Timer {
+    id: faceMatchWaitTimer
+    interval: 4000
+    repeat: false
+    onTriggered: {
+      if (!root.facePendingMatch) return
+      root.logEvent("face-match: scan did not finish in " + interval + "ms")
+      root.playFaceMatch()
+    }
+  }
+
+  Timer {
+    id: faceQuickRetryTimer
+    interval: 300
+    repeat: false
+    onTriggered: root.startFace()
+  }
+
+  // Timers stand still through a suspend, so the first tick after a resume
+  // sees the wall clock jump. Runs only for the seconds after a sleep was
+  // announced; if no sleep comes, the held scan is released.
+  Timer {
+    id: sleepResumeWatch
+    interval: 250
+    repeat: true
+    property int ticksLeft: 0
+    property double lastTickMs: 0
+    onTriggered: {
+      var now = Date.now()
+      var slept = FingerprintModel.spannedSleep(now - lastTickMs, interval)
+      lastTickMs = now
+      if (slept) {
+        root.handleResume("sleep")
+      } else if (--ticksLeft <= 0) {
+        stop()
+        root.faceAwaitingResume = false
+        root.armBlankTimer()
+        root.startFace()
+      }
+    }
+  }
+
+  // The camera and the GPU come back a moment after userspace does. The
+  // scan waits for that, and the surface is committed again so the compositor
+  // resumes frame callbacks without needing pointer motion.
+  Timer {
+    id: resumeSettleTimer
+    interval: 800
+    repeat: false
+    onTriggered: {
+      root.runWake()
+      root.nudgePointer()
+      resumePresentTimer.ticksLeft = 6
+      resumePresentTimer.restart()
+      resumeWakeRetryTimer.restart()
+      // Replay the scan from its boot: what played before the suspend was
+      // seen by nobody, and the card's clock carried on through it.
+      if (!root.faceHolding && !root.facePendingMatch) {
+        root.faceScanSeen = false
+        root.facePlaybackEpoch += 1
+      }
+      if (root.faceConfigured) root.startFace()
+    }
+  }
+
+  // A second wake once the outputs have certainly been restored, for a
+  // resume slow enough that the first still raced the compositor.
+  Timer {
+    id: resumeWakeRetryTimer
+    interval: 1500
+    repeat: false
+    onTriggered: {
+      if (!root.lockRequested) return
+      root.requestWake()
+      root.rearmLockPresentation()
+      root.nudgePointer()
+    }
+  }
+
+  Timer {
+    id: resumePresentTimer
+    interval: 400
+    repeat: true
+    property int ticksLeft: 0
+    onTriggered: {
+      root.rearmLockPresentation()
+      if (--ticksLeft <= 0) stop()
+    }
+  }
+
   Process {
     id: readlinkProc
     command: ["bash", "-c", "path=$(readlink -f -- \"$1\") && printf '%s\\n%s\\n' \"$path\" \"$(stat -Lc %Y:%s -- \"$path\" 2>/dev/null)\"", "_", root.currentBackgroundLink]
@@ -965,19 +1294,26 @@ Item {
     id: laptopClosedProc
     command: ["bash", "-c", "omarchy-hw-laptop-closed && echo closed || echo open"]
     stdout: StdioCollector { id: laptopClosedOut; waitForEnd: true }
+    // A request that lands while a probe is running may predate the change.
+    property bool again: false
     onExited: {
+      if (again) {
+        again = false
+        Qt.callLater(function() { laptopClosedProc.running = true })
+      }
       var wasClosed = root.laptopClosed
       root.laptopClosed = String(laptopClosedOut.text || "").trim() === "closed"
       if (root.laptopClosed) {
         faceRetryTimer.stop()
+        faceQuickRetryTimer.stop()
+        resumeSettleTimer.stop()
         faceAuthenticating = false
         if (facePam.active) facePam.abort()
       } else if (wasClosed && root.lockRequested) {
-        // Resume does not run system-wake. runWake commits a new buffer so
-        // the lock surface leaves the pre-suspend frame. Start a scan only
-        // when face is configured.
-        root.runWake()
-        if (root.faceConfigured) root.startFace()
+        // Resume does not run system-wake. handleResume wakes the panel,
+        // commits new buffers so the lock surface leaves the pre-suspend
+        // frame, and starts a scan once the camera has had time to return.
+        root.handleResume("lid-open")
       }
     }
   }
@@ -1001,6 +1337,17 @@ Item {
   Process {
     id: wakeProcess
     command: ["bash", "-c", "omarchy-system-wake"]
+    property bool again: false
+    onExited: {
+      if (!again) return
+      again = false
+      Qt.callLater(function() { wakeProcess.running = true })
+    }
+  }
+
+  Process {
+    id: pointerNudgeProcess
+    command: ["bash", "-c", "pos=$(hyprctl cursorpos) || exit 0; x=${pos%%,*}; y=${pos##*, }; [[ $x =~ ^-?[0-9]+$ && $y =~ ^-?[0-9]+$ ]] || exit 0; hyprctl dispatch \"hl.dsp.cursor.move({ x = $((x + 1)), y = $y })\" >/dev/null && hyprctl dispatch \"hl.dsp.cursor.move({ x = $x, y = $y })\" >/dev/null"]
   }
 
   Process {
@@ -1049,6 +1396,10 @@ Item {
       // Fingerprint PAM stays armed for the whole lock, so gating on
       // `authenticating` would keep the panel lit until unlock. Face is a
       // bounded Howdy scan. Hold the panel while that scan is in flight.
+      // A suspend has been announced, or the lid is shut: logind can hold a
+      // lid suspend back for many seconds, and a panel blanked meanwhile is
+      // still dark after resume. Nobody can see a closed panel anyway.
+      if (sleepResumeWatch.running || root.laptopClosed) return
       if (root.lockRequested && !root.authenticatingPassword && !root.faceAuthenticating && !root.faceHolding) root.runBlank()
     }
   }
@@ -1129,6 +1480,7 @@ Item {
   onDisplaysBlankChanged: {
     if (displaysBlank) {
       faceRetryTimer.stop()
+      faceQuickRetryTimer.stop()
     } else if (lockRequested) {
       // The canvas starts the armed result once frames are presented.
       // startFace returns while that hold is still playing.
