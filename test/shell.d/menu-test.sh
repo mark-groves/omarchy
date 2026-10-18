@@ -299,22 +299,36 @@ assert(!defaultById['install.ai.crush'], 'menu removes Crush from Install > AI')
 // Software you already have keeps its place in Install, dimmed rather than
 // dropped, so the list reads as a catalog of what Omarchy can install.
 // Chromium Account is the sole Install row with anything left to hide for. The
-// Windows VM, whose guest can't run elsewhere, and the installers whose vendors
-// ship Linux builds for x86_64 alone hide only off x86_64, so any other `when:`
+// Windows VM, whose guest can't run elsewhere, and the installers that need
+// x86_64 binaries (vendor builds for x86_64 alone, Windows games under Wine)
+// hide only off x86_64. Dropbox's x86_64 client runs under box64 on ARM, which
+// needs 4K pages, so it hides only where pages are larger. Spotify installs its
+// web player where its client can't run, so it never hides. Any other `when:`
 // here is a row that went back to vanishing once installed.
 const windowsGuard = 'omarchy-hw-x86'
-const x86OnlyInstalls = ['install.windows', 'install.browser.edge', 'install.service.dropbox', 'install.service.spotify', 'install.gaming.minecraft', 'install.gaming.heroic']
+const x86OnlyInstalls = ['install.windows', 'install.browser.edge', 'install.gaming.minecraft', 'install.gaming.heroic', 'install.gaming.geforce-now', 'install.gaming.battlenet', 'install.gaming.lutris']
+const fourKPageGuard = '[[ $(getconf PAGESIZE) == 4096 ]]'
 assertDeepEqual(
   defaultItems
     .filter(item => item.id.startsWith('install.') && item.action && item.when)
     .map(item => item.id)
     .sort(),
-  [...x86OnlyInstalls, 'install.service.chromium-account'].sort(),
+  [...x86OnlyInstalls, 'install.service.dropbox', 'install.service.chromium-account'].sort(),
   'menu never hides an Install row because the software is already there'
 )
 assert(
   x86OnlyInstalls.every(id => defaultById[id].when === windowsGuard),
   'menu hides the Windows VM and the x86_64-only installers only off x86_64'
+)
+assertEqual(
+  defaultById['install.service.dropbox'].when,
+  fourKPageGuard,
+  'menu offers Dropbox wherever box64 can run it, on x86_64 and on ARM with 4K pages'
+)
+assert(
+  !defaultById['install.service.spotify'].when
+    && defaultById['install.service.spotify'].disabled.includes('applications/Spotify.desktop'),
+  'menu offers Spotify on every platform and dims it once its client or web player is installed'
 )
 assert(
   ['install.browser.zen', 'install.editor.vscode', 'install.gaming.steam', 'install.development.rust', 'install.windows'].every(
