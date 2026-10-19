@@ -132,6 +132,11 @@ cat >"$mock_bin/omarchy-test-noop" <<'SH'
 exit 0
 SH
 
+cat >"$mock_bin/sudo" <<'SH'
+#!/bin/bash
+exec "$@"
+SH
+
 for command in gum hyprctl omarchy-webapp-remove-all omarchy-tui-remove-all omarchy-pkg-drop; do
   ln -s omarchy-test-noop "$mock_bin/$command"
 done
@@ -154,17 +159,21 @@ export OMARCHY_TEST_HERMES_INSTALL_LOG="$hermes_install_log"
 export OMARCHY_TEST_MUSE_LOGIN_LOG="$muse_login_log"
 export OMARCHY_TEST_CLAUDE_EXT_LOG="$claude_ext_log"
 export OMARCHY_PATH="$ROOT"
+export OMARCHY_MISE_CONFIG_PATH="$test_tmp/etc/mise/config.toml"
 
 grok_package="grok"
 legacy_grok_package="npm:@xai-official/grok"
-omp_package="github:can1357/oh-my-pi"
+omp_package="oh-my-pi"
+legacy_omp_package="github:can1357/oh-my-pi"
 crush_package="crush"
 agy_package="antigravity-cli"
-ori_package="github:OpenRouterLabs/ori-releases"
+ori_package="ori"
+legacy_ori_package="github:OpenRouterLabs/ori-releases"
 basecamp_package="github:basecamp/basecamp-cli"
 kimi_package="npm:@moonshot-ai/kimi-code"
 cursor_agent_package="cursor-agent"
-muse_package="http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]"
+muse_package="muse"
+legacy_muse_package="http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]"
 
 assert_lazy_stub() {
   local package=$1
@@ -189,30 +198,38 @@ assert_lazy_stub "$muse_package" muse
 pass "custom agent lazy stubs preserve their mise packages"
 
 source "$ROOT/install/user/mise.sh"
-grep -Fx "$agy_package agy" "$stub_log" >/dev/null || fail "user setup creates the Antigravity lazy stub"
-grep -Fx "$grok_package" "$stub_log" >/dev/null || fail "user setup creates the Grok lazy stub"
-grep -Fx "$omp_package omp" "$stub_log" >/dev/null || fail "user setup creates the Oh My Pi lazy stub"
-grep -Fx "$crush_package" "$stub_log" >/dev/null || fail "user setup creates the Crush lazy stub"
-grep -Fx "$ori_package ori" "$stub_log" >/dev/null || fail "user setup creates the Ori lazy stub"
-grep -Fx "$basecamp_package basecamp" "$stub_log" >/dev/null || fail "user setup creates the Basecamp lazy stub"
-grep -F "asdf:icholy/asdf-cursor-agent" "$stub_log" >/dev/null &&
-  fail "user setup does not create a Cursor asdf stub"
-grep -F "cursor-agent" "$stub_log" >/dev/null &&
-  fail "user setup does not create a Cursor mise stub"
-grep -Fx "$muse_package muse" "$stub_log" >/dev/null || fail "user setup creates the Muse lazy stub"
-grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "user setup creates the Kimi lazy stub"
-pass "user setup creates the custom agent lazy stubs"
-
+lazy_config="$ROOT/etc/mise/conf.d/omarchy-tools.toml"
+[[ -f $lazy_config ]] || fail "Omarchy ships the system mise config"
+grep -Fx 'locked_scopes = ["project", "global"]' "$lazy_config" >/dev/null ||
+  fail "system tools remain installable when the user enables locked mode"
+for tool in "$agy_package" "$grok_package" "$omp_package" "$crush_package" "$muse_package"; do
+  grep -Eq "^$tool = \\{ version = \"latest\", lazy = true, auto_update = \"4h\", minimum_release_age = \"0s\" \\}$" "$lazy_config" ||
+    fail "user setup declares $tool as a self-updating native lazy tool"
+done
+for tool in "$ori_package" basecamp; do
+  grep -Eq "^$tool = \\{ version = \"latest\", lazy = true, minimum_release_age = \"0s\" \\}$" "$lazy_config" ||
+    fail "user setup declares $tool as a native lazy tool"
+done
+for tool in codex claude copilot opencode pi "\"$kimi_package\""; do
+  grep -Eq "^$tool = \\{ version = \"latest\", lazy = true, auto_update = \"4h\", " "$lazy_config" ||
+    fail "user setup declares $tool as a self-updating native lazy tool"
+done
+grep -q '^cursor-agent = ' "$lazy_config" && fail "user setup does not declare Cursor as a mise tool"
+[[ $(grep -c 'auto_update = "4h"' "$lazy_config") == 11 ]] || fail "only the agent CLIs update themselves"
+grep -Eq '^uv = \{ version = "latest", lazy = true, minimum_release_age = "0s" \}$' "$lazy_config" ||
+  fail "user setup declares uv as a native lazy tool"
+[[ $(grep -c 'lazy = true' "$lazy_config") == 20 ]] || fail "user setup declares every default mise tool as lazy"
+grep -Fx "reshim --system" "$mise_history" >/dev/null || fail "user setup builds the system lazy bootstrap shims"
+pass "user setup configures system lazy tools from registry shorthands"
 : >"$stub_log"
 source "$ROOT/install/user/mise.sh"
+[[ ! -s $stub_log ]] || fail "user setup must not create handwritten mise wrappers"
 grep -F "cursor-agent" "$stub_log" >/dev/null && fail "user setup does not recreate a Cursor mise stub"
-grep -Fx "$muse_package muse" "$stub_log" >/dev/null || fail "user setup recreates the Muse lazy stub"
-grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "user setup recreates the Kimi lazy stub"
-pass "user setup recreates wrappers even when the commands are present"
+pass "user setup leaves ordinary lazy wrappers to mise"
 
 : >"$stub_log"
 OMARCHY_TEST_MISSING_COMMAND=muse source "$ROOT/migrations/1788724825.sh" >/dev/null
-grep -Fx "$muse_package muse" "$stub_log" >/dev/null || fail "Muse migration creates its lazy stub"
+grep -Fx "$legacy_muse_package muse" "$stub_log" >/dev/null || fail "Muse migration creates its lazy stub"
 : >"$stub_log"
 source "$ROOT/migrations/1788724825.sh" >/dev/null
 [[ ! -s $stub_log ]] || fail "Muse migration replaces an existing command"
@@ -230,11 +247,11 @@ grep -Fx "$kimi_package kimi" "$stub_log" >/dev/null || fail "Kimi migration cre
 
 : >"$stub_log"
 source "$ROOT/migrations/1785617047.sh" >/dev/null
-grep -Fx "$omp_package omp" "$stub_log" >/dev/null || fail "Oh My Pi migration creates a working lazy stub"
+grep -Fx "$legacy_omp_package omp" "$stub_log" >/dev/null || fail "Oh My Pi migration creates a working lazy stub"
 
 : >"$stub_log"
 source "$ROOT/migrations/1787342993.sh" >/dev/null
-grep -Fx "$ori_package ori" "$stub_log" >/dev/null || fail "Ori migration creates a working lazy stub"
+grep -Fx "$legacy_ori_package ori" "$stub_log" >/dev/null || fail "Ori migration creates a working lazy stub"
 
 : >"$stub_log"
 source "$ROOT/migrations/1788941927.sh" >/dev/null
@@ -257,7 +274,7 @@ pass "Cursor CLI migration skips the upstream mise wrapper"
 
 : >"$stub_log"
 source "$ROOT/migrations/1785846769.sh" >/dev/null
-grep -Fx "$omp_package omp" "$stub_log" >/dev/null || fail "agent migration repairs the Oh My Pi lazy stub"
+grep -Fx "$legacy_omp_package omp" "$stub_log" >/dev/null || fail "agent migration repairs the Oh My Pi lazy stub"
 grep -Fx "$legacy_grok_package grok" "$stub_log" >/dev/null || fail "agent migration creates the Grok lazy stub"
 grep -Fx "$crush_package" "$stub_log" >/dev/null || fail "agent migration creates the Crush lazy stub"
 
@@ -369,11 +386,11 @@ for obsolete_form in 'mise use -g "oh-my-pi"' 'mise use -g --quiet "oh-my-pi"'; 
     fail "agent migration removes a wrapper built on [$obsolete_form]"
 done
 
-printf '#!/bin/bash\nmise use -g --quiet "%s" || exit 1\n' "$omp_package" >"$test_home/.local/bin/omp"
+printf '#!/bin/bash\nmise use -g --quiet "%s" || exit 1\n' "$legacy_omp_package" >"$test_home/.local/bin/omp"
 chmod +x "$test_home/.local/bin/omp"
 source "$ROOT/migrations/1785846769.sh" >/dev/null
 [[ -e $test_home/.local/bin/omp ]] ||
-  fail "agent migration keeps a wrapper built on $omp_package"
+  fail "agent migration keeps a wrapper built on $legacy_omp_package"
 rm -f "$test_home/.local/bin/omp"
 
 printf '#!/bin/bash\nexport MISE_MINIMUM_RELEASE_AGE=0\nmise use -g --quiet "%s" || exit 1\nexec mise x "%s" -- "grok" "$@"\n' \
@@ -787,10 +804,31 @@ grep -F "Could not install Muse Code with mise" "$test_tmp/muse-install-failure-
   fail "failed Muse installation identifies mise"
 pass "failed Muse mise installation preserves the selection and skips login"
 
+# Without Omarchy's declarations nothing declares Muse, so selecting it adds it
+# to the user's config.
+: >"$mise_history"
+omarchy-default-agent --install muse >/dev/null
+grep -Fx "use -g $muse_package" "$mise_history" >/dev/null ||
+  fail "Muse selection adds Muse to the user config when no system config declares it"
+rm -f "$agent_file"
+
+# mise skips the declarations for a user who removed the preinstalls, so the
+# same applies.
+mkdir -p "$(dirname "$OMARCHY_MISE_CONFIG_PATH")" "$test_home/.config/mise"
+cp "$ROOT/etc/mise/conf.d/omarchy-tools.toml" "$OMARCHY_MISE_CONFIG_PATH"
+printf 'ignored_config_paths = ["%s"]\n' "$OMARCHY_MISE_CONFIG_PATH" >"$test_home/.config/mise/miserc.toml"
+: >"$mise_history"
+omarchy-default-agent --install muse >/dev/null
+grep -Fx "use -g $muse_package" "$mise_history" >/dev/null ||
+  fail "Muse selection adds Muse to the user config after Remove Preinstalls"
+rm -f "$agent_file" "$test_home/.config/mise/miserc.toml"
+
+# With Omarchy's system config, installing is enough; the user config stays alone.
 : >"$mise_history"
 : >"$stub_log"
 omarchy-default-agent --install muse >"$test_tmp/muse-install-output"
-grep -Fx "use -g $muse_package" "$mise_history" >/dev/null || fail "visible Muse installation uses the HTTP backend"
+grep -Fx "install $muse_package" "$mise_history" >/dev/null || fail "visible Muse installation uses the registry shorthand"
+grep -q '^use ' "$mise_history" && fail "Muse selection leaves the user config alone when the system config declares it"
 [[ ! -s $stub_log ]] || fail "Muse selection recreates its preinstalled wrapper"
 [[ ! -s $muse_login_log ]] || fail "Muse selection runs a separate login flow"
 [[ $(omarchy-default-agent) == "muse" ]] || fail "visible Muse installation changes the selection"
@@ -1044,6 +1082,26 @@ mapfile -d '' -t launch_args <"$launch_log"
   fail "OpenClaw receives prompts through --message" "argv: ${launch_args[*]}"
 pass "OpenClaw receives prompts through --message"
 
+# With the package and no openclaw command, the launcher sets OpenClaw up, so
+# the agent hands over to it rather than calling OpenClaw missing.
+cat >"$mock_bin/omarchy-pkg-present" <<'SH'
+#!/bin/bash
+[[ " ${OMARCHY_TEST_PACKAGES:-} " == *" $1 "* ]]
+SH
+chmod +x "$mock_bin/omarchy-pkg-present"
+: >"$launch_log"
+OMARCHY_TEST_MISSING_COMMAND=openclaw OMARCHY_TEST_PACKAGES=openclaw omarchy-agent >/dev/null 2>&1 ||
+  fail "OpenClaw's agent launches with the package and no command yet"
+mapfile -d '' -t launch_args <"$launch_log"
+[[ ${launch_args[*]} == "--app-id=org.omarchy.agent omarchy-launch-openclaw --tui" ]] ||
+  fail "OpenClaw's agent hands a missing command to its launcher when the package is there" "argv: ${launch_args[*]}"
+: >"$launch_log"
+if OMARCHY_TEST_MISSING_COMMAND=openclaw OMARCHY_TEST_PACKAGES= omarchy-agent >/dev/null 2>&1; then
+  fail "OpenClaw's agent without the package is still missing"
+fi
+[[ ! -s $launch_log ]] || fail "OpenClaw's agent without the package starts nothing"
+pass "OpenClaw's agent hands a missing command to its launcher only when the package is there"
+
 printf '%s\n' "copilot" >"$agent_file"
 : >"$launch_log"
 if OMARCHY_TEST_OPENCLAW_INSTALLED=false OMARCHY_TEST_OPENCLAW_INSTALL_FAIL=true \
@@ -1058,3 +1116,15 @@ grep -F "mise" "$test_tmp/openclaw-install-failure-output" >/dev/null &&
   fail "failed OpenClaw installation preserves the current default agent"
 [[ ! -s $launch_log ]] || fail "failed OpenClaw installation does not open an agent"
 pass "a failed OpenClaw installation blames its own installer, not mise"
+
+# Native lazy shims can precede ~/.local/bin. The agent launcher must still run
+# the official command when the default-agent selector recognized one.
+for agent in cursor-agent muse; do
+  printf '#!/bin/bash\nprintf "official %s\\n"\n' "$agent" >"$test_home/.local/bin/$agent"
+  chmod +x "$test_home/.local/bin/$agent"
+  printf '%s\n' "$agent" >"$agent_file"
+  output=$("$ROOT/bin/omarchy-agent" --inline)
+  [[ $output == "official $agent" ]] || fail "agent launcher preserves the user-installed $agent ahead of a mise shim"
+  rm "$test_home/.local/bin/$agent"
+done
+pass "agent launcher runs user-installed Cursor and Muse ahead of native lazy shims"
