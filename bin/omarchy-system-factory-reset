@@ -446,10 +446,13 @@ commit_esp_staging() {
   fi
 }
 
-# Every UKI entry in limine.conf carries a #blake2b hash of the file it
-# points at; a mismatch makes Limine stop at a scary warning. Never hand over
-# a staged reset in that state. Only this installation's entry is rebuilt,
-# so only its UKIs are checked: other systems' entries are not ours to judge.
+# Every boot entry in limine.conf carries a #blake2b hash of each file it
+# loads: the UKI, or the kernel and initramfs where UKIs are off (the DGX
+# Spark). A mismatch makes Limine stop at a scary warning. Never hand over a
+# staged reset in that state. Only this installation's entry is rebuilt, so
+# only its files are checked: other systems' entries are not ours to judge.
+# Snapshot entries keep their own copies under limine_history, which the
+# rebuild does not touch.
 verify_limine_hashes() {
   local root="$1" esp="$2" line path hash file machine_id checked=0
   machine_id=$(cat "$root/etc/machine-id")
@@ -467,7 +470,7 @@ verify_limine_hashes() {
       /^\/[^\/]/ { mine = 0 }
       $0 ~ ("^comment: machine-id=" id "([[:space:]]|$)") { mine = 1 }
       mine
-    ' "$root$esp/limine.conf" | grep -o 'boot():/EFI/Linux/[^#]*#[0-9a-f]*')
+    ' "$root$esp/limine.conf" | grep -o 'boot():/[^#[:space:]]*#[0-9a-f]*' | grep -v '/limine_history/')
 
   ((checked > 0)) || fail "limine.conf has no rebuilt boot entry for this system"
 }
@@ -583,7 +586,7 @@ rebuild_next_boot_platform() {
 # reset is staged by now: a leftover directory or mount only costs space
 # until the reboot, so neither may report the reset as failed.
 commit_next_boot() {
-  commit_esp_staging "$ESP_MNT" "$esp_old_id" "$esp_new_id" || true
+  commit_esp_staging "$ESP_MNT" "${esp_old_id:-}" "${esp_new_id:-}" || true
   umount "$ESP_MNT" 2>/dev/null || true
 }
 
