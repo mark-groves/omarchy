@@ -167,7 +167,7 @@ Item {
       visible: root.faceCardPainting
       enabled: false
       opacity: root.faceCardRevealed ? 1 : 0
-      Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+      Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       spacing: Style.space(10)
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: inputField.top

@@ -331,7 +331,7 @@ Item {
     anchors.fill: parent
     visible: root.glass && root.painting
     opacity: root.glassLit ? 1 : 0
-    Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+    Behavior on opacity { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
     radius: Math.round(root.side * 0.045)
     border.width: Math.max(1, Math.round(root.side / 220))
     border.color: root.glassTheme.edge
