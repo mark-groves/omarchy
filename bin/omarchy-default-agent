@@ -163,6 +163,7 @@ if ! agent_install; then
   else
     echo "Could not set $name as the default coding agent" >&2
   fi
+  exit 1
 fi
 fi
 
