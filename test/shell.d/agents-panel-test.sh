@@ -249,7 +249,7 @@ const start = source.indexOf('function windowIsLong')
 const end = source.indexOf('// The window that decides')
 assert(start > 0 && end > start, 'agents panel exposes its limit-window helpers')
 eval(source.slice(start, end).replaceAll('root.nowMs', 'panelRoot.nowMs'))
-eval(source.slice(source.indexOf('function needsSignIn'), source.indexOf('// Sign an account')))
+eval(source.slice(source.indexOf('function needsSignIn'), source.indexOf('readonly property var hiddenProviders')))
 
 const paused = { usageStatusText: 'Limits paused', limits: [] }
 assertEqual(pausedWithoutLimits(paused), true, 'paused usage without a cache shows a recovery placeholder')
@@ -280,7 +280,7 @@ const resetAt = new Date(panelRoot.nowMs + 1000).toISOString()
 const measured = { limits: [{ label: 'Session (5-hour)', percent: 0.78, resetsAt: resetAt }] }
 assertEqual(limitWindows(measured)[0].percent, 0.78, 'usage remains until the reset time')
 panelRoot.nowMs += 1000
-assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '' }], 'usage resets at the deadline while the panel stays open')
+assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '', elapsed: true }], 'usage resets at the deadline while the panel stays open')
 assertEqual(measured.limits[0].percent, 0.78, 'display reset leaves the measured record intact')
 
 // A model's weekly allowance rides under the Weekly row; one whose window has

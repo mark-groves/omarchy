@@ -299,7 +299,7 @@ omarchy-remove-preinstalls >/dev/null
 for command in agy omp ori grok crush muse kimi; do
   [[ ! -e $test_home/.local/bin/$command ]] || fail "Remove Preinstalls deletes the $command lazy stub"
 done
-[[ -e $test_home/.local/bin/cursor-agent ]] || fail "Remove Preinstalls leaves a user-installed Cursor Agent in place"
+[[ ! -e $test_home/.local/bin/cursor-agent ]] || fail "Remove Preinstalls deletes the Cursor mise wrapper"
 pass "Remove Preinstalls deletes every optional agent lazy stub"
 
 # Cursor's installer links the same path, so anything but the mise wrapper is
