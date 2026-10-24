@@ -104,14 +104,10 @@ Item {
   property string backgroundSignature: ""
   property string lastEvent: "init"
   property string lastEventAt: ""
-  property bool displaysBlank: false
-  // displaysBlank tracks what the lock asked for; Hyprland reports what each
-  // panel actually did. While a video is on show the two are reconciled, so a
-  // blank that failed keeps playing and a panel woken behind the lock's back
-  // (a resume that kept the same outputs) resumes instead of freezing.
-  property var monitorDpms: ({})
-  property bool monitorDpmsKnown: false
   readonly property bool videoBackground: Util.isVideoPath(backgroundPath)
+  // What the lock itself asked of the displays. Face pauses while they are
+  // blank. The wallpaper no longer polls Hyprland for each panel's DPMS.
+  property bool displaysBlank: false
   property bool strandedLock: false
   property bool strandedLockResolved: false
 
@@ -131,14 +127,11 @@ Item {
   function currentlyLocked() {
     return lockRequested || sessionLock.locked || sessionLock.secure
   }
-
   function publishLockState() {
     var now = root.currentlyLocked()
     if (root.locked !== now) root.locked = now
   }
   readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating
-  readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
-  readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
   // A prompt clears the unavailable notice before the attempt finishes.
   readonly property bool fingerprintUnavailable: FingerprintModel.isUnavailable(fingerprintProbeStreak) || (fingerprintConfigured && (!fingerprintAttemptReachedDevice || fingerprintAttemptFastError) && FingerprintModel.isUnavailable(fingerprintUnreachedStreak))
 
@@ -354,7 +347,6 @@ Item {
 
   function runWake() {
     root.displaysBlank = false
-    root.monitorDpmsKnown = false
     requestWake()
     if (lockRequested) armBlankTimer()
     // A resume that does not change the lid or the output list never hits
@@ -564,33 +556,8 @@ Item {
   function runBlank() {
     root.displaysBlank = true
     cancelFaceRequest("blank")
-    root.monitorDpmsKnown = false
     pauseFingerprint()
     if (!blankProcess.running) blankProcess.running = true
-  }
-
-  function screenBlank(screenName) {
-    var name = String(screenName || "")
-    if (!monitorDpmsKnown || !(name in monitorDpms)) return displaysBlank
-    return !monitorDpms[name]
-  }
-
-  function applyMonitorDpms(text) {
-    var monitors
-    try {
-      monitors = JSON.parse(String(text || ""))
-    } catch (error) {
-      return
-    }
-    if (!Array.isArray(monitors)) return
-
-    var dpms = {}
-    for (var i = 0; i < monitors.length; i++) {
-      var monitor = monitors[i]
-      if (monitor && monitor.name && !monitor.disabled) dpms[String(monitor.name)] = !!monitor.dpmsStatus
-    }
-    monitorDpms = dpms
-    monitorDpmsKnown = true
   }
 
   function submitPassword(value) {
@@ -930,8 +897,7 @@ Item {
         failedAttempts: root.failedAttempts
         inputEnabled: root.lockRequested
         loadBackground: root.locked
-        displaysBlank: root.screenBlank(lockSurface.screen ? lockSurface.screen.name : "")
-        powerSaverActive: root.powerSaverActive
+        displaysBlank: root.displaysBlank
         passwordText: root.enteredPassword
         onPasswordTextEdited: function(password) {
           root.enteredPassword = password
@@ -975,7 +941,7 @@ Item {
       failedAttempts: 0
       inputEnabled: false
       loadBackground: root.previewVisible
-      powerSaverActive: root.powerSaverActive
+      displaysBlank: root.displaysBlank
       passwordText: ""
     }
 
@@ -1367,31 +1333,6 @@ Item {
     command: ["bash", "-c", "omarchy-brightness-keyboard off; omarchy-brightness-display off"]
   }
 
-  // Quickshell exposes no DPMS signal, so the panel state is polled while a
-  // video is the locked wallpaper. A wake or blank request drops the last
-  // answer, so its optimistic state applies until the next poll confirms it.
-  Process {
-    id: monitorDpmsProcess
-    command: ["hyprctl", "monitors", "-j"]
-    stdout: StdioCollector {
-      onStreamFinished: root.applyMonitorDpms(text)
-    }
-  }
-
-  Timer {
-    id: monitorDpmsTimer
-    interval: 3000
-    repeat: true
-    triggeredOnStart: true
-    running: root.locked && root.videoBackground
-    onTriggered: {
-      if (!monitorDpmsProcess.running) monitorDpmsProcess.running = true
-    }
-    onRunningChanged: {
-      if (!running) root.monitorDpmsKnown = false
-    }
-  }
-
   Timer {
     id: idleBlankTimer
     interval: 5000
@@ -1454,7 +1395,7 @@ Item {
     function onScreensChanged() {
       // A panel coming back is a display turning on that runWake did not ask
       // for, so the blank state has to be given up here or a visible lock
-      // wallpaper stays frozen until the next keypress.
+      // keeps face paused until the next keypress.
       root.displaysBlank = false
       root.rearmLockPresentation()
       var screens = root.realScreenCount()
