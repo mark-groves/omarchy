@@ -19,6 +19,7 @@ awk '
 ' "$ROOT/bin/omarchy-system-factory-reset" >"$tmp/checkout with spaces/reset"
 grep -Fxq 'PACKAGED_PATH=/usr/bin/omarchy-system-factory-reset' "$ROOT/bin/omarchy-system-factory-reset" || fail "factory reset pins the packaged path"
 sed -i "s|^PACKAGED_PATH=.*|PACKAGED_PATH=\"$tmp/packaged-reset\"|" "$tmp/checkout with spaces/reset"
+sed -i "s|/usr/bin/sudo|$tmp/bin/sudo|g" "$tmp/checkout with spaces/reset"
 cp "$tmp/checkout with spaces/reset" "$tmp/packaged-reset"
 chmod +x "$tmp/checkout with spaces/reset" "$tmp/packaged-reset"
 ln -s "$tmp/checkout with spaces/reset" "$tmp/reset-link"
@@ -31,7 +32,7 @@ SH
 chmod +x "$tmp/bin/sudo"
 
 args=('argument with spaces' '' '--flag' '$(touch should-not-run)' $'two\nlines')
-expected=(env 'GUM_INPUT_PROMPT=Reset this computer? ' "$tmp/packaged-reset" "${args[@]}")
+expected=(/usr/bin/env 'GUM_INPUT_PROMPT=Reset this computer? ' "$tmp/packaged-reset" "${args[@]}")
 for invocation in "$tmp/checkout with spaces/reset" './checkout with spaces/reset' "$tmp/reset-link" "$tmp/packaged-reset" reset; do
   for status in 0 1 127; do
     actual_status=0
