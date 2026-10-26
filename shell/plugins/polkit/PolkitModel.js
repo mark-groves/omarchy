@@ -8,6 +8,10 @@ var CHROME_BY_MODULE = {
   "pam_fprintd.so": { method: "fingerprint", lidGated: true }
 }
 
+// The kind a card plugin may declare. Discovery does not require it: the
+// slot key in entryPoints is the declaration, so a plugin can also carry the
+// service and panel kinds the plugin marketplace lists. Kept for manifests
+// that declare it and for omarchy-plugin-validate.
 var CHROME_KIND = "polkit-chrome"
 
 var CARD = {
@@ -114,7 +118,6 @@ function resolveChromeSlot(kind, source) {
     var manifest = plugins[id]
     if (!manifest || typeof manifest !== "object") continue
     if (manifest.__isFirstParty) continue
-    if (!Array.isArray(manifest.kinds) || manifest.kinds.indexOf(CHROME_KIND) === -1) continue
     if (!manifest.entryPoints || typeof manifest.entryPoints[key] !== "string" || !manifest.entryPoints[key]) continue
     if (typeof registry.isEnabled !== "function" || !registry.isEnabled(id)) continue
     var url = typeof registry.entryPointUrl === "function" ? registry.entryPointUrl(manifest, key) : ""

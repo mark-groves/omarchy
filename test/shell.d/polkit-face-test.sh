@@ -225,10 +225,15 @@ const firstParty = polkit.cardPresentationFor(faceSteps, true, false, source({
 }, ['omarchy.polkit']))
 assertEqual(firstParty.slot, null, 'first-party manifests cannot fill the chrome slot')
 
-const noKind = polkit.cardPresentationFor(faceSteps, true, false, source({
-  'acme.sneaky': { ...facePlugin, kinds: ['overlay'] }
-}, ['acme.sneaky']))
-assertEqual(noKind.slot, null, 'the extra key without polkit-chrome does not attach')
+const keyOnly = polkit.cardPresentationFor(faceSteps, true, false, source({
+  'markgroves.polkit-face': { ...facePlugin, kinds: ['service', 'panel'] }
+}, ['markgroves.polkit-face']))
+assertEqual(keyOnly.slot && keyOnly.slot.pluginId, 'markgroves.polkit-face', 'the polkitFace key attaches without the polkit-chrome kind')
+
+const keyOnlyDisabled = polkit.cardPresentationFor(faceSteps, true, false, source({
+  'markgroves.polkit-face': { ...facePlugin, kinds: ['service', 'panel'] }
+}, []))
+assertEqual(keyOnlyDisabled.slot, null, 'a disabled plugin never fills the slot')
 
 const passwordSlot = polkit.cardPresentationFor(faceSteps, false, false, source({
   'acme.password': {
@@ -434,8 +439,8 @@ assert(
   'registry listeners are a property; QtObject has no default child slot'
 )
 assert(
-  /entryPoints\.polkitFace/.test(chrome) && /polkit-chrome/.test(chrome),
-  'chrome discovery uses the same kind and slot key as the polkit resolver'
+  /entryPoints\.polkitFace/.test(chrome) && !/polkit-chrome/.test(chrome.replace(/\/\/.*$/gm, '')),
+  'chrome discovery uses the same slot key as the polkit resolver, without requiring a kind'
 )
 const shellQml = fs.readFileSync(path.join(root, 'shell/shell.qml'), 'utf8')
 assert(

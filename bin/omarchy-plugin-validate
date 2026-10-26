@@ -109,8 +109,10 @@ for kind_entry_point in \
 done
 
 # polkit-chrome is not a host-instantiated kind. The first-party polkit agent
-# loads one extra entry point from an enabled plugin that declares it. Demand
-# a key from the card table so a typo does not install a no-op.
+# loads one extra entry point, polkitFace or polkitFingerprint, from an enabled
+# plugin that names it; the kind is optional, since the key alone is found.
+# A plugin that does declare the kind must name a key from the card table, so
+# a typo does not install a no-op.
 if jq -e '(.kinds | index("polkit-chrome")) != null' "$MANIFEST" >/dev/null 2>&1; then
   jq -e '.entryPoints | has("polkitFace") or has("polkitFingerprint")' "$MANIFEST" >/dev/null 2>&1 \
     || fail "kind 'polkit-chrome' requires an 'entryPoints.polkitFace' or 'entryPoints.polkitFingerprint' to load"

@@ -120,6 +120,12 @@ dir=$(write_plugin "polkit-fingerprint" '["polkit-chrome"]' '{"polkitFingerprint
 validate "$dir" >/dev/null || fail "validate accepts polkit-chrome with a polkitFingerprint slot"
 pass "validate accepts polkit-chrome with a polkitFingerprint slot"
 
+# The face slot is found by its key, so a card plugin can list itself as the
+# service and panel the plugin marketplace accepts and still fill the slot.
+dir=$(write_plugin "face-key-only" '["service", "panel"]' '{"service": "Service.qml", "panel": "Card.qml", "polkitFace": "Face.js"}')
+validate "$dir" >/dev/null || fail "validate accepts a polkitFace slot beside marketplace kinds"
+pass "validate accepts a polkitFace slot beside marketplace kinds"
+
 # The check reports the manifest, so a path that does not resolve still gets the
 # more specific complaint it had before.
 dir="$TMPDIR/ghost"
