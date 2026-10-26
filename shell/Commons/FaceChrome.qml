@@ -31,8 +31,8 @@ QtObject {
 
   // The host registry. Lock and the shell bind this so the card loads even
   // when polkit has never shown a face dialog. Discovery matches
-  // PolkitModel.resolveChromeSlot("face"): enabled third-party
-  // `polkit-chrome` with a `polkitFace` entry, lowest id wins.
+  // PolkitModel.resolveChromeSlot("face"): an enabled third-party plugin with
+  // a `polkitFace` entry, whatever its kinds, lowest id wins.
   property var pluginRegistry: null
 
   // Logical side of the face card on every surface (lock, polkit, the sudo
@@ -85,7 +85,6 @@ QtObject {
       var manifest = plugins[id]
       if (!manifest || typeof manifest !== "object") continue
       if (manifest.__isFirstParty) continue
-      if (!Array.isArray(manifest.kinds) || manifest.kinds.indexOf("polkit-chrome") === -1) continue
       if (!manifest.entryPoints || typeof manifest.entryPoints.polkitFace !== "string") continue
       if (!manifest.entryPoints.polkitFace) continue
       if (typeof registry.isEnabled !== "function" || !registry.isEnabled(id)) continue
