@@ -28,14 +28,12 @@ Panel {
 
   // Every subscription on one page, limits first: the question this panel
   // answers is how much room is left, and where.
-  readonly property var providers: usage.enabledProviders
+  readonly property var providers: usage.subscribedProviders
 
-  // Everything the panel adds up (the hero's totals, the bar's alarm, the
-  // sync footer) reads `providers`. The page itself shows only the agents
-  // with something to say: an agent whose collector says its limits are paused
-  // with nothing to read or do about it would be a header over "Usage
-  // unavailable", so it is left out of the sections, the keyboard rows and the
-  // drag order, while its local stats still count above.
+  // The hero's totals still read every enabled agent, including ones with
+  // only local history. Among the subscribed ones, a paused collector with
+  // nothing to read or do is left out of the sections, and a unified pool
+  // already drawn by another record is left out so it is never shown twice.
   readonly property var shownProviders: {
     var out = []
     for (var i = 0; i < providers.length; i++)
@@ -338,7 +336,7 @@ Panel {
           usage.refreshLimits()
           addDoneTimer.restart()
           // Nothing to show yet means the sign-in is what counts as set up.
-          if (providers.length === 0 && !checkProcess.running) {
+          if (usage.enabledProviders.length === 0 && !checkProcess.running) {
             addChecks = ({})
             checkProcess.running = true
           }
@@ -448,9 +446,15 @@ Panel {
     return status === "Sign-in expired" || status === "Waiting for auth"
   }
 
-  function otherTrouble(item) {
-    var status = String(item && item.usageStatusText || "")
-    return status !== "" && status !== "Limits paused" && !needsSignIn(item) ? status : ""
+  // Whatever keeps the numbers from being current, said beside the last ones
+  // known: they stay on show until a check succeeds again. A failed refresh
+  // with numbers kept may leave the status empty and say why only in its help.
+  function usageNote(item) {
+    if (!item || needsSignIn(item)) return ""
+    var status = String(item.usageStatusText || "")
+    var stale = item.limitsStale === true || item.stale === true
+    if (status === "" && !(stale && String(item.authHelpText || "") !== "")) return ""
+    return helpDisplayText(item.authHelpText) || statusDisplayText(status)
   }
 
   function pausedWithoutLimits(item) {
@@ -879,6 +883,7 @@ Panel {
     var sessions = 0
     var byDay = {}
     var byModel = {}
+    var providers = usage.enabledProviders
     for (var i = 0; i < providers.length; i++) {
       var p = providers[i]
       var days = p.recentDays || []
@@ -967,6 +972,7 @@ Panel {
   // Only speaks up when the numbers cover more than this machine.
   function footerText() {
     if (usage.syncStatusText !== "") return usage.syncStatusText
+    var providers = usage.enabledProviders
     for (var i = 0; i < providers.length; i++) {
       var count = Number(providers[i].syncDeviceCount || 0)
       if (providers[i].syncEnabled && count > 0)
@@ -1010,7 +1016,9 @@ Panel {
       if (addChecks[id] !== "first") return true
     return false
   }
-  readonly property bool blankSlate: providers.length === 0 && !anySignedIn
+  // Local history counts as set up, so a machine with no subscription still
+  // gets its summary rather than the picker.
+  readonly property bool blankSlate: usage.enabledProviders.length === 0 && !anySignedIn
   // Choosing a provider: asked for with the +, or simply what the panel is
   // while nothing is set up. It's derived rather than switched into, so
   // records that load a moment after the panel opens take its place.
@@ -1047,7 +1055,7 @@ Panel {
   onOpenedChanged: if (opened) {
     if (addStage !== "running") addStage = ""
     resetKeys()
-    if (providers.length === 0 && !checkProcess.running) checkProcess.running = true
+    if (usage.enabledProviders.length === 0 && !checkProcess.running) checkProcess.running = true
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     usage.refreshLimits()
@@ -1616,10 +1624,19 @@ Panel {
 
       // The agents one subscription pays for, as small marks beside its name.
       CoverageMarks {
+        id: sectionCoverage
         anchors.left: sectionName.right
         anchors.leftMargin: Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
         coverage: section.provider ? section.provider.coverage : []
+      }
+
+      UsageNote {
+        anchors.left: sectionCoverage.visible ? sectionCoverage.right : sectionName.right
+        anchors.leftMargin: Style.space(8)
+        anchors.verticalCenter: sectionName.verticalCenter
+        visible: !section.multi && message !== ""
+        record: section.provider
       }
 
       Text {
@@ -1634,8 +1651,8 @@ Panel {
       }
     }
 
-    // Sign-in and endpoint trouble for a single-account provider; with
-    // several, each account says so on its own line.
+    // A sign-in to redo for a single-account provider; with several, each
+    // account says so on its own line.
     TextLink {
       visible: !section.multi && root.needsSignIn(section.provider)
       picked: root.hasKey("providerSignin", section.providerIndex)
@@ -1645,23 +1662,6 @@ Panel {
       onClicked: root.signInAgain(section.provider, null)
     }
 
-    Text {
-      visible: !section.multi && root.otherTrouble(section.provider) !== ""
-      width: parent.width
-      textFormat: Text.PlainText
-      // Shown for the status, so a record with no help to offer says the status rather than nothing.
-      text: section.provider ? (root.helpDisplayText(section.provider.authHelpText) || root.statusDisplayText(section.provider.usageStatusText) || "") : ""
-      color: root.urgent
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.WordWrap
-    }
-
-    UnavailableUsage {
-      visible: !section.multi && root.pausedWithoutLimits(section.provider)
-      width: parent.width
-      record: section.provider
-    }
 
     Column {
       visible: !section.multi && section.windows.length > 0
@@ -1689,14 +1689,6 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
       }
-    }
-
-    StaleNote {
-      visible: !section.multi && section.windows.length > 0 && root.limitsDated(stale, fetchedAt)
-      width: parent.width
-      stale: !!section.provider && section.provider.limitsStale === true
-      fetchedAt: section.provider ? Number(section.provider.limitsFetchedAt || 0) : 0
-      help: section.provider ? section.provider.authHelpText : ""
     }
 
     // What a shared pool paid for this week.
@@ -1796,11 +1788,6 @@ Panel {
           width: parent.width
           spacing: Style.space(12)
 
-          UnavailableUsage {
-            width: parent.width
-            record: accountBlock.modelData
-          }
-
           Repeater {
             model: root.displayWindows({ limits: accountBlock.modelData.limits || [] })
 
@@ -1813,13 +1800,6 @@ Panel {
             }
           }
 
-          StaleNote {
-            visible: (accountBlock.modelData.limits || []).length > 0 && root.limitsDated(stale, fetchedAt)
-            width: parent.width
-            stale: accountBlock.modelData.stale === true
-            fetchedAt: Number(accountBlock.modelData.fetchedAt || 0)
-            help: accountBlock.modelData.authHelpText
-          }
         }
       }
     }
@@ -2102,8 +2082,8 @@ Panel {
         }
       }
 
-      // Bounded by the actions on the right: the plan and any trouble shorten
-      // first, and the Sign-in required link keeps its whole width.
+      // Bounded by the actions on the right: the plan shortens first, and the
+      // Sign-in required link keeps its whole width.
       Row {
         id: detailRow
         visible: !head.editing
@@ -2117,20 +2097,22 @@ Panel {
           textFormat: Text.PlainText
           visible: text !== ""
           width: Math.max(0, Math.min(implicitWidth, detailRow.width
+            - (accountNote.visible ? accountNote.implicitWidth + detailRow.spacing : 0)
             - (signInDot.visible ? signInDot.implicitWidth + detailRow.spacing : 0)
             - (signInLink.visible ? signInLink.implicitWidth + detailRow.spacing : 0)))
           elide: Text.ElideRight
           text: {
-            var parts = []
             var detail = root.accountDetail(head.account)
-            if (detail !== "") parts.push(detail)
-            var trouble = root.otherTrouble(head.account)
-            if (trouble !== "") parts.push(root.statusDisplayText(trouble))
-            return parts.length > 0 ? "· " + parts.join(" · ") : ""
+            return detail !== "" ? "· " + detail : ""
           }
-          color: root.otherTrouble(head.account) !== "" ? root.urgent : root.dim
+          color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
+        }
+
+        UsageNote {
+          id: accountNote
+          record: head.account
         }
 
         // The dot is punctuation, not part of the link.
@@ -2225,58 +2207,26 @@ Panel {
     }
   }
 
-  // Under limits that have not been refreshed for a while: how old they are,
-  // and why, when the collector says. Quiet, but in plain view, because a
-  // meter that stopped moving looks the same as one that has nothing to report.
-  component StaleNote: Column {
-    id: note
-    property bool stale: false
-    property real fetchedAt: 0
-    property string help: ""
-    spacing: Style.space(2)
-
-    Text {
-      width: parent.width
-      textFormat: Text.PlainText
-      text: root.lastUpdatedText(note.fetchedAt)
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    Text {
-      visible: text !== ""
-      width: parent.width
-      textFormat: Text.PlainText
-      text: root.helpDisplayText(note.help)
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.WordWrap
-    }
-  }
-
-  // With no measured windows, leave a place to discover how to get usage.
-  component UnavailableUsage: Item {
-    id: unavailable
+  // A mark beside the name when the numbers aren't current, with why and
+  // what to do on hover.
+  component UsageNote: Text {
+    id: noteMark
     property var record: null
-    visible: root.pausedWithoutLimits(record)
-    implicitHeight: unavailableLabel.implicitHeight
+    readonly property string message: root.usageNote(record)
+    visible: message !== ""
+    text: "󰋽"
+    textFormat: Text.PlainText
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
 
-    Text {
-      id: unavailableLabel
-      text: Commons.I18n.t("agents.usageUnavailable")
-      textFormat: Text.PlainText
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
-
-    HoverHandler { id: unavailableHover }
+    HoverHandler { id: noteHover }
 
     PanelToolTip {
-      visible: unavailableHover.hovered && unavailable.visible
-      text: unavailable.record ? (root.helpDisplayText(unavailable.record.authHelpText) || Commons.I18n.t("agents.usageNotUpdated")) : ""
+      visible: noteHover.hovered && noteMark.visible
+      // Capped through implicitWidth, which the tooltip centers itself by.
+      implicitWidth: Math.min(implicitContentWidth + leftPadding + rightPadding, Style.space(320))
+      text: noteMark.message
     }
   }
 
@@ -2286,9 +2236,9 @@ Panel {
   component CompactLimit: Item {
     id: compact
     property var window: null
-    // Numbers kept past a failed check: their age is on hover and, once they
-    // are old enough, in a line under the section. Old numbers are drawn muted,
-    // and an allowance that has since reset is drawn as unknown, not as 0%.
+    // Numbers kept past a failed check: their age is on the info mark and on
+    // hover. Old numbers are drawn muted, and an allowance that has since
+    // reset is drawn as unknown, not as 0%.
     property bool stale: false
     property real fetchedAt: 0
     readonly property bool dated: root.limitsDated(stale, fetchedAt)
