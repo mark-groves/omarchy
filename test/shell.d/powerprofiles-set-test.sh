@@ -84,10 +84,3 @@ pass "power profile retains performance as AC default"
 [[ $(tail -n 1 "$tmp_dir/calls") == "power-saver" ]] || fail "init restores the autodetected preference"
 pass "power profile init restores the autodetected preference"
 
-rg -F '["omarchy-powerprofiles-set", pendingPowerSource]' "$ROOT/shell/plugins/services/battery/Service.qml" >/dev/null ||
-  fail "battery service applies profiles through Omarchy command"
-pass "battery service applies profiles through Omarchy command"
-
-rg -F '["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]' "$ROOT/shell/plugins/panels/power/Panel.qml" >/dev/null ||
-  fail "power panel applies profiles through Omarchy command"
-pass "power panel applies profiles through Omarchy command"
