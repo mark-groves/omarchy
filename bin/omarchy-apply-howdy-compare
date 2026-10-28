@@ -91,6 +91,13 @@ slot_state() {
   printf '%s\n' unknown
 }
 
+# The wrapper earlier installs wrote ran this helper from the Omarchy tree as
+# root before authentication. It is replaced in any slot state, even one whose
+# .real is gone, because what it runs is the hole.
+is_signalling_wrapper() {
+  is_wrapper "$compare" && grep -Fq 'omarchy-face-auth-signal' "$compare"
+}
+
 refuse_unknown() {
   echo "howdy-compare is in an unknown state" >&2
   exit 1
@@ -138,6 +145,7 @@ retire_hook() {
 
 install_pin() {
   local state
+  retire_hook
   state=$(slot_state)
 
   case $state in
@@ -161,15 +169,18 @@ install_pin() {
       fi
       ;;
     unknown)
+      if is_signalling_wrapper; then
+        write_wrapper
+        echo "Replaced the howdy-compare wrapper that ran Omarchy code as root" >&2
+      fi
       refuse_unknown
       ;;
   esac
-
-  retire_hook
 }
 
 remove_pin() {
   local state
+  retire_hook
   state=$(slot_state)
 
   case $state in
@@ -190,8 +201,6 @@ remove_pin() {
       refuse_unknown
       ;;
   esac
-
-  retire_hook
 }
 
 action=""

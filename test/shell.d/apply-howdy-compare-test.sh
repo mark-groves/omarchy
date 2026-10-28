@@ -161,6 +161,26 @@ status=$(run_apply install --root "$unknown_root")
 rm -rf "$unknown_root"
 pass "install refuses an unknown howdy-compare and changes nothing"
 
+# A signalling wrapper whose .real is gone cannot be pinned, but what it runs
+# is the hole: install still replaces it and retires the hook before refusing.
+unknown_root=$(mktemp -d)
+unknown_compare=$unknown_root/usr/lib/howdy/howdy-compare
+unknown_hook=$unknown_root/etc/pacman.d/hooks/omarchy-howdy-compare.hook
+mkdir -p "$unknown_root/usr/lib/howdy"
+printf '#!/bin/bash -p\nsignal_face() { . /etc/omarchy.conf; "$OMARCHY_PATH/bin/omarchy-face-auth-signal" "$1"; }\nsignal_face scanning\n' >"$unknown_compare"
+write_legacy_hook "$unknown_hook"
+status=$(run_apply install --root "$unknown_root")
+(( status == 1 )) ||
+  fail "install on a signalling wrapper without .real exits 1" "exit $status $(cat "$err"; echo '---'; cat "$out")"
+assert_wrapper_text "$unknown_compare"
+[[ ! -e $unknown_hook ]] || fail "install retires the hook even when it refuses the slot"
+write_legacy_hook "$unknown_hook"
+status=$(run_apply remove --root "$unknown_root")
+(( status == 1 )) || fail "remove on an unknown slot exits 1" "exit $status $(cat "$err")"
+[[ ! -e $unknown_hook ]] || fail "remove retires the hook even when it refuses the slot"
+rm -rf "$unknown_root"
+pass "a signalling wrapper without .real is replaced and the hook retired before install refuses"
+
 status=$(run_apply remove --root "$root")
 (( status == 0 )) || fail "remove on pinned exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 cmp -s -- "$compare" <(printf '\x7fELF-fake-v2') ||

@@ -16,4 +16,12 @@ if ! grep -Fqs 'omarchy-face-auth-signal' "$compare" && [[ ! -e $hook && ! -L $h
   exit 0
 fi
 
-sudo "$OMARCHY_PATH/bin/omarchy-apply-howdy-compare" install
+# Install still refuses a compare slot it cannot pin (a missing .real), but
+# only after it has retired the hook and replaced the signalling wrapper. Done
+# means that hole is closed, not that compare is pinned.
+sudo "$OMARCHY_PATH/bin/omarchy-apply-howdy-compare" install || true
+
+if grep -Fqs 'omarchy-face-auth-signal' "$compare" || [[ -e $hook || -L $hook ]]; then
+  echo "howdy-compare still runs Omarchy code as root. Run: sudo $OMARCHY_PATH/bin/omarchy-apply-howdy-compare install" >&2
+  exit 1
+fi
