@@ -49,9 +49,9 @@ assert(
   'lock, isLocked, and status decide from the current lock state'
 )
 
-// The sudo overlay and polkit cover read the published flag. A binding of the
-// same three values once stayed true after unlock, so the overlay never opened
-// and a password conversation waited with no card on screen.
+// Polkit's cover reads the published flag. A binding of the same three values
+// once stayed true after unlock, so a password conversation waited with no
+// card on screen.
 assert(
   !/readonly property bool locked:\s*lockRequested \|\|/.test(serviceQml),
   'the published lock flag is not a binding that can stick after unlock'

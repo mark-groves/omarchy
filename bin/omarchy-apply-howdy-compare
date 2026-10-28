@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Pin howdy-compare to one CPU and keep the pin across howdy-next upgrades
+# omarchy:summary=Pin howdy-compare to one CPU
 # omarchy:group=apply
 # omarchy:args=install|remove [--root DIR]
 # omarchy:requires-sudo=true
@@ -19,110 +19,19 @@ usage() {
 print_wrapper() {
   cat <<'EOF'
 #!/bin/bash -p
-# pam_howdy spawns this with an empty environment, and howdy-compare's sandbox
-# caps CPU time at 15 s while OpenCV uses every core. One CPU keeps CPU time
-# equal to wall time. -p keeps euid 0 under sudo, which bash would otherwise
-# drop to the caller and leave compare unable to read the Howdy config.
-# OPENCV_LOG_LEVEL=ERROR drops the DNN graph-engine WARN lines without hiding
-# real OpenCV errors. Compare is the process that prints them.
-export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1
-export OPENCV_LOG_LEVEL=ERROR
-
-# Tell the session shell a scan started or finished. Display-only: never
-# change compare's exit status, and never write to stdout (Howdy owns that).
-# A cancelled or killed sudo must still hide the card: scanning opens it and
-# recognized / notRecognized only run on a normal compare exit.
-# Compare runs in the background so INT/TERM are not deferred until Howdy
-# finishes. The trap stops compare so PAM is not blocked for the rest of
-# the scan.
-signaled_result=0
-compare_pid=0
-cancel_signal=""
-cancel_status=0
-compare_status=1
-signal_face() {
-  local conf=/etc/omarchy.conf
-  local omarchy_path=/usr/share/omarchy
-  local helper
-  if [[ -f $conf && ! -L $conf && $(/usr/bin/stat -c %u:%a -- "$conf") =~ ^0:[0-7][0145][0145]$ ]]; then
-    # shellcheck disable=SC1090
-    . "$conf"
-    omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
-  fi
-  helper=$omarchy_path/bin/omarchy-face-auth-signal
-  [[ -x $helper ]] || return 0
-  "$helper" "$1" >/dev/null 2>&1 || true
-}
-
-signal_result() {
-  signaled_result=1
-  signal_face "$1"
-}
-
-on_exit() {
-  if (( signaled_result == 0 )); then
-    signal_face cancelled
-  fi
-}
-
-stop_compare() {
-  if (( compare_pid > 0 )); then
-    kill -s "$1" "$compare_pid" 2>/dev/null || true
-    if kill -0 "$compare_pid" 2>/dev/null; then
-      kill -s KILL "$compare_pid" 2>/dev/null || true
-    fi
-  fi
-}
-
-# Record cancel without exiting. A pending INT/TERM can run after wait
-# returns and before compare_status=$?. Returning the incoming status
-# keeps that assignment on Howdy's exit instead of the trap's.
-on_cancel() {
-  local saved=$?
-  cancel_signal=$1
-  cancel_status=$2
-  stop_compare "$1"
-  return "$saved"
-}
-
-trap on_exit EXIT
-trap 'on_cancel INT 130' INT
-trap 'on_cancel TERM 143' TERM
-
-signal_face scanning
-# Cancel during scanning must not start Howdy. compare_pid is still 0,
-# so the trap cannot stop a child that is not running yet.
-if [[ -n $cancel_signal ]]; then
-  exit "$cancel_status"
-fi
-/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@" &
-compare_pid=$!
-if [[ -n $cancel_signal ]]; then
-  stop_compare "$cancel_signal"
-  wait "$compare_pid" 2>/dev/null || true
-  compare_pid=0
-  exit "$cancel_status"
-fi
-wait "$compare_pid"
-compare_status=$?
-compare_pid=0
-
-# One path after wait: a finished Howdy status wins over 130/143.
-if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
-  exit "$cancel_status"
-fi
-
-signaled_result=1
-if (( compare_status == 0 )); then
-  signal_result recognized
-else
-  signal_result notRecognized
-fi
-exit $compare_status
+# Pinned to one CPU: howdy-compare's sandbox caps CPU time at 15 s while
+# OpenCV uses every core. -p keeps euid 0 so compare can read the root-only
+# Howdy config. Nothing else may run here.
+export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR
+exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
 EOF
 }
 
-print_hook() {
+# Earlier installs wrote this pacman hook to re-pin compare after every
+# howdy-next upgrade. It ran this command from the Omarchy tree named in
+# /etc/omarchy.conf, which on a linked checkout is user-writable code run as
+# root. Install and remove now retire it; the text is kept to recognise it.
+print_legacy_hook() {
   cat <<'EOF'
 [Trigger]
 Operation = Install
@@ -214,13 +123,17 @@ write_wrapper() {
   print_wrapper | stage_write "$compare" 755
 }
 
-write_hook() {
-  mkdir -p "$(dirname -- "$hook")"
-  if [[ -f $hook ]] && cmp -s -- "$hook" <(print_hook); then
-    return 0
+# The shipped hook is deleted. One that was edited by hand is kept, but under
+# a name pacman does not load.
+retire_hook() {
+  [[ -e $hook || -L $hook ]] || return 0
+  if is_regular_file "$hook" && cmp -s -- "$hook" <(print_legacy_hook); then
+    rm -f -- "$hook"
+    echo "Removing the howdy-compare upgrade hook..."
+  else
+    mv -Tf -- "$hook" "$hook.retired"
+    echo "Moved a modified howdy-compare upgrade hook to $hook.retired"
   fi
-  print_hook | stage_write "$hook" 644
-  echo "Installing howdy-compare upgrade hook..."
 }
 
 install_pin() {
@@ -232,7 +145,6 @@ install_pin() {
       stage_copy "$compare" "$real"
       write_wrapper
       echo "Pinning howdy-compare to one CPU..."
-      write_hook
       ;;
     pinned)
       if [[ -f $compare ]] && cmp -s -- "$compare" <(print_wrapper); then
@@ -241,7 +153,6 @@ install_pin() {
         write_wrapper
         echo "Updating howdy-compare pin..."
       fi
-      write_hook
       ;;
     absent)
       if [[ -e $real ]]; then
@@ -253,6 +164,8 @@ install_pin() {
       refuse_unknown
       ;;
   esac
+
+  retire_hook
 }
 
 remove_pin() {
@@ -278,10 +191,7 @@ remove_pin() {
       ;;
   esac
 
-  if [[ -e $hook ]]; then
-    rm -f -- "$hook"
-    echo "Removing howdy-compare upgrade hook..."
-  fi
+  retire_hook
 }
 
 action=""

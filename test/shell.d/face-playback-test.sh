@@ -11,7 +11,6 @@ const canvasQml = fs.readFileSync(path.join(root, 'shell/Ui/FaceChromeCanvas.qml
 const lockQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/Service.qml'), 'utf8')
 const lockViewQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/LockView.qml'), 'utf8')
 const polkitQml = fs.readFileSync(path.join(root, 'shell/plugins/polkit/PolkitAgent.qml'), 'utf8')
-const overlayQml = fs.readFileSync(path.join(root, 'shell/plugins/face-overlay/FaceOverlay.qml'), 'utf8')
 const chromeQml = fs.readFileSync(path.join(root, 'shell/Commons/FaceChrome.qml'), 'utf8')
 
 assertEqual(playback.presentedStepMs(0.016), 16, 'a normal frame is credited in full')
@@ -173,21 +172,8 @@ assert(/faceSlotResolved\(presentation\)/.test(polkitQml), 'polkit waits on this
 assert(!/!FaceChrome\.ready && FaceChrome\.sourceUrl/.test(polkitQml), 'polkit does not treat the shared chrome URL as this request')
 assert(/visible:\s*parent\.visible/.test(polkitQml), 'the polkit card does not present while its column is hidden')
 
-const apply = overlayQml.match(/function applySignal\(next\) \{[\s\S]*?\n  \}/)
-assert(apply, 'overlay has applySignal')
-assert(apply[0].indexOf('isHideState') < apply[0].indexOf('awaitingPlayback'), 'cancel hides before any result hold is armed')
-assert(/playbackEpoch/.test(overlayQml) && /onResultPlayed:/.test(overlayQml), 'the sudo overlay plays a result through the shared canvas')
-
-const finishFailed = overlayQml.match(/function finishHoldIfChromeFailed\(state\) \{[\s\S]*?\n  \}/)
-assert(finishFailed, 'overlay can finish a hold when chrome has failed')
-assert(/FaceChrome\.failure === ""/.test(finishFailed[0]) && /hideCard\(\)/.test(finishFailed[0]), 'a rejected module hides the overlay instead of waiting for resultPlayed')
-assert(/awaitingPlayback/.test(finishFailed[0]), 'a rejection during an armed result hold still hides the overlay')
-assert(/finishHoldIfChromeFailed\(next\.state\)/.test(apply[0]), 'a result that arrives after chrome failed hides the overlay')
-assert(/finishHoldIfChromeFailed\(pendingState\)/.test(overlayQml), 'a revision that records a failure finishes an armed overlay hold')
-
 const sourceChanged = chromeQml.match(/onSourceUrlChanged: \{[\s\S]*?\n  \}/)
 assert(sourceChanged && /api = null[\s\S]*revision\+\+/.test(sourceChanged[0]), 'clearing or swapping the chrome source emits a revision so armed holds re-check')
 assert(/if \(FaceChrome\.sourceUrl !== "" && FaceChrome\.failure === ""\) return/.test(lockQml), 'lock finishes a hold whose chrome source was cleared')
 assert(/expected && FaceChrome\.sourceUrl !== "" && FaceChrome\.failure === ""/.test(polkitQml), 'polkit finishes a hold whose chrome source was cleared')
-assert(/awaitingPlayback && FaceChrome\.sourceUrl === ""/.test(finishFailed[0]), 'a cleared chrome source hides an armed overlay hold')
 JS
