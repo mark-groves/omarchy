@@ -10,10 +10,6 @@ function has(id) {
   return services[String(id || "")] !== undefined
 }
 
-function get(id) {
-  return services[String(id || "")] || null
-}
-
 function put(id, service) {
   var key = String(id || "")
   if (!key || !service) return

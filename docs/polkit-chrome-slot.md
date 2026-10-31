@@ -33,7 +33,7 @@ The published card is [mark-groves/omarchy-face](https://github.com/mark-groves/
 
 A face chrome's entry point is a JavaScript module that exports `frame(size, spec)` and `holdMs(state)`, and optionally `scanMs()`: how much of the scan to present before a fast match plays, clamped to 3 s. `FaceChrome` evaluates it and hands it only numbers: `spec` is `{ state, clock, elapsed, host }`. The module returns draw ops, which `FaceCardPainter.js` replays on a host-owned canvas as hostile input. Non-finite values are dropped; alpha, glow and line width are clamped; coordinates are bounded; ops, path commands and glow ops are capped (6000, 600 and 2000). Holds are clamped to 2 s.
 
-The card is `FaceChrome.cardSide` (220) logical px on the lock screen, the polkit card and the sudo face overlay.
+The card is `FaceChrome.cardSide` (220) logical px on the lock screen and the polkit card.
 
 `spec.host` is the op level the host paints. Level 1 is stroke paths, rects and vertical gradients in roles 0 (accent), 1 (text) and 2 (error). Level 2 adds:
 

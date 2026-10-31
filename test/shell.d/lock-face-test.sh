@@ -262,14 +262,6 @@ assert(
 )
 
 assert(
-  /property var pluginRegistry/.test(serviceQml),
-  'lock declares pluginRegistry so ensureService injects the real registry'
-)
-assert(
-  /FaceChrome\.pluginRegistry\s*=\s*pluginRegistry/.test(serviceQml),
-  'lock points the shared chrome loader at the registry, not at a polkit slot'
-)
-assert(
   /FaceChromeCanvas/.test(viewQml) && /objectName:\s*"faceCardIndicator"/.test(viewQml),
   'lock paints the shared card above the password field'
 )

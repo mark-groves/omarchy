@@ -29,60 +29,40 @@ assert_wrapper_text() {
   IFS= read -r first <"$path"
   [[ $first == "#!/bin/bash -p" ]] ||
     fail "howdy-compare first line is #!/bin/bash -p" "$first"
-  grep -F 'taskset -c 0' "$path" >/dev/null ||
-    fail "wrapper pins with taskset -c 0" "$(cat "$path")"
-  grep -F 'OMP_NUM_THREADS=1' "$path" >/dev/null ||
-    fail "wrapper sets OMP_NUM_THREADS=1" "$(cat "$path")"
+  grep -Fx 'exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"' "$path" >/dev/null ||
+    fail "wrapper execs howdy-compare.real pinned to one CPU" "$(cat "$path")"
   grep -F 'OPENCV_LOG_LEVEL=ERROR' "$path" >/dev/null ||
     fail "wrapper sets OPENCV_LOG_LEVEL=ERROR" "$(cat "$path")"
   if grep -E 'OPENCV_LOG_LEVEL=(SILENT|OFF|0|FATAL)' "$path" >/dev/null; then
     fail "wrapper does not hide OpenCV errors" "$(cat "$path")"
   fi
-  grep -F '/usr/lib/howdy/howdy-compare.real "$@" &' "$path" >/dev/null ||
-    fail "wrapper backgrounds howdy-compare.real so INT/TERM can stop it" "$(cat "$path")"
-  if grep -E '^exec /usr/bin/taskset' "$path" >/dev/null; then
-    fail "wrapper does not exec compare so it can signal the result" "$(cat "$path")"
-  fi
-  grep -F 'omarchy-face-auth-signal' "$path" >/dev/null ||
-    fail "wrapper signals the face overlay" "$(cat "$path")"
-  grep -F 'signal_face scanning' "$path" >/dev/null ||
-    fail "wrapper signals scanning before compare" "$(cat "$path")"
-  grep -F 'if [[ -n $cancel_signal ]]; then' "$path" >/dev/null ||
-    fail "wrapper checks for cancel before starting compare" "$(cat "$path")"
-  grep -F 'signal_result recognized' "$path" >/dev/null ||
-    fail "wrapper signals recognized after a match" "$(cat "$path")"
-  grep -F 'signal_result notRecognized' "$path" >/dev/null ||
-    fail "wrapper signals notRecognized after a miss" "$(cat "$path")"
-  grep -F 'signal_face cancelled' "$path" >/dev/null ||
-    fail "wrapper signals cancelled when compare never returns a result" "$(cat "$path")"
-  grep -F 'trap on_exit EXIT' "$path" >/dev/null ||
-    fail "wrapper traps EXIT so a killed sudo hides the card" "$(cat "$path")"
-  grep -F "trap 'on_cancel INT 130' INT" "$path" >/dev/null ||
-    fail "INT stops compare and exits 130" "$(cat "$path")"
-  grep -F "trap 'on_cancel TERM 143' TERM" "$path" >/dev/null ||
-    fail "TERM stops compare and exits 143" "$(cat "$path")"
-  grep -F 'compare_pid=$!' "$path" >/dev/null ||
-    fail "wrapper records compare's pid so the trap can stop it" "$(cat "$path")"
-  grep -F 'wait "$compare_pid"' "$path" >/dev/null ||
-    fail "wrapper waits for the background compare" "$(cat "$path")"
-  grep -F 'return "$saved"' "$path" >/dev/null ||
-    fail "a pending INT/TERM after wait keeps Howdy's status" "$(cat "$path")"
-  grep -F 'compare_status >= 128' "$path" >/dev/null ||
-    fail "a finished scan is not rewritten as 130 or 143" "$(cat "$path")"
-  if awk '/^on_cancel\(\)/,/^}/ { if ($0 ~ /exit "/) found=1 } END { exit found+0 }' "$path"; then
-    :
-  else
-    fail "the cancel trap must not exit before compare_status is captured" "$(cat "$path")"
-  fi
-  if grep -E '^/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "\$@"$' "$path" >/dev/null; then
-    fail "a foreground compare defers INT/TERM until Howdy finishes" "$(cat "$path")"
-  fi
-  grep -F 'signaled_result=1' "$path" >/dev/null ||
-    fail "wrapper marks a normal result so EXIT does not hide a match" "$(cat "$path")"
-  if grep -E 'signal_face cancelled' "$path" >/dev/null && ! grep -F 'if (( signaled_result == 0 )); then' "$path" >/dev/null; then
-    fail "cancelled must not replace a recognized or notRecognized write" "$(cat "$path")"
+  # Compare runs as root before authentication, so nothing from the Omarchy
+  # tree may run here: on a linked checkout that tree is user-writable.
+  if grep -i -E 'omarchy' "$path" >/dev/null; then
+    fail "wrapper runs nothing from the Omarchy tree" "$(cat "$path")"
   fi
   bash -n "$path" || fail "wrapper passes bash -n"
+}
+
+# The hook that earlier installs wrote, byte for byte.
+write_legacy_hook() {
+  mkdir -p "$(dirname -- "$1")"
+  cat >"$1" <<'EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/howdy/howdy-compare
+
+[Action]
+Description = Pinning howdy-compare to one CPU...
+When = PostTransaction
+# The command is resolved through the same file the rest of the system uses to
+# find the Omarchy tree, because a linked checkout does not ship it in /usr/bin.
+# Only a root-owned conf that nobody else can write may pick a root-run binary.
+Exec = /usr/bin/bash -c 'conf=/etc/omarchy.conf; if [[ -e $conf || -L $conf ]]; then [[ -f $conf && ! -L $conf && $(stat -c %u:%a -- "$conf") =~ ^0:[0-7][0145][0145]$ ]] || { echo "$conf must be a root-owned file that only root can write" >&2; exit 1; }; . "$conf"; fi; exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-apply-howdy-compare" install'
+EOF
 }
 
 root=$(mktemp -d)
@@ -106,61 +86,21 @@ assert_wrapper_text "$compare"
   fail "howdy-compare is mode 755" "$(file_mode "$compare")"
 [[ $(file_mode "$real") == "750" ]] ||
   fail "howdy-compare.real keeps the vendor mode" "$(file_mode "$real")"
-[[ -f $hook ]] || fail "install writes the pacman hook"
-[[ $(file_mode "$hook") == "644" ]] ||
-  fail "hook is mode 644" "$(file_mode "$hook")"
-grep -F 'Target = usr/lib/howdy/howdy-compare' "$hook" >/dev/null ||
-  fail "hook targets howdy-compare" "$(cat "$hook")"
-grep -F 'omarchy-apply-howdy-compare" install' "$hook" >/dev/null ||
-  fail "hook re-runs apply install" "$(cat "$hook")"
-grep -F 'conf=/etc/omarchy.conf' "$hook" >/dev/null ||
-  fail "hook resolves the tree through /etc/omarchy.conf" "$(cat "$hook")"
-grep -F '^0:[0-7][0145][0145]$' "$hook" >/dev/null ||
-  fail "hook only trusts a root-owned conf that only root can write" "$(cat "$hook")"
-if grep -F '2>/dev/null' "$hook" >/dev/null; then
-  fail "hook does not hide conf failures" "$(cat "$hook")"
-fi
-pass "install pins a vendor ELF and writes the upgrade hook"
+[[ ! -e $hook ]] || fail "install writes no pacman hook" "$(cat "$hook")"
+pass "install pins a vendor ELF and writes no upgrade hook"
 
-# Run the hook's Exec script against a scratch conf and a stub tree. Only the
-# fail-closed branches and the no-conf default are reachable without root.
-hook_exec=$(sed -n "s/^Exec = \/usr\/bin\/bash -c '\(.*\)'$/\1/p" "$hook")
-[[ -n $hook_exec ]] || fail "hook Exec is a single bash -c script" "$(cat "$hook")"
-tree=$(mktemp -d)
-mkdir -p "$tree/bin"
-printf '#!/bin/bash\nprintf %%s "$*" >"%s/ran"\n' "$tree" >"$tree/bin/omarchy-apply-howdy-compare"
-chmod 755 "$tree/bin/omarchy-apply-howdy-compare"
-scratch_conf=$tree/omarchy.conf
-hook_exec=${hook_exec/conf=\/etc\/omarchy.conf/conf=$scratch_conf}
-
-set +e
-OMARCHY_PATH=$tree bash -c "$hook_exec" >/dev/null 2>"$err"
-status=$?
-set -e
-(( status == 0 )) && [[ $(cat "$tree/ran") == "install" ]] ||
-  fail "hook Exec without a conf runs the resolved command" "exit $status $(cat "$err")"
-rm -f "$tree/ran"
-
-printf 'export OMARCHY_PATH=%s\n' "$tree" >"$scratch_conf"
-chmod 644 "$scratch_conf"
-set +e
-bash -c "$hook_exec" >/dev/null 2>"$err"
-status=$?
-set -e
-(( status == 1 )) && [[ ! -e $tree/ran ]] ||
-  fail "hook Exec refuses a conf that root does not own" "exit $status $(cat "$err")"
-grep -F 'only root can write' "$err" >/dev/null ||
-  fail "hook Exec names the refused conf" "$(cat "$err")"
-
-chmod 664 "$scratch_conf"
-set +e
-bash -c "$hook_exec" >/dev/null 2>"$err"
-status=$?
-set -e
-(( status == 1 )) && [[ ! -e $tree/ran ]] ||
-  fail "hook Exec refuses a group-writable conf" "exit $status $(cat "$err")"
-rm -rf "$tree"
-pass "hook Exec runs without a conf and fails closed on an untrusted one"
+write_legacy_hook "$hook"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install with the old hook exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ ! -e $hook && ! -e $hook.retired ]] || fail "install deletes the hook earlier installs wrote"
+write_legacy_hook "$hook"
+printf '# edited by hand\n' >>"$hook"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install with an edited hook exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ ! -e $hook ]] || fail "install takes an edited hook out of pacman's hook directory"
+grep -F '# edited by hand' "$hook.retired" >/dev/null || fail "install keeps an edited hook under an inactive name"
+rm -f -- "$hook.retired"
+pass "install retires the old upgrade hook, keeping an edited one inactive"
 
 real_sum=$(checksum "$real")
 wrapper_sum=$(checksum "$compare")
@@ -196,6 +136,14 @@ status=$(run_apply install --root "$root")
 assert_wrapper_text "$compare"
 pass "install replaces an earlier wrapper that lacks -p and keeps the ELF"
 
+printf '#!/bin/bash -p\nsignal_face() { . /etc/omarchy.conf; "$OMARCHY_PATH/bin/omarchy-face-auth-signal" "$1"; }\nsignal_face scanning\n/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"\n' >"$compare"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install over the signalling wrapper exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ $(checksum "$real") == "$real_sum" ]] ||
+  fail "install over the signalling wrapper leaves .real alone"
+assert_wrapper_text "$compare"
+pass "install replaces the wrapper that ran omarchy-face-auth-signal as root"
+
 unknown_root=$(mktemp -d)
 unknown_compare=$unknown_root/usr/lib/howdy/howdy-compare
 unknown_real=$unknown_root/usr/lib/howdy/howdy-compare.real
@@ -209,9 +157,29 @@ status=$(run_apply install --root "$unknown_root")
 [[ $(checksum "$unknown_compare") == "$unknown_sum" ]] ||
   fail "unknown install does not rewrite howdy-compare"
 [[ ! -e $unknown_real ]] || fail "unknown install does not create .real"
-[[ ! -e $unknown_hook ]] || fail "unknown install does not write the hook"
+[[ ! -e $unknown_hook ]] || fail "unknown install writes no hook"
 rm -rf "$unknown_root"
 pass "install refuses an unknown howdy-compare and changes nothing"
+
+# A signalling wrapper whose .real is gone cannot be pinned, but what it runs
+# is the hole: install still replaces it and retires the hook before refusing.
+unknown_root=$(mktemp -d)
+unknown_compare=$unknown_root/usr/lib/howdy/howdy-compare
+unknown_hook=$unknown_root/etc/pacman.d/hooks/omarchy-howdy-compare.hook
+mkdir -p "$unknown_root/usr/lib/howdy"
+printf '#!/bin/bash -p\nsignal_face() { . /etc/omarchy.conf; "$OMARCHY_PATH/bin/omarchy-face-auth-signal" "$1"; }\nsignal_face scanning\n' >"$unknown_compare"
+write_legacy_hook "$unknown_hook"
+status=$(run_apply install --root "$unknown_root")
+(( status == 1 )) ||
+  fail "install on a signalling wrapper without .real exits 1" "exit $status $(cat "$err"; echo '---'; cat "$out")"
+assert_wrapper_text "$unknown_compare"
+[[ ! -e $unknown_hook ]] || fail "install retires the hook even when it refuses the slot"
+write_legacy_hook "$unknown_hook"
+status=$(run_apply remove --root "$unknown_root")
+(( status == 1 )) || fail "remove on an unknown slot exits 1" "exit $status $(cat "$err")"
+[[ ! -e $unknown_hook ]] || fail "remove retires the hook even when it refuses the slot"
+rm -rf "$unknown_root"
+pass "a signalling wrapper without .real is replaced and the hook retired before install refuses"
 
 status=$(run_apply remove --root "$root")
 (( status == 0 )) || fail "remove on pinned exits 0" "$(cat "$err"; echo '---'; cat "$out")"
@@ -244,176 +212,20 @@ status=$(run_apply install --root "$root")
 assert_wrapper_text "$compare"
 pass "wrapper content pins compare to one CPU"
 
-signals=$root/signals.log
-fake_helper=$root/record-signal
-cat >"$fake_helper" <<SH
-#!/bin/bash
-printf '%s\n' "\$1" >>"$signals"
-exit 0
-SH
-chmod 755 "$fake_helper"
-
-rewrite_wrapper() {
-  local dest=$1
-  local fake_real=$2
-  cp -- "$compare" "$dest"
-  chmod 755 "$dest"
-  sed -i \
-    -e "s|/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real|$fake_real|" \
-    -e "s|helper=\$omarchy_path/bin/omarchy-face-auth-signal|helper=$fake_helper|" \
-    "$dest"
-}
-
-: >"$signals"
-fast0=$root/fast0.real
-printf '#!/bin/bash\nexit 0\n' >"$fast0"
-chmod 755 "$fast0"
-rewrite_wrapper "$root/wrap0" "$fast0"
+# Run the generated wrapper with the pinned compare swapped for a stub: it
+# hands over its arguments and leaves compare's exit status to Howdy.
+args_log=$root/args.log
+stub=$root/stub.real
+printf '#!/bin/bash\nprintf "%%s\\n" "$@" >%q\nexit 14\n' "$args_log" >"$stub"
+chmod 755 "$stub"
+sed "s|/usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real|$stub|" "$compare" >"$root/wrap"
+chmod 755 "$root/wrap"
 status=0
-"$root/wrap0" || status=$?
-(( status == 0 )) || fail "wrapper match exits 0" "exit $status $(cat "$signals")"
-[[ $(paste -sd, "$signals") == "scanning,recognized" ]] ||
-  fail "wrapper match signals scanning then recognized" "$(cat "$signals")"
-pass "wrapper match keeps compare's status and does not cancel"
-
-: >"$signals"
-fast1=$root/fast1.real
-printf '#!/bin/bash\nexit 14\n' >"$fast1"
-chmod 755 "$fast1"
-rewrite_wrapper "$root/wrap1" "$fast1"
-status=0
-"$root/wrap1" || status=$?
-(( status == 14 )) || fail "wrapper miss keeps compare's status" "exit $status $(cat "$signals")"
-[[ $(paste -sd, "$signals") == "scanning,notRecognized" ]] ||
-  fail "wrapper miss signals scanning then notRecognized" "$(cat "$signals")"
-pass "wrapper miss keeps compare's status and does not cancel"
-
-: >"$signals"
-slow=$root/slow.real
-slow_pid_file=$root/slow.pid
-printf '#!/bin/bash\necho $$ >%q\nexec sleep 30\n' "$slow_pid_file" >"$slow"
-chmod 755 "$slow"
-rewrite_wrapper "$root/wrap-int" "$slow"
-status=0
-# Background bash ignores keyboard SIGINT. timeout sends INT to a new
-# process group, which is the sudo Ctrl-C path.
-timeout --preserve-status --signal=INT --kill-after=2s 0.4 "$root/wrap-int" || status=$?
-(( status == 130 )) || fail "INT wrapper exits 130" "exit $status $(cat "$signals")"
-[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
-  fail "INT wrapper signals cancelled" "$(cat "$signals")"
-pass "cancelled sudo hides the overlay without changing compare's status"
-
-: >"$signals"
-rewrite_wrapper "$root/wrap-term" "$slow"
-status=0
-"$root/wrap-term" &
-wpid=$!
-for _ in {1..40}; do
-  if grep -qx scanning "$signals" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
-done
-grep -qx scanning "$signals" || fail "TERM wrapper signals scanning before cancel" "$(cat "$signals")"
-# TERM the wrapper only. A foreground compare would ignore this until Howdy
-# finished; the trap must stop compare so PAM is not blocked.
-kill -TERM "$wpid"
-wait "$wpid" || status=$?
-(( status == 143 )) || fail "TERM wrapper exits 143" "exit $status $(cat "$signals")"
-[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
-  fail "TERM wrapper signals cancelled" "$(cat "$signals")"
-if [[ -f $slow_pid_file ]]; then
-  slow_pid=$(<"$slow_pid_file")
-  if [[ $slow_pid =~ ^[0-9]+$ ]]; then
-    kill -TERM "$slow_pid" 2>/dev/null || true
-  fi
-fi
-pass "TERM to the wrapper stops compare and hides the overlay"
-
-: >"$signals"
-rm -f -- "$slow_pid_file"
-slow_scan=$root/slow-scan-helper
-compare_ran=$root/compare.ran
-cat >"$slow_scan" <<SH
-#!/bin/bash
-printf '%s\n' "\$1" >>"$signals"
-if [[ \$1 == scanning ]]; then
-  sleep 2
-fi
-exit 0
-SH
-chmod 755 "$slow_scan"
-printf '#!/bin/bash\necho ran >%q\nexit 0\n' "$compare_ran" >"$root/should-not-run.real"
-chmod 755 "$root/should-not-run.real"
-rewrite_wrapper "$root/wrap-cancel-before" "$root/should-not-run.real"
-sed -i "s|helper=$fake_helper|helper=$slow_scan|" "$root/wrap-cancel-before"
-status=0
-"$root/wrap-cancel-before" &
-wpid=$!
-for _ in {1..40}; do
-  if grep -qx scanning "$signals" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
-done
-grep -qx scanning "$signals" || fail "cancel-before-compare signals scanning first" "$(cat "$signals")"
-kill -TERM "$wpid"
-wait "$wpid" || status=$?
-(( status == 143 )) || fail "cancel during scanning exits 143" "exit $status $(cat "$signals")"
-[[ ! -e $compare_ran ]] || fail "cancel during scanning must not start Howdy" "$(cat "$compare_ran")"
-[[ $(paste -sd, "$signals") == "scanning,cancelled" ]] ||
-  fail "cancel during scanning hides the overlay" "$(cat "$signals")"
-pass "cancel during scanning does not start Howdy"
-
-# The trap records cancel and returns $?. After wait, a finished Howdy
-# status (< 128) is kept; only a signaled child becomes 130/143.
-late=$root/late-cancel
-cat >"$late" <<'SH'
-#!/bin/bash
-cancel_signal=""
-cancel_status=0
-on_cancel() {
-  local saved=$?
-  cancel_signal=$1
-  cancel_status=$2
-  return "$saved"
-}
-(exit 14)
-on_cancel INT 130
-compare_status=$?
-if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
-  exit "$cancel_status"
-fi
-exit "$compare_status"
-SH
-chmod 755 "$late"
-status=0
-"$late" || status=$?
-(( status == 14 )) || fail "a late INT after a finished miss keeps 14" "exit $status"
-signaled=$root/late-signaled
-cat >"$signaled" <<'SH'
-#!/bin/bash
-cancel_signal=""
-cancel_status=0
-on_cancel() {
-  local saved=$?
-  cancel_signal=$1
-  cancel_status=$2
-  return "$saved"
-}
-(exit 137)
-on_cancel TERM 143
-compare_status=$?
-if [[ -n $cancel_signal ]] && (( compare_status >= 128 )); then
-  exit "$cancel_status"
-fi
-exit "$compare_status"
-SH
-chmod 755 "$signaled"
-status=0
-"$signaled" || status=$?
-(( status == 143 )) || fail "a signaled compare still exits 143" "exit $status"
-pass "post-wait cancel keeps a finished Howdy status"
+"$root/wrap" --user grovr "two words" || status=$?
+(( status == 14 )) || fail "wrapper keeps compare's exit status" "exit $status"
+[[ $(paste -sd '|' "$args_log") == "--user|grovr|two words" ]] ||
+  fail "wrapper passes compare its arguments unchanged" "$(cat "$args_log")"
+pass "wrapper hands compare its arguments and keeps its status"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"

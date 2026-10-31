@@ -192,7 +192,7 @@ const manifestsById = Object.fromEntries(manifests.map(manifestPath => {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
   return [manifest.id, manifest]
 }))
-for (const id of ['omarchy.lock', 'omarchy.polkit', 'omarchy.idle', 'omarchy.face-overlay']) {
+for (const id of ['omarchy.lock', 'omarchy.polkit', 'omarchy.idle']) {
   check(manifestsById[id]?.keepLoaded === true, `${id} must stay loaded across plugin reloads`)
 }
 

@@ -435,16 +435,12 @@ assert(
   'FaceChrome discovers an enabled polkitFace module from the registry'
 )
 assert(
-  /property Connections registryConnections/.test(chrome),
-  'registry listeners are a property; QtObject has no default child slot'
-)
-assert(
   /entryPoints\.polkitFace/.test(chrome) && !/polkit-chrome/.test(chrome.replace(/\/\/.*$/gm, '')),
   'chrome discovery uses the same slot key as the polkit resolver, without requiring a kind'
 )
 const shellQml = fs.readFileSync(path.join(root, 'shell/shell.qml'), 'utf8')
 assert(
-  /FaceChrome\.pluginRegistry\s*=\s*pluginRegistry/.test(shellQml),
+  /FaceChrome\.bindFromRegistry\(pluginRegistry\)/.test(shellQml),
   'the shell binds face chrome at startup so lock does not wait for polkit'
 )
 

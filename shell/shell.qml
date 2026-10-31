@@ -171,7 +171,15 @@ ShellRoot {
     // case the user dir already existed at startup.
     pluginRegistry.rescan()
     shell._syncServices()
-    FaceChrome.pluginRegistry = pluginRegistry
+    FaceChrome.bindFromRegistry(pluginRegistry)
+  }
+
+  // FaceChrome lives in qs.Commons, which third-party plugins import, so it is
+  // handed the resolved face slot URL and never holds the registry itself.
+  Connections {
+    target: shell.pluginRegistry
+    function onRegistryRevisionChanged() { FaceChrome.bindFromRegistry(shell.pluginRegistry) }
+    function onPluginsChanged() { FaceChrome.bindFromRegistry(shell.pluginRegistry) }
   }
 
   function mutateShellConfig(mutator) {
@@ -919,8 +927,7 @@ ShellRoot {
   }
 
   function firstPartyServiceFor(pluginId) {
-    var id = shell.pluginRegistry.resolveEnabledId(pluginId)
-    return AuthServiceStore.get(id) || serviceFor(id)
+    return serviceFor(shell.pluginRegistry.resolveEnabledId(pluginId))
   }
 
   function isAuthenticationService(manifest, pluginId) {

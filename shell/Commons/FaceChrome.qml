@@ -29,14 +29,8 @@ QtObject {
   // file:// URL of the plugin's entry point, resolved by the host registry.
   property string sourceUrl: ""
 
-  // The host registry. Lock and the shell bind this so the card loads even
-  // when polkit has never shown a face dialog. Discovery matches
-  // PolkitModel.resolveChromeSlot("face"): an enabled third-party plugin with
-  // a `polkitFace` entry, whatever its kinds, lowest id wins.
-  property var pluginRegistry: null
-
-  // Logical side of the face card on every surface (lock, polkit, the sudo
-  // overlay), before Style.space scaling.
+  // Logical side of the face card on every surface (lock and polkit), before
+  // Style.space scaling.
   readonly property int cardSide: 220
 
   // The op level this host paints: 2 adds glow, additive blending and roles
@@ -68,14 +62,9 @@ QtObject {
     else pluginFile.path = root.pathFor(sourceUrl)
   }
 
-  onPluginRegistryChanged: bindFromRegistry(pluginRegistry)
-
-  property Connections registryConnections: Connections {
-    target: root.pluginRegistry
-    function onRegistryRevisionChanged() { root.bindFromRegistry(root.pluginRegistry) }
-    function onPluginsChanged() { root.bindFromRegistry(root.pluginRegistry) }
-  }
-
+  // Discovery matches PolkitModel.resolveChromeSlot("face"): an enabled
+  // third-party plugin with a `polkitFace` entry, whatever its kinds, lowest
+  // id wins. The registry is only read here, never retained.
   function urlFromRegistry(registry) {
     if (!registry || !registry.installedPlugins) return ""
     var plugins = registry.installedPlugins
@@ -101,8 +90,9 @@ QtObject {
     return eligible[0].url
   }
 
-  // Point the shared loader at the installed face chrome plugin. Surfaces
-  // call this; they do not wait for a polkit prompt to have resolved a slot.
+  // Point the shared loader at the installed face chrome plugin. The shell
+  // calls this as the registry changes, so the lock does not wait for a polkit
+  // prompt to have resolved a slot.
   function bindFromRegistry(registry) {
     var url = root.urlFromRegistry(registry)
     if (url === root.sourceUrl) return

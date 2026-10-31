@@ -13,9 +13,6 @@ Item {
 
   property var shell: null
   property string omarchyPath: ""
-  // First-party injection: the real registry, so lock can load face chrome
-  // without waiting for a polkit dialog to point FaceChrome at the plugin.
-  property var pluginRegistry: null
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
@@ -112,9 +109,9 @@ Item {
   property bool strandedLockResolved: false
 
   // Published from currentlyLocked(), not bound to it. That binding once kept
-  // its last true value after an unlock: lid lock then did nothing, the sudo
-  // face overlay stayed suppressed, and polkit's cover hid the password card
-  // so the PAM conversation waited with no face tile. It is writable:
+  // its last true value after an unlock: lid lock then did nothing, and
+  // polkit's cover hid the password card so the PAM conversation waited with
+  // no face tile. It is writable:
   // assigning a readonly property throws and leaves the flag stuck.
   property bool locked: false
 
@@ -1488,11 +1485,8 @@ Item {
     checkStrandedLock()
   }
 
-  onPluginRegistryChanged: FaceChrome.pluginRegistry = pluginRegistry
-
   Component.onCompleted: {
     LockCover.covered = locked
-    if (pluginRegistry) FaceChrome.pluginRegistry = pluginRegistry
     knownScreenCount = realScreenCount()
     refreshBackground()
     refreshFingerprintStatus()
