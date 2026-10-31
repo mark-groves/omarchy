@@ -164,7 +164,7 @@ Panel {
     list.push("textsize")
     if (current && current.scales.length > 0) list.push("scale")
     if (current && current.resolutions.length > 0) list.push("resolution")
-    if (layoutRects.length > 1) list.push("layout")
+    if (layoutRects.length > 0) list.push("layout")
     return list
   }
 
@@ -389,6 +389,34 @@ Panel {
     if (!actionProc.running) actionProc.running = true
   }
 
+  function setRotation(name, degrees) {
+    actionProc.command = ["omarchy-hyprland-monitor-rotate", "--monitor", name, String(degrees)]
+    if (!actionProc.running) actionProc.running = true
+  }
+
+  // The layout map's right-click menu: the display it's for, where it opened
+  // within the panel, and that display's quarter turn now.
+  property string rotateMenuName: ""
+  property real rotateMenuX: 0
+  property real rotateMenuY: 0
+  readonly property int rotateMenuTransform: {
+    for (var i = 0; i < displays.length; i++)
+      if (displays[i] && displays[i].name === rotateMenuName) return Number(displays[i].transform) || 0
+    return 0
+  }
+
+  // Opens where `item` was clicked, at (x, y) within it, in panel coordinates.
+  function openRotateMenu(name, item, x, y) {
+    var spot = item.mapToItem(panel.loadedContent, x, y)
+    rotateMenuName = name
+    rotateMenuX = spot.x
+    rotateMenuY = spot.y
+  }
+
+  function closeRotateMenu() {
+    rotateMenuName = ""
+  }
+
   // Apply a whole arrangement, unless it leaves everything where it was.
   function applyLayout(rects) {
     if (!rects || Model.sameLayout(rects, Model.normalizeLayout(Model.copyRects(layoutRects)))) return
@@ -447,6 +475,7 @@ Panel {
   // with j/k ready to navigate. Keep a default landing point, but don't paint
   // the cursor until hover or the first navigation key.
   onOpenedChanged: {
+    closeRotateMenu()
     if (opened) {
       refresh()
       selectedName = ""
@@ -588,7 +617,11 @@ Panel {
         else if (dx !== 0) root.moveCursorH(dx)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
-      onCloseRequested: root.close()
+      // Esc closes the rotate menu first, then the panel.
+      onCloseRequested: {
+        if (root.rotateMenuName !== "") root.closeRotateMenu()
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
       ScrollView {
@@ -945,13 +978,14 @@ Panel {
           }
 
           // ---------- Layout ----------
+          // Shown for a single display too: right-clicking it is how it's rotated.
           PanelSeparator {
-            visible: root.layoutRects.length > 1
+            visible: root.layoutRects.length > 0
             foreground: root.bar.foreground
           }
 
           Column {
-            visible: root.layoutRects.length > 1
+            visible: root.layoutRects.length > 0
             width: parent.width
             spacing: Style.space(6)
 
@@ -985,6 +1019,56 @@ Panel {
               // so h/l afterwards moves the shown display instead of the last row.
               HoverHandler {
                 onHoveredChanged: if (hovered) root.pointAt("layout", 0)
+              }
+            }
+          }
+        }
+      }
+
+      // The layout map's right-click menu sits over the scrolling content, so
+      // the panel's edge doesn't clip it near the bottom. A click anywhere
+      // else closes it.
+      MouseArea {
+        anchors.fill: parent
+        visible: root.rotateMenuName !== ""
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onPressed: root.closeRotateMenu()
+      }
+
+      BorderSurface {
+        id: rotateMenu
+        visible: root.rotateMenuName !== ""
+        width: Math.max(Style.space(140), rotateColumn.implicitWidth) + padding * 2
+        height: rotateColumn.implicitHeight + padding * 2
+        x: Math.max(0, Math.min(root.rotateMenuX, parent.width - width))
+        y: Math.max(0, Math.min(root.rotateMenuY, parent.height - height))
+        radius: Style.cornerRadius
+        color: Commons.Color.popups.background
+        borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Style.normalBorderWidth)
+        padding: Style.spacing.sm
+
+        Column {
+          id: rotateColumn
+          x: rotateMenu.contentLeftInset
+          y: rotateMenu.contentTopInset
+          width: rotateMenu.width - rotateMenu.contentLeftInset - rotateMenu.contentRightInset
+
+          Repeater {
+            model: [
+              [0, Commons.I18n.t("monitor.rotateNormal")],
+              [90, Commons.I18n.t("monitor.rotate90")],
+              [180, Commons.I18n.t("monitor.rotate180")],
+              [270, Commons.I18n.t("monitor.rotate270")]
+            ]
+
+            delegate: PopupMenuRow {
+              required property var modelData
+
+              text: modelData[1]
+              checked: root.rotateMenuTransform === modelData[0] / 90
+              onTriggered: {
+                root.setRotation(root.rotateMenuName, modelData[0])
+                root.closeRotateMenu()
               }
             }
           }
@@ -1112,18 +1196,25 @@ Panel {
           hoverEnabled: true
           cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
           preventStealing: true
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
           onPressed: function(mouse) {
+            // A right click opens the rotate menu where it was made, within the panel.
+            if (mouse.button === Qt.RightButton) {
+              root.openRotateMenu(screenRect.modelData.name, screenRect, mouse.x, mouse.y)
+              return
+            }
             var point = mapToItem(map, mouse.x, mouse.y)
             screenRect.pressX = point.x
             screenRect.pressY = point.y
           }
           onPositionChanged: function(mouse) {
-            if (!pressed) return
+            if (!(pressedButtons & Qt.LeftButton)) return
             var point = mapToItem(map, mouse.x, mouse.y)
             screenRect.dragX = point.x - screenRect.pressX
             screenRect.dragY = point.y - screenRect.pressY
           }
-          onReleased: {
+          onReleased: function(mouse) {
+            if (mouse.button === Qt.RightButton) return
             var moved = Math.abs(screenRect.dragX) + Math.abs(screenRect.dragY) > 3
             if (moved) {
               // Back into layout space; snap within about 8 map pixels.
