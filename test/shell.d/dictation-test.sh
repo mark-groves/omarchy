@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/base-test.sh"
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
 export HOME="$test_tmp/home" XDG_CONFIG_HOME="$test_tmp/config" OMARCHY_PATH="$ROOT"
-export DICTATION_LOG="$test_tmp/calls" DICTATION_INSTALLED="voxtype superwhisper"
+export DICTATION_LOG="$test_tmp/calls" DICTATION_INSTALLED="voxtype superwhisper hex"
 mkdir -p "$test_tmp/bin" "$XDG_CONFIG_HOME/omarchy/defaults"
 export PATH="$test_tmp/bin:$ROOT/bin:$PATH"
 config="$XDG_CONFIG_HOME/omarchy/defaults/dictation"
@@ -47,7 +47,29 @@ fi
 exit "${DICTATION_EXIT:-0}"
 SH
 done
-for command in omarchy-pkg-add omarchy-notification-send hyprctl omarchy-restart-shell; do
+# Like Hex: control commands exit 3 until `hex start` brings it up, and
+# `stop --print` hands back the transcript instead of pasting it.
+export HEX_STATE="$test_tmp/hex-state"
+echo listening > "$HEX_STATE"
+cat > "$test_tmp/bin/hex" <<'SH'
+#!/bin/bash
+[[ $1 == "status" ]] || printf 'hex %s\n' "$*" >> "$DICTATION_LOG"
+if [[ $1 == "model" ]]; then
+  exit "${HEX_MODEL_EXIT:-0}"
+elif [[ $1 == "start" ]]; then
+  echo listening > "$HEX_STATE"
+elif [[ ! -e $HEX_STATE ]]; then
+  exit 3
+elif [[ $1 == "status" ]]; then
+  printf '{"desktop":{"activity":{"state":"%s"}}}\n' "$(< "$HEX_STATE")"
+elif [[ $* == "dictation start" ]]; then
+  echo dictating > "$HEX_STATE"
+elif [[ $* == "dictation stop --print" ]]; then
+  echo listening > "$HEX_STATE"
+  echo hello
+fi
+SH
+for command in omarchy-pkg-add omarchy-clipboard-paste-text omarchy-notification-send hyprctl omarchy-restart-shell; do
   cat > "$test_tmp/bin/$command" <<'SH'
 #!/bin/bash
 printf '%s %s\n' "${0##*/}" "$*" >> "$DICTATION_LOG"
@@ -95,19 +117,33 @@ if omarchy-default-dictation '../invalid' > "$test_tmp/output" 2>&1; then fail "
 pass "Defaults delegates setup without prematurely selecting a backend"
 
 
-for backend in voxtype superwhisper; do
+for backend in voxtype superwhisper hex; do
   printf '%s\n' "$backend" > "$config"
   [[ $(omarchy-default-dictation) == "$backend" ]] || fail "configured backend is readable"
   : > "$DICTATION_LOG"
   for action in start stop toggle; do omarchy dictation "$action"; done
   if [[ $backend == "voxtype" ]]; then
     expected=$'voxtype record start\nvoxtype status\nvoxtype record stop\nvoxtype record toggle'
-  else
+  elif [[ $backend == "superwhisper" ]]; then
     expected=$'superwhisper start\nsuperwhisper stop\nsuperwhisper record'
+  else
+    expected=$'hex dictation start\nhex dictation stop --print\nomarchy-clipboard-paste-text hello\nhex dictation start'
   fi
   [[ $(cat "$DICTATION_LOG") == "$expected" ]] || fail "adapter dispatches recording for $backend"
 done
 pass "built-in adapters implement start stop and toggle"
+
+: > "$DICTATION_LOG"
+omarchy-dictation-hex toggle
+[[ $(cat "$DICTATION_LOG") == $'hex dictation stop --print\nomarchy-clipboard-paste-text hello' ]] || fail "toggling a recording Hex types its transcript"
+: > "$DICTATION_LOG"
+omarchy-dictation-hex stop || fail "stopping an idle Hex succeeds"
+rm "$HEX_STATE"
+omarchy-dictation-hex stop || fail "stopping Hex succeeds when it is not running, so switching away works"
+[[ ! -e $HEX_STATE && ! -s $DICTATION_LOG ]] || fail "stopping an idle or stopped Hex sends nothing"
+omarchy-dictation-hex start
+[[ $(cat "$DICTATION_LOG") == $'hex dictation start\nhex start\nhex dictation start' ]] || fail "starting launches a stopped Hex, then records"
+pass "Hex types its transcript itself, stops quietly when idle, and starts Hex to record"
 
 cat > "$test_tmp/bin/omarchy-dictation-future-backend" <<'SH'
 #!/bin/bash
@@ -346,3 +382,15 @@ printf '%s\n' voxtype > "$config"
 omarchy-remove-dictation-superwhisper
 [[ $(cat "$config") == "voxtype" ]] || fail "removing Superwhisper preserves another selected backend"
 pass "Superwhisper removal clears its selection and owned links while preserving user data and other backends"
+
+printf '%s\n' voxtype > "$config"
+if HEX_MODEL_EXIT=1 omarchy-install-dictation-hex > "$test_tmp/output" 2>&1; then fail "failed Hex model download must fail"; fi
+[[ $(cat "$config") == "voxtype" ]] || fail "failed Hex setup preserves selection"
+omarchy-install-dictation-hex > "$test_tmp/output" 2>&1
+[[ $(cat "$config") == "hex" ]] || fail "installer selects Hex"
+omarchy-remove-dictation-hex
+[[ ! -e $config ]] || fail "Hex removal clears its selection"
+printf '%s\n' voxtype > "$config"
+omarchy-remove-dictation-hex
+[[ $(cat "$config") == "voxtype" ]] || fail "removing Hex preserves another selected backend"
+pass "Hex installer selects Hex only after setup succeeds, and removal clears only its own selection"
