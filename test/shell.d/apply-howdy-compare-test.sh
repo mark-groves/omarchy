@@ -180,6 +180,21 @@ status=$(run_apply install --root "$unknown_root")
 rm -rf "$unknown_root"
 pass "install refuses an unknown howdy-compare, leaving it as it is, and writes the pin hook"
 
+# A vendor compare that ships as a script is not the pin, even beside a .real
+# an earlier pin left behind: wrapping it would run the superseded binary.
+script_root=$(mktemp -d)
+script_compare=$script_root/usr/lib/howdy/howdy-compare
+mkdir -p "$script_root/usr/lib/howdy"
+printf '#!/bin/sh\nexec /usr/lib/howdy/compare-bin "$@"\n' >"$script_compare"
+printf '\x7fELF-stale' >"$script_root/usr/lib/howdy/howdy-compare.real"
+script_sum=$(checksum "$script_compare")
+status=$(run_apply install --root "$script_root")
+(( status == 1 )) ||
+  fail "install on a vendor compare script exits 1" "exit $status $(cat "$err"; echo '---'; cat "$out")"
+[[ $(checksum "$script_compare") == "$script_sum" ]] || fail "install leaves a vendor compare script alone"
+rm -rf "$script_root"
+pass "install refuses a vendor compare script rather than wrap a stale .real"
+
 # A signalling wrapper whose .real is gone cannot be pinned, but what it runs
 # is the hole: install still replaces it and retires the hook before refusing.
 unknown_root=$(mktemp -d)

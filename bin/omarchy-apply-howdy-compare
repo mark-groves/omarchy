@@ -111,7 +111,9 @@ slot_state() {
     printf '%s\n' vendor
     return
   fi
-  if is_wrapper "$compare"; then
+  # A script is the pin only if it runs .real: a vendor compare that ships as
+  # a script must not be swapped for a wrapper around a superseded .real.
+  if is_wrapper "$compare" && grep -Fq '/usr/lib/howdy/howdy-compare.real' "$compare"; then
     if is_elf "$real"; then
       printf '%s\n' pinned
       return
