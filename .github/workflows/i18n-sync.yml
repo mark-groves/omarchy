@@ -14,21 +14,9 @@ name: Sync translations
 # the bot that opens and merges the pull request. Runs where extraction
 # touched executable code are never merged here; they wait for a human
 # review instead.
+# Disabled on this fork: MUSE_API_KEY is upstream-only.
 on:
-  push:
-    branches: [quattro]
-    paths:
-      - 'default/i18n/en/**'
-      - 'default/omarchy/omarchy-menu.jsonc'
-      - 'default/hypr/bindings/**'
-      - 'manual/*.md'
-      - 'shell/**'
-      - 'bin/**'
-      - 'install/**'
   workflow_dispatch:
-  schedule:
-    # Retry unfinished translations without delaying English.
-    - cron: '41 3 * * *'
 
 permissions:
   contents: read
