@@ -337,7 +337,8 @@ Item {
     publishLockState()
   }
 
-  function armBlankTimer() {
+  function armBlankTimer(delayMs) {
+    idleBlankTimer.interval = delayMs || idleBlankTimer.idleMs
     idleBlankTimer.armedAt = Date.now()
     idleBlankTimer.restart()
   }
@@ -1077,7 +1078,7 @@ Item {
         stop()
         root.fingerprintSleptWhilePaused = true
         root.resumeFingerprint()
-        root.armBlankTimer()
+        root.armBlankTimer(idleBlankTimer.resumeMs)
       } else if (slept || !root.fingerprintPaused || --ticksLeft <= 0) {
         stop()
       }
@@ -1332,7 +1333,12 @@ Item {
 
   Timer {
     id: idleBlankTimer
-    interval: 5000
+    readonly property int idleMs: 5000
+    // A resume reaches this as soon as the kernel thaws, seconds before the
+    // panel lights (on NVIDIA it waits out a VT switch and a modeset), so the
+    // idle run-up blanked the lock just as it appeared.
+    readonly property int resumeMs: 15000
+    interval: idleMs
     repeat: false
     property double armedAt: 0
     onTriggered: {
@@ -1340,7 +1346,7 @@ Item {
       // blank the freshly woken unlock screen under the user. Wall-clock time
       // exposes the gap: take a fresh run-up instead of blanking.
       if (Date.now() - armedAt > interval + 2000) {
-        root.armBlankTimer()
+        root.armBlankTimer(resumeMs)
         return
       }
       // Fingerprint PAM stays armed for the whole lock, so gating on
