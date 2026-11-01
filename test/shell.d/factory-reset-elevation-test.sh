@@ -19,6 +19,7 @@ awk '
 ' "$ROOT/bin/omarchy-system-factory-reset" >"$tmp/checkout with spaces/reset"
 grep -Fxq 'PACKAGED_PATH=/usr/bin/omarchy-system-factory-reset' "$ROOT/bin/omarchy-system-factory-reset" || fail "factory reset pins the packaged path"
 sed -i "s|^PACKAGED_PATH=.*|PACKAGED_PATH=\"$tmp/packaged-reset\"|" "$tmp/checkout with spaces/reset"
+sed -i "s|/usr/bin/sudo|$tmp/bin/sudo|g" "$tmp/checkout with spaces/reset"
 cp "$tmp/checkout with spaces/reset" "$tmp/packaged-reset"
 chmod +x "$tmp/checkout with spaces/reset" "$tmp/packaged-reset"
 ln -s "$tmp/checkout with spaces/reset" "$tmp/reset-link"
@@ -31,7 +32,7 @@ SH
 chmod +x "$tmp/bin/sudo"
 
 args=('argument with spaces' '' '--flag' '$(touch should-not-run)' $'two\nlines')
-expected=(env 'GUM_INPUT_PROMPT=Reset this computer? ' "$tmp/packaged-reset" "${args[@]}")
+expected=(/usr/bin/env 'GUM_INPUT_PROMPT=Reset this computer? ' "$tmp/packaged-reset" "${args[@]}")
 for invocation in "$tmp/checkout with spaces/reset" './checkout with spaces/reset' "$tmp/reset-link" "$tmp/packaged-reset" reset; do
   for status in 0 1 127; do
     actual_status=0
@@ -49,6 +50,54 @@ for invocation in "$tmp/checkout with spaces/reset" './checkout with spaces/rese
   done
   pass "factory reset pins $invocation to the packaged command and preserves arguments, styling and status"
 done
+
+poison=$'6\nGUM_/pwn'
+rm -f "$tmp/call" "$tmp/should-not-run"
+actual_status=0
+(cd "$tmp" && env -i HOME="$tmp" PATH="$tmp/bin:$tmp/checkout with spaces:/usr/bin:/bin" \
+  OMARCHY_PATH="$tmp/checkout with spaces" PACKAGED_PATH="$tmp/wrong-target" \
+  GUM_INPUT_PROMPT='Reset this computer? ' \
+  GUM_CONFIRM_PROMPT_FOREGROUND="$poison" \
+  CALL_LOG="$tmp/call" SUDO_STATUS=0 \
+  "$tmp/packaged-reset" 'argument with spaces' '$(touch should-not-run)') || actual_status=$?
+(( actual_status == 0 )) || fail "elevation status is preserved when a gum value contains a newline"
+mapfile -d '' -t actual <"$tmp/call"
+argv_text=$(printf '%q\n' "${actual[@]}")
+program=""
+for word in "${actual[@]:1}"; do
+  if [[ $word != *=* ]]; then
+    program=$word
+    break
+  fi
+done
+if [[ $program != "$tmp/packaged-reset" ]]; then
+  fail "a newline in a gum value leaves the packaged reset as the elevated program" "$argv_text"
+fi
+pwn_present=0
+safe_present=0
+poison_forwarded=0
+for word in "${actual[@]}"; do
+  if [[ $word == 'GUM_/pwn' ]]; then
+    pwn_present=1
+  fi
+  if [[ $word == 'GUM_INPUT_PROMPT=Reset this computer? ' ]]; then
+    safe_present=1
+  fi
+  if [[ $word == GUM_CONFIRM_PROMPT_FOREGROUND=* ]]; then
+    poison_forwarded=1
+  fi
+done
+if (( pwn_present != 0 )); then
+  fail "a newline in a gum value does not add a GUM_/pwn argv word" "$argv_text"
+fi
+if (( safe_present != 1 )); then
+  fail "a single-line gum value is still forwarded beside a rejected one" "$argv_text"
+fi
+if (( poison_forwarded != 0 )); then
+  fail "a newline-bearing gum value is not forwarded" "$argv_text"
+fi
+[[ ! -e $tmp/should-not-run ]] || fail "caller arguments were executed"
+pass "factory reset elevation ignores a newline inside a gum value"
 
 if unshare -Ur true >/dev/null 2>&1; then
   status=0
