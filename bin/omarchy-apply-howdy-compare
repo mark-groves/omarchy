@@ -20,8 +20,14 @@ print_wrapper() {
   cat <<'EOF'
 #!/bin/bash -p
 # Pinned to one CPU: the howdy-compare sandbox caps CPU time for the whole
-# process while OpenCV runs a thread per core. -p keeps euid 0 so compare can
-# read the root-only Howdy config. Nothing else may run here.
+# process while OpenCV runs a thread per core. Root runs this before
+# authentication. -p keeps euid 0 so compare can read the root-only Howdy
+# config, and keeps BASH_ENV and exported functions from running code here,
+# so a launch without it is refused. Nothing else may run here.
+if [[ $- != *p* ]]; then
+  echo "Refusing an unsafe Bash startup." >&2
+  exit 126
+fi
 export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR
 exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
 EOF
@@ -45,7 +51,7 @@ Target = usr/lib/howdy/howdy-compare
 Description = Keeping howdy-compare pinned to one CPU...
 When = PostTransaction
 # Written and deleted by omarchy-apply-howdy-compare.
-Exec = /usr/bin/bash -p -c 'PATH=/usr/bin; c=/usr/lib/howdy/howdy-compare; printf -v elf "\177ELF"; t=""; if [[ ! -e $c && ! -L $c ]]; then rm -f -- "$c.real"; if [[ -d ${c%/*} ]]; then rmdir --ignore-fail-on-non-empty -- "${c%/*}"; fi; elif [[ -f $c && ! -L $c && $(head -c 4 -- "$c") == "$elf" ]]; then if ! { t=$(mktemp "$c.real.new.XXXXXX") && cp -a -- "$c" "$t" && mv -Tf -- "$t" "$c.real" && t=$(mktemp "$c.new.XXXXXX") && printf "%s\n" "#!/bin/bash -p" "# Pinned to one CPU: the howdy-compare sandbox caps CPU time for the whole" "# process while OpenCV runs a thread per core. -p keeps euid 0 so compare can" "# read the root-only Howdy config. Nothing else may run here." "export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR" "exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real \"\$@\"" >"$t" && chmod 755 "$t" && mv -Tf -- "$t" "$c"; }; then if [[ -n $t && -e $t ]]; then rm -f -- "$t"; fi; exit 1; fi; fi'
+Exec = /usr/bin/bash -p -c 'PATH=/usr/bin; c=/usr/lib/howdy/howdy-compare; printf -v elf "\177ELF"; t=""; if [[ ! -e $c && ! -L $c ]]; then rm -f -- "$c.real"; if [[ -d ${c%/*} ]]; then rmdir --ignore-fail-on-non-empty -- "${c%/*}"; fi; elif [[ -f $c && ! -L $c && $(head -c 4 -- "$c") == "$elf" ]]; then if ! { t=$(mktemp "$c.real.new.XXXXXX") && cp -a -- "$c" "$t" && mv -Tf -- "$t" "$c.real" && t=$(mktemp "$c.new.XXXXXX") && printf "%s\n" "#!/bin/bash -p" "# Pinned to one CPU: the howdy-compare sandbox caps CPU time for the whole" "# process while OpenCV runs a thread per core. Root runs this before" "# authentication. -p keeps euid 0 so compare can read the root-only Howdy" "# config, and keeps BASH_ENV and exported functions from running code here," "# so a launch without it is refused. Nothing else may run here." "if [[ \$- != *p* ]]; then" "  echo \"Refusing an unsafe Bash startup.\" >&2" "  exit 126" "fi" "export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR" "exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real \"\$@\"" >"$t" && chmod 755 "$t" && mv -Tf -- "$t" "$c"; }; then if [[ -n $t && -e $t ]]; then rm -f -- "$t"; fi; exit 1; fi; fi'
 EOF
 }
 

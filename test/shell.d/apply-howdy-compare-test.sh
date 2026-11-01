@@ -248,6 +248,16 @@ status=0
   fail "wrapper passes compare its arguments unchanged" "$(cat "$args_log")"
 pass "wrapper hands compare its arguments and keeps its status"
 
+# -p in the shebang is what keeps BASH_ENV and exported functions out, so an
+# ordinary Bash launch with a decoy -p argument is refused before compare runs.
+printf 'untouched\n' >"$args_log"
+status=0
+/usr/bin/bash "$root/wrap" -p 2>"$err" || status=$?
+(( status == 126 )) || fail "wrapper refuses an ordinary Bash launch" "exit $status"
+grep -Fq "Refusing an unsafe Bash startup" "$err" || fail "wrapper explains the refusal" "$(cat "$err")"
+[[ $(cat "$args_log") == "untouched" ]] || fail "a refused launch never reaches compare" "$(cat "$args_log")"
+pass "wrapper refuses an ordinary Bash launch with a decoy -p"
+
 # pacman splits Exec like a shell but passes a single-quoted word through as
 # it is, so the hook's script reaches bash unchanged only while it holds no
 # single quote. Run that script on a second root, with only its compare path
