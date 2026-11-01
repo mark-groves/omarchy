@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Pin howdy-compare to one CPU
+# omarchy:summary=Pin howdy-compare to one CPU across howdy-next upgrades
 # omarchy:group=apply
 # omarchy:args=install|remove [--root DIR]
 # omarchy:requires-sudo=true
@@ -19,11 +19,39 @@ usage() {
 print_wrapper() {
   cat <<'EOF'
 #!/bin/bash -p
-# Pinned to one CPU: howdy-compare's sandbox caps CPU time at 15 s while
-# OpenCV uses every core. -p keeps euid 0 so compare can read the root-only
-# Howdy config. Nothing else may run here.
+# Pinned to one CPU: the howdy-compare sandbox caps CPU time for the whole
+# process while OpenCV runs a thread per core. Root runs this before
+# authentication. -p keeps euid 0 so compare can read the root-only Howdy
+# config, and keeps BASH_ENV and exported functions from running code here,
+# so a launch without it is refused. Nothing else may run here.
+if [[ $- != *p* ]]; then
+  echo "Refusing an unsafe Bash startup." >&2
+  exit 126
+fi
 export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR
 exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real "$@"
+EOF
+}
+
+# Re-pins compare after every howdy-next upgrade. Root runs it, so the hook
+# carries its whole script and runs only /usr/bin tools: nothing from the
+# Omarchy tree or /etc/omarchy.conf. pacman passes a single-quoted Exec word
+# through unchanged, so the script holds no single quote, and the wrapper text
+# inside it is print_wrapper's, line for line.
+print_pin_hook() {
+  cat <<'EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/howdy/howdy-compare
+
+[Action]
+Description = Keeping howdy-compare pinned to one CPU...
+When = PostTransaction
+# Written and deleted by omarchy-apply-howdy-compare.
+Exec = /usr/bin/bash -p -c 'PATH=/usr/bin; c=/usr/lib/howdy/howdy-compare; printf -v elf "\177ELF"; t=""; if [[ ! -e $c && ! -L $c ]]; then rm -f -- "$c.real"; if [[ -d ${c%/*} ]]; then rmdir --ignore-fail-on-non-empty -- "${c%/*}"; fi; elif [[ -f $c && ! -L $c && $(head -c 4 -- "$c") == "$elf" ]]; then if ! { t=$(mktemp "$c.real.new.XXXXXX") && cp -a -- "$c" "$t" && mv -Tf -- "$t" "$c.real" && t=$(mktemp "$c.new.XXXXXX") && printf "%s\n" "#!/bin/bash -p" "# Pinned to one CPU: the howdy-compare sandbox caps CPU time for the whole" "# process while OpenCV runs a thread per core. Root runs this before" "# authentication. -p keeps euid 0 so compare can read the root-only Howdy" "# config, and keeps BASH_ENV and exported functions from running code here," "# so a launch without it is refused. Nothing else may run here." "if [[ \$- != *p* ]]; then" "  echo \"Refusing an unsafe Bash startup.\" >&2" "  exit 126" "fi" "export OMP_NUM_THREADS=1 OPENCV_FOR_THREADS_NUM=1 OPENCV_NUM_THREADS=1 OPENCV_LOG_LEVEL=ERROR" "exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real \"\$@\"" >"$t" && chmod 755 "$t" && mv -Tf -- "$t" "$c"; }; then if [[ -n $t && -e $t ]]; then rm -f -- "$t"; fi; exit 1; fi; fi'
 EOF
 }
 
@@ -31,6 +59,7 @@ EOF
 # howdy-next upgrade. It ran this command from the Omarchy tree named in
 # /etc/omarchy.conf, which on a linked checkout is user-writable code run as
 # root. Install and remove now retire it; the text is kept to recognise it.
+# The pin hook above replaces it under another name.
 print_legacy_hook() {
   cat <<'EOF'
 [Trigger]
@@ -82,7 +111,9 @@ slot_state() {
     printf '%s\n' vendor
     return
   fi
-  if is_wrapper "$compare"; then
+  # A script is the pin only if it runs .real: a vendor compare that ships as
+  # a script must not be swapped for a wrapper around a superseded .real.
+  if is_wrapper "$compare" && grep -Fq '/usr/lib/howdy/howdy-compare.real' "$compare"; then
     if is_elf "$real"; then
       printf '%s\n' pinned
       return
@@ -100,6 +131,9 @@ is_signalling_wrapper() {
 
 refuse_unknown() {
   echo "howdy-compare is in an unknown state" >&2
+  if (( $# > 0 )); then
+    echo "$1" >&2
+  fi
   exit 1
 }
 
@@ -143,9 +177,29 @@ retire_hook() {
   fi
 }
 
+write_pin_hook() {
+  if is_regular_file "$pin_hook" && cmp -s -- "$pin_hook" <(print_pin_hook); then
+    echo "howdy-compare pin hook already in place"
+  else
+    mkdir -p -- "$(dirname -- "$pin_hook")"
+    print_pin_hook | stage_write "$pin_hook" 644
+    echo "Installing the howdy-compare pin hook..."
+  fi
+}
+
+remove_pin_hook() {
+  if [[ -e $pin_hook || -L $pin_hook ]]; then
+    rm -f -- "$pin_hook"
+    echo "Removing the howdy-compare pin hook..."
+  fi
+}
+
+# The pin hook goes in whatever the slot holds: it only ever pins a vendor ELF,
+# so the next howdy-next install repairs a slot install cannot pin now.
 install_pin() {
   local state
   retire_hook
+  write_pin_hook
   state=$(slot_state)
 
   case $state in
@@ -173,7 +227,7 @@ install_pin() {
         write_wrapper
         echo "Replaced the howdy-compare wrapper that ran Omarchy code as root" >&2
       fi
-      refuse_unknown
+      refuse_unknown "Reinstalling howdy-next restores it, and the pin hook pins it again."
       ;;
   esac
 }
@@ -181,6 +235,7 @@ install_pin() {
 remove_pin() {
   local state
   retire_hook
+  remove_pin_hook
   state=$(slot_state)
 
   case $state in
@@ -250,6 +305,7 @@ fi
 compare="$root/usr/lib/howdy/howdy-compare"
 real="$root/usr/lib/howdy/howdy-compare.real"
 hook="$root/etc/pacman.d/hooks/omarchy-howdy-compare.hook"
+pin_hook="$root/etc/pacman.d/hooks/omarchy-howdy-compare-pin.hook"
 
 if [[ $action == "install" ]]; then
   install_pin

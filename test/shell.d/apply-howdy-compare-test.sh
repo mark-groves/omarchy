@@ -71,6 +71,7 @@ err=$root/err
 compare=$root/usr/lib/howdy/howdy-compare
 real=$root/usr/lib/howdy/howdy-compare.real
 hook=$root/etc/pacman.d/hooks/omarchy-howdy-compare.hook
+pin_hook=$root/etc/pacman.d/hooks/omarchy-howdy-compare-pin.hook
 trap 'rm -rf "$root"' EXIT
 
 mkdir -p "$root/usr/lib/howdy"
@@ -86,8 +87,11 @@ assert_wrapper_text "$compare"
   fail "howdy-compare is mode 755" "$(file_mode "$compare")"
 [[ $(file_mode "$real") == "750" ]] ||
   fail "howdy-compare.real keeps the vendor mode" "$(file_mode "$real")"
-[[ ! -e $hook ]] || fail "install writes no pacman hook" "$(cat "$hook")"
-pass "install pins a vendor ELF and writes no upgrade hook"
+[[ ! -e $hook ]] || fail "install does not write the retired hook" "$(cat "$hook")"
+[[ -f $pin_hook ]] || fail "install writes the pin hook"
+[[ $(file_mode "$pin_hook") == "644" ]] ||
+  fail "pin hook is mode 644" "$(file_mode "$pin_hook")"
+pass "install pins a vendor ELF and writes the pin hook"
 
 write_legacy_hook "$hook"
 status=$(run_apply install --root "$root")
@@ -109,6 +113,19 @@ status=$(run_apply install --root "$root")
 [[ $(checksum "$real") == "$real_sum" ]] || fail "second install leaves .real unchanged"
 [[ $(checksum "$compare") == "$wrapper_sum" ]] || fail "second install leaves the wrapper unchanged"
 pass "install is idempotent on an already pinned slot"
+
+# Hosts pinned before the pin hook existed are the migration's main population.
+pin_hook_sum=$(checksum "$pin_hook")
+rm -f -- "$pin_hook"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install on a pinned slot without the hook exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ -f $pin_hook && $(checksum "$pin_hook") == "$pin_hook_sum" ]] ||
+  fail "install on a pinned slot writes a missing pin hook"
+printf '# stale\n' >"$pin_hook"
+status=$(run_apply install --root "$root")
+(( status == 0 )) || fail "install over a stale pin hook exits 0" "$(cat "$err"; echo '---'; cat "$out")"
+[[ $(checksum "$pin_hook") == "$pin_hook_sum" ]] || fail "install rewrites a stale pin hook"
+pass "install on a pinned slot writes a missing pin hook and refreshes a stale one"
 
 printf '\x7fELF-fake-v2' >"$compare"
 chmod 750 "$compare"
@@ -158,8 +175,25 @@ status=$(run_apply install --root "$unknown_root")
   fail "unknown install does not rewrite howdy-compare"
 [[ ! -e $unknown_real ]] || fail "unknown install does not create .real"
 [[ ! -e $unknown_hook ]] || fail "unknown install writes no hook"
+[[ -f $unknown_root/etc/pacman.d/hooks/omarchy-howdy-compare-pin.hook ]] ||
+  fail "unknown install still writes the pin hook, so the next howdy-next install is pinned"
 rm -rf "$unknown_root"
-pass "install refuses an unknown howdy-compare and changes nothing"
+pass "install refuses an unknown howdy-compare, leaving it as it is, and writes the pin hook"
+
+# A vendor compare that ships as a script is not the pin, even beside a .real
+# an earlier pin left behind: wrapping it would run the superseded binary.
+script_root=$(mktemp -d)
+script_compare=$script_root/usr/lib/howdy/howdy-compare
+mkdir -p "$script_root/usr/lib/howdy"
+printf '#!/bin/sh\nexec /usr/lib/howdy/compare-bin "$@"\n' >"$script_compare"
+printf '\x7fELF-stale' >"$script_root/usr/lib/howdy/howdy-compare.real"
+script_sum=$(checksum "$script_compare")
+status=$(run_apply install --root "$script_root")
+(( status == 1 )) ||
+  fail "install on a vendor compare script exits 1" "exit $status $(cat "$err"; echo '---'; cat "$out")"
+[[ $(checksum "$script_compare") == "$script_sum" ]] || fail "install leaves a vendor compare script alone"
+rm -rf "$script_root"
+pass "install refuses a vendor compare script rather than wrap a stale .real"
 
 # A signalling wrapper whose .real is gone cannot be pinned, but what it runs
 # is the hole: install still replaces it and retires the hook before refusing.
@@ -189,6 +223,7 @@ cmp -s -- "$compare" <(printf '\x7fELF-fake-v2') ||
   fail "remove restores the vendor mode" "$(file_mode "$compare")"
 [[ ! -e $real ]] || fail "remove deletes .real"
 [[ ! -e $hook ]] || fail "remove deletes the hook"
+[[ ! -e $pin_hook ]] || fail "remove deletes the pin hook"
 status=$(run_apply remove --root "$root")
 (( status == 0 )) || fail "second remove exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 cmp -s -- "$compare" <(printf '\x7fELF-fake-v2') ||
@@ -203,8 +238,9 @@ status=$(run_apply install --root "$root")
 (( status == 0 )) || fail "install on absent exits 0" "$(cat "$err"; echo '---'; cat "$out")"
 [[ ! -e $real ]] || fail "absent install removes a leftover .real"
 [[ ! -e $hook ]] || fail "absent install writes no hook"
+[[ -f $pin_hook ]] || fail "absent install writes the pin hook, so a later howdy-next install is pinned"
 [[ ! -e $compare ]] || fail "absent install does not invent howdy-compare"
-pass "install on an absent slot removes a leftover .real and writes no hook"
+pass "install on an absent slot removes a leftover .real and writes the pin hook"
 
 printf '\x7fELF-fake-v1' >"$compare"
 status=$(run_apply install --root "$root")
@@ -226,6 +262,73 @@ status=0
 [[ $(paste -sd '|' "$args_log") == "--user|grovr|two words" ]] ||
   fail "wrapper passes compare its arguments unchanged" "$(cat "$args_log")"
 pass "wrapper hands compare its arguments and keeps its status"
+
+# -p in the shebang is what keeps BASH_ENV and exported functions out, so an
+# ordinary Bash launch with a decoy -p argument is refused before compare runs.
+printf 'untouched\n' >"$args_log"
+status=0
+/usr/bin/bash "$root/wrap" -p 2>"$err" || status=$?
+(( status == 126 )) || fail "wrapper refuses an ordinary Bash launch" "exit $status"
+grep -Fq "Refusing an unsafe Bash startup" "$err" || fail "wrapper explains the refusal" "$(cat "$err")"
+[[ $(cat "$args_log") == "untouched" ]] || fail "a refused launch never reaches compare" "$(cat "$args_log")"
+pass "wrapper refuses an ordinary Bash launch with a decoy -p"
+
+# pacman splits Exec like a shell but passes a single-quoted word through as
+# it is, so the hook's script reaches bash unchanged only while it holds no
+# single quote. Run that script on a second root, with only its compare path
+# redirected, through each slot state an upgrade or removal leaves.
+exec_line=$(grep '^Exec = ' "$pin_hook")
+exec_prefix="Exec = /usr/bin/bash -p -c '"
+[[ $exec_line == "$exec_prefix"*"'" ]] ||
+  fail "pin hook runs one single-quoted bash -p script" "$exec_line"
+(( ${#exec_line} < 4096 )) ||
+  fail "pin hook Exec fits pacman's 4096-byte line buffer" "${#exec_line} bytes"
+hook_script=${exec_line#"$exec_prefix"}
+hook_script=${hook_script%"'"}
+[[ $hook_script != *"'"* ]] || fail "pin hook script holds no single quote" "$hook_script"
+if grep -i -E 'omarchy' <<<"$hook_script" >/dev/null; then
+  fail "pin hook runs nothing from the Omarchy tree" "$hook_script"
+fi
+hook_root=$(mktemp -d)
+hook_compare=$hook_root/usr/lib/howdy/howdy-compare
+compare_assignment="c=/usr/lib/howdy/howdy-compare;"
+local_script=${hook_script/"$compare_assignment"/"c=$hook_compare;"}
+wrapper_exec="exec /usr/bin/taskset -c 0 /usr/lib/howdy/howdy-compare.real"
+unredirected=${hook_script/"$compare_assignment"/}
+unredirected=${unredirected//"$wrapper_exec"/}
+[[ $local_script != "$hook_script" && $unredirected != */usr/lib/howdy* ]] ||
+  fail "pin hook script reaches the system only through its compare path" "$hook_script"
+mkdir -p "$hook_root/usr/lib/howdy"
+# An upgrade leaves the new ELF in compare beside the previous version's
+# .real. GNU tools parse options strictly under POSIXLY_CORRECT, which root's
+# environment may carry into pacman.
+printf '\x7fELF-fake-v2' >"$hook_compare.real"
+printf '\x7fELF-fake-v3' >"$hook_compare"
+chmod 750 "$hook_compare"
+POSIXLY_CORRECT=1 bash -p -c "$local_script" || fail "pin hook script exits 0 after an upgrade"
+cmp -s -- "$hook_compare.real" <(printf '\x7fELF-fake-v3') ||
+  fail "pin hook moves the upgraded ELF to .real"
+[[ -z $(find "$hook_root/usr/lib/howdy" -name '*.new.*') ]] ||
+  fail "pin hook leaves no temporary files" "$(ls -a "$hook_root/usr/lib/howdy")"
+[[ $(file_mode "$hook_compare.real") == "750" ]] ||
+  fail "pin hook keeps the vendor mode on .real" "$(file_mode "$hook_compare.real")"
+cmp -s -- "$hook_compare" "$compare" ||
+  fail "pin hook writes the same wrapper as install" "$(diff -- "$compare" "$hook_compare")"
+[[ $(file_mode "$hook_compare") == "755" ]] ||
+  fail "pin hook wrapper is mode 755" "$(file_mode "$hook_compare")"
+wrapper_sum=$(checksum "$hook_compare")
+bash -p -c "$local_script" || fail "pin hook script exits 0 on a pinned slot"
+[[ $(checksum "$hook_compare") == "$wrapper_sum" ]] ||
+  fail "pin hook leaves a pinned wrapper alone"
+cmp -s -- "$hook_compare.real" <(printf '\x7fELF-fake-v3') ||
+  fail "pin hook leaves .real alone on a pinned slot"
+rm -f -- "$hook_compare"
+bash -p -c "$local_script" || fail "pin hook script exits 0 after howdy-next is removed"
+[[ ! -e $hook_compare.real ]] || fail "pin hook clears the leftover .real after a removal"
+[[ ! -e $hook_root/usr/lib/howdy ]] ||
+  fail "pin hook removes the directory howdy-next left empty" "$(ls -a "$hook_root/usr/lib/howdy")"
+rm -rf "$hook_root"
+pass "pin hook script re-pins an upgraded compare, leaves a pinned one, and clears up after a removal"
 
 if (( EUID == 0 )); then
   pass "running as root; skipping the unprivileged live-path refuse"
