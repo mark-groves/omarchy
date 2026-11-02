@@ -12,7 +12,17 @@ unset GOROOT GOBIN
 if pacman -Qem >/dev/null; then
   if omarchy-pkg-aur-accessible; then
     echo -e "\e[32m\nUpdate AUR packages\e[0m"
-    yay -Sua --noconfirm --cleanafter --ignore gcc14,gcc14-libs || exit 1
+    # A package whose AUR maintainer changed waits until the user trusts the
+    # new one; if that cannot be checked, nothing from the AUR is installed.
+    ignore=gcc14,gcc14-libs
+    if held=$(omarchy-pkg-aur-maintainer held); then
+      if [[ -n $held ]]; then
+        ignore+=",${held//$'\n'/,}"
+      fi
+      yay -Sua --noconfirm --cleanafter --ignore "$ignore" || exit 1
+    else
+      echo -e "\e[31mCould not check AUR maintainers (so skipping updates)\e[0m"
+    fi
     echo
   else
     echo -e "\e[31m\nAUR is unavailable (so skipping updates)\e[0m"
