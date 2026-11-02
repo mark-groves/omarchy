@@ -5,36 +5,39 @@
 
 set -euo pipefail
 
+# This runs in a terminal, where sudo can ask for the password. The whole
+# script runs as root from here, and tests each stack as the invoking user.
 if (( EUID != 0 )); then
-  exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
+  exec sudo "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
 fi
 
 script_bin=$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")
-export PATH="$script_bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$script_bin:/usr/bin:/bin"
+unset TMPDIR
+source "$script_bin/omarchy-security-face-functions"
+
+face_start
 
 echo -e "\e[32mRemoving face authentication from lock, sudo, and system prompts.\n\e[0m"
+echo "Each stack is tested as $face_user right after face is taken out, and put back if a check fails."
 
-if [[ -f /etc/pam.d/omarchy-lock-face ]]; then
-  echo "Removing lock screen face authentication..."
-  rm -f /etc/pam.d/omarchy-lock-face
-fi
+# Nothing is written until both stacks are shapes the writer can take face out of.
+face_read_shape polkit-1 off
+face_read_shape sudo off
 
-if grep -q pam_howdy.so /etc/pam.d/sudo; then
-  echo "Removing face authentication from sudo..."
-  omarchy-pam-pair-drop /etc/pam.d/sudo pam_howdy.so
-fi
+face_convert polkit-1 off "sudo was not changed."
+face_convert sudo off "System prompts stay without face."
+echo
 
-if [[ -f /etc/pam.d/polkit-1 ]]; then
-  echo "Removing face authentication from polkit..."
-  omarchy-apply-polkit-pam remove face
-fi
+echo "Removing lock screen face authentication..."
+face_apply lane remove
 
-if [[ -e /usr/local/bin/omarchy-hw-ir-emitter ]]; then
-  echo "Removing the IR emitter helper..."
-  rm -f /usr/local/bin/omarchy-hw-ir-emitter
-fi
+echo "Removing the face helpers..."
+face_apply helpers remove
 
-omarchy-apply-howdy-compare remove
+face_delete_old_emitter
+
+"$script_bin/omarchy-apply-howdy-compare" remove
 
 echo -e "\e[32mFace authentication has been removed from lock, sudo, and system prompts.\e[0m"
 echo "Password is still the way in. Howdy models are unchanged."

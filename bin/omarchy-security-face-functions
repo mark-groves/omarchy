@@ -1,0 +1,367 @@
+#!/bin/bash
+
+# omarchy:hidden=true
+# omarchy:summary=Provide the staged face PAM writes and live checks for face setup and remove
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  echo "omarchy-security-face-functions is an internal function library." >&2
+  exit 64
+fi
+
+# Face setup and remove source this as root, once sudo has started them. Each
+# PAM stack is written on its own and tested at once as the person who ran the
+# command, while the other stack is still a known way in. A failed check, an
+# error or Ctrl+C puts back what that one write replaced.
+
+readonly FACE_BIN=${BASH_SOURCE[0]%/*}
+readonly FACE_STATE_DIR=/var/lib/omarchy/face-pam
+readonly FACE_OLD_EMITTER=/usr/local/bin/omarchy-hw-ir-emitter
+readonly FACE_HINT=/usr/local/lib/omarchy-face/ask-hint
+
+face_user=""
+face_work=""
+face_armed=""
+face_armed_note=""
+face_check_pid=""
+face_pid=""
+face_as_user=()
+declare -A face_shapes=()
+
+face_apply() {
+  "$FACE_BIN/omarchy-apply-face-pam" "$@"
+}
+
+face_stop() {
+  printf '\e[31m%s\e[0m\n' "$1" >&2
+  trap '' HUP INT TERM
+  exit 1
+}
+
+# The first signal ends the run, and nothing after it may cut short the
+# restore that the exit runs: each trap ignores further signals, then exits.
+face_install_signal_traps() {
+  trap 'trap "" HUP INT TERM; exit 129' HUP
+  trap 'trap "" HUP INT TERM; exit 130' INT
+  trap 'trap "" HUP INT TERM; exit 143' TERM
+}
+
+# The account to test as is the one sudo started this for. A root login has
+# no SUDO_UID, and root's own prompts are not the ones being changed.
+face_start() {
+  if (( EUID != 0 )); then
+    face_stop "This needs root."
+  fi
+  if [[ ! ${SUDO_UID:-} =~ ^[0-9]+$ || ! ${SUDO_GID:-} =~ ^[0-9]+$ ]] || (( 10#$SUDO_UID == 0 )); then
+    face_stop "Run this from your own account: it tests sudo and system prompts as you."
+  fi
+  face_user=$(id -nu "+$SUDO_UID") || face_stop "No account has uid $SUDO_UID."
+  face_as_user=(setpriv --reuid="$((10#$SUDO_UID))" --regid="$((10#$SUDO_GID))" --init-groups --reset-env --)
+  face_install_signal_traps
+  trap face_on_exit EXIT
+  face_work=$(mktemp -d)
+}
+
+# After a rollback the run ends in 1, never 130: the floating terminal closes
+# at once on 130, before the owner can read whether the file went back.
+face_on_exit() {
+  local status=$?
+  trap '' HUP INT TERM
+  if [[ -n $face_check_pid ]] && kill -0 "$face_check_pid" 2>/dev/null; then
+    pkill -TERM -P "$face_check_pid" || true
+    kill -TERM "$face_check_pid" 2>/dev/null || true
+  fi
+  if [[ -n $face_armed ]]; then
+    face_restore "$face_armed" || status=1
+    if (( status == 130 )); then
+      status=1
+    fi
+  fi
+  if [[ -n $face_work ]]; then
+    rm -rf -- "$face_work"
+  fi
+  exit "$status"
+}
+
+face_restore() {
+  local target=$1
+  face_armed=""
+  if face_apply "$target" restore; then
+    rm -f -- "$FACE_STATE_DIR/$target.untested"
+    echo "Put /etc/pam.d/$target back as it was before this run. $face_armed_note"
+  else
+    printf '\e[31m%s\e[0m\n' "Could not put /etc/pam.d/$target back." >&2
+    face_restore_by_hand "$target"
+    return 1
+  fi
+}
+
+# A failing sudo leaves polkit (run0 or pkexec) as the way to root; a failing
+# polkit-1 leaves sudo, which has just passed or was never touched.
+face_restore_by_hand() {
+  local target=$1 file=/etc/pam.d/$1 tool=sudo
+  if [[ $target == "sudo" ]]; then
+    tool=run0
+  fi
+  if [[ -f $FACE_STATE_DIR/$target.previous ]]; then
+    echo "Put it back by hand with: $tool install -m 644 $FACE_STATE_DIR/$target.previous $file"
+  elif [[ -f $FACE_STATE_DIR/$target.absent ]]; then
+    echo "There was no $file before, so put it back by hand with: $tool rm $file"
+  else
+    echo "No copy of the old $file was found in $FACE_STATE_DIR."
+  fi
+  if [[ $target == "sudo" ]]; then
+    echo "pkexec works in place of run0, since neither uses $file."
+  fi
+}
+
+face_note_backup() {
+  local target=$1
+  if [[ -f $FACE_STATE_DIR/$target.previous ]]; then
+    echo "The file it replaced is saved as $FACE_STATE_DIR/$target.previous."
+  elif [[ -f $FACE_STATE_DIR/$target.absent ]]; then
+    echo "There was no /etc/pam.d/$target before, so deleting it is the way back."
+  fi
+}
+
+# A stack is converted only when it is in that mode already, or the writer
+# can render it into that mode. The shape alone does not say so: a stack with
+# no face lines can still hold a jump Ask first refuses, and one Ask first
+# refuses can still have face taken out. Anything else stays as it is for its
+# owner to sort out.
+face_read_shape() {
+  local target=$1 mode=$2 shape
+  shape=$(face_apply shape "$target")
+  face_shapes[$target]=$shape
+  if [[ $target == "lane" ]]; then
+    if [[ $shape == "unknown" ]]; then
+      face_stop "/etc/pam.d/omarchy-lock-face is not a lock screen lane this knows, so nothing was changed. Move it aside, then run this again."
+    fi
+  elif [[ $shape == "$mode" ]] || face_apply --print "$target" "$mode" >/dev/null 2>"$face_work/why"; then
+    return 0
+  else
+    face_stop "/etc/pam.d/$target is not a stack this can rewrite, so nothing was changed:
+$(<"$face_work/why")
+Take the face lines out by hand, then run this again."
+  fi
+}
+
+face_show_diff() {
+  local target=$1 mode=$2 current=/etc/pam.d/$1 status=0
+  if [[ ! -e $current ]]; then
+    current=/usr/lib/pam.d/$target
+  fi
+  face_apply --print "$target" "$mode" >"$face_work/$target.new"
+  if ! cmp -s -- "$current" "$face_work/$target.new"; then
+    echo "/etc/pam.d/$target will change like this:"
+    diff -u --label "$current" --label "/etc/pam.d/$target, new" -- "$current" "$face_work/$target.new" || status=$?
+    (( status == 1 )) || face_stop "Could not compare $current with its new text."
+    echo
+  fi
+}
+
+# The check's shell writes its own PID, then becomes sudo, so the journal lines
+# sudo logs carry that PID.
+face_read_pid() {
+  face_pid=$(<"$face_work/pid")
+  [[ $face_pid =~ ^[0-9]+$ ]] || face_stop "The check never started as $face_user."
+}
+
+# A face scan leaves pam_warn's start line and pam_howdy's verdict, each logged
+# by the PAM caller as <module>(<service>:auth). pam_warn's setcred line after
+# a successful sudo is not a scan. --sync makes journald take in what the check
+# logged before it is read back. Each check starts its window at the
+# nanosecond, from date rather than EPOCHREALTIME, whose decimal point follows
+# the locale, so a retry never sees the lines of the attempt before it.
+face_scanned() {
+  local service=$1 since=$2
+  shift 2
+  journalctl --sync || face_stop "Could not flush the journal to read the check back."
+  journalctl --quiet --no-pager --output=cat --since="@$since" "$@" >"$face_work/journal" ||
+    face_stop "Could not read the journal to look for a face scan."
+  grep -qF -e "pam_warn($service:auth)" -e "pam_howdy($service:auth)" "$face_work/journal"
+}
+
+# Fingerprint or a security key above the face lines runs first, and waits for
+# a finger or a touch before anything below it.
+face_waits_before_block() {
+  local file=$1 line
+  if [[ ! -f $file ]]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ $line == *"$FACE_HINT"* ]]; then
+      return 1
+    elif [[ $line =~ ^[[:space:]]*-?auth[[:space:]].*(pam_fprintd|pam_u2f)\.so ]]; then
+      return 0
+    fi
+  done <"$file"
+  return 1
+}
+
+# A program with no terminal must not reach the camera through sudo. Plain
+# sudo has no way to ask, so the gate's conversation fails; an empty answer on
+# stdin stops at the terminal line.
+face_check_sudo_without_terminal() {
+  local since status
+  if face_waits_before_block /etc/pam.d/sudo; then
+    echo "Skipped the checks without a terminal: fingerprint or a security key comes before the face lines in /etc/pam.d/sudo, and would wait or prompt before sudo could fail."
+    return 0
+  fi
+
+  echo "Checking that a program without a terminal cannot start a face scan through sudo. Ctrl+C puts /etc/pam.d/sudo back and stops."
+  since=$(date +%s.%N)
+  status=0
+  "${face_as_user[@]}" setsid -w sh -c 'printf "%s\n" "$$" >&3; exec 3>&-; exec sudo -k true' \
+    3>"$face_work/pid" </dev/null >"$face_work/check.log" 2>&1 || status=$?
+  face_read_pid
+  if face_scanned sudo "$since" "_PID=$face_pid"; then
+    face_stop "sudo started a face scan for a program with no terminal."
+  elif (( status == 0 )); then
+    face_stop "sudo ran a command for a program with no terminal, without a password."
+  fi
+
+  printf '\n' >"$face_work/newline"
+  since=$(date +%s.%N)
+  status=0
+  "${face_as_user[@]}" setsid -w sh -c 'printf "%s\n" "$$" >&3; exec 3>&-; exec sudo -S -k true' \
+    3>"$face_work/pid" <"$face_work/newline" >"$face_work/check.log" 2>&1 || status=$?
+  face_read_pid
+  if face_scanned sudo "$since" "_PID=$face_pid"; then
+    face_stop "An empty password piped into sudo -S started a face scan."
+  elif (( status == 0 )); then
+    face_stop "sudo -S took an empty password."
+  fi
+}
+
+# The typed password must still work, and must never reach the camera. An
+# Enter on the empty password is a habit worth one more try. -k with -v sets
+# aside any cached record, whatever sudo's timestamp_type, in the one command
+# whose PID was recorded.
+face_check_sudo_typed() {
+  local attempt since status
+  if face_waits_before_block /etc/pam.d/sudo; then
+    echo "Fingerprint or a security key asks first in /etc/pam.d/sudo: let it time out, then type the password."
+  fi
+  for attempt in 1 2; do
+    echo "sudo asks for your password next. Type it, then press Enter. Ctrl+C puts /etc/pam.d/sudo back and stops."
+    since=$(date +%s.%N)
+    status=0
+    "${face_as_user[@]}" sh -c 'printf "%s\n" "$$" >&3; exec 3>&-; exec sudo -k -v' 3>"$face_work/pid" || status=$?
+    face_read_pid
+    if ! face_scanned sudo "$since" "_PID=$face_pid"; then
+      (( status == 0 )) || face_stop "sudo did not take the typed password."
+      return 0
+    elif (( attempt == 1 )); then
+      echo "That started a face scan, which is what Enter on an empty password does. Once more, typing the password."
+    else
+      face_stop "A face scan started again, so the typed password was never tested."
+    fi
+  done
+}
+
+# pkexec asks polkit about its parent, so the parent is a shell of the owner's
+# rather than this root process. The prompt must open without a scan, then
+# take the typed password without one.
+face_check_polkit_typed() {
+  local attempt since status early
+  if face_waits_before_block /etc/pam.d/polkit-1; then
+    echo "Fingerprint or a security key asks first in /etc/pam.d/polkit-1: let it time out, then type the password."
+  fi
+  for attempt in 1 2; do
+    echo "A system prompt opens next. Type your password into it, then press Enter. Ctrl+C puts /etc/pam.d/polkit-1 back and stops."
+    since=$(date +%s.%N)
+    "${face_as_user[@]}" sh -c 'pkexec /usr/bin/true; exit "$?"' &
+    face_check_pid=$!
+    sleep 3
+    early=0
+    if face_scanned polkit-1 "$since" --unit='polkit-agent-helper@*'; then
+      early=1
+    fi
+    status=0
+    wait "$face_check_pid" || status=$?
+    face_check_pid=""
+    if (( ! early )) && ! face_scanned polkit-1 "$since" --unit='polkit-agent-helper@*'; then
+      (( status == 0 )) || face_stop "The system prompt did not take the typed password (pkexec exited $status)."
+      return 0
+    elif (( attempt == 2 )); then
+      face_stop "A face scan started again, so the typed password was never tested."
+    elif (( early )); then
+      echo "A face scan started within 3 seconds of the prompt opening. If you pressed Enter on the empty field, try once more and type the password."
+    else
+      echo "That started a face scan, which is what Enter on an empty field does. Once more, typing the password."
+    fi
+  done
+}
+
+# One stack: write it, and from then on put it back on any way out until its
+# checks pass. Signals are ignored through the write and until the restore is
+# armed, so Ctrl+C never lands between a finished write and the restore that
+# covers it. The untested mark stays until the checks pass or the restore
+# succeeds, so a run that died in between (power, SIGKILL, a failed restore)
+# leaves the next run a stack to test rather than one to skip. The note says
+# where the other stack stands if this one is put back.
+face_convert() {
+  local target=$1 mode=$2 note=$3 file=/etc/pam.d/$1 status=0
+  if [[ ${face_shapes[$target]:-} == "$mode" && ! -e $FACE_STATE_DIR/$target.untested ]]; then
+    if [[ $mode == "ask" ]]; then
+      echo "$file is already Ask first; left as it is."
+    else
+      echo "$file has no face lines; left as it is."
+    fi
+    return 0
+  fi
+
+  echo
+  if [[ ${face_shapes[$target]:-} == "$mode" ]]; then
+    echo "An earlier run wrote $file but never finished testing it, so it is tested now."
+    face_armed=$target
+    face_armed_note=$note
+  else
+    if [[ $mode == "ask" ]]; then
+      echo "Writing Ask first into $file..."
+    else
+      echo "Taking face out of $file..."
+    fi
+    trap '' HUP INT TERM
+    face_apply "$target" "$mode" || status=$?
+    if (( status == 0 )); then
+      face_armed=$target
+      face_armed_note=$note
+      : >"$FACE_STATE_DIR/$target.untested"
+    fi
+    face_install_signal_traps
+    (( status == 0 )) || face_stop "Could not write $file, so it is unchanged."
+  fi
+  face_note_backup "$target"
+  echo "Testing it now as $face_user."
+
+  if [[ $target == "sudo" ]]; then
+    if [[ $mode == "ask" ]]; then
+      face_check_sudo_without_terminal
+    fi
+    face_check_sudo_typed
+  else
+    face_check_polkit_typed
+  fi
+  face_armed=""
+  rm -f -- "$FACE_STATE_DIR/$target.untested"
+  echo "$file passed."
+}
+
+# The old stacks ran the emitter from /usr/local/bin. It goes once no stack
+# names it, so a stack that was not converted keeps working.
+face_delete_old_emitter() {
+  local users status=0
+  if [[ ! -e $FACE_OLD_EMITTER && ! -L $FACE_OLD_EMITTER ]]; then
+    return 0
+  fi
+  users=$(grep -lsF -- "$FACE_OLD_EMITTER" /etc/pam.d/*) || status=$?
+  if (( status == 1 )); then
+    echo "Removing the old IR emitter helper..."
+    rm -f -- "$FACE_OLD_EMITTER"
+  elif (( status == 0 )); then
+    echo "Kept $FACE_OLD_EMITTER, which ${users//$'\n'/ and } still runs."
+  else
+    echo "Kept $FACE_OLD_EMITTER: could not check /etc/pam.d for stacks that still run it."
+  fi
+}
