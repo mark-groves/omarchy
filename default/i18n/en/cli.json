@@ -362,6 +362,11 @@
   "tui.removed": "TUI removed",
   "tui.selectRemove": "Select TUI to remove",
   "tui.windowStyle": "Window style",
+  "update.aurHeld": "AUR update held back",
+  "update.aurHeldBody": {
+    "one": "Control of %1 on the AUR changed, so it is held back from updates. The update output says what changed; if you trust it, run omarchy-pkg-aur-maintainer trust %1.",
+    "other": "Control of %1 on the AUR changed, so they are held back from updates. The update output says what changed; run omarchy-pkg-aur-maintainer trust for each one you trust."
+  },
   "update.cannotStop": "You cannot stop the update once you start!",
   "update.connectPower": "Make sure you're connected to power or have a full battery",
   "update.continue": "Continue with update?",

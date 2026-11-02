@@ -6,6 +6,8 @@ Omarchy itself is installed as regular pacman packages from the [Omarchy Package
 
 If any Cursor product is installed the Omarchy way, that same update also checks its official feed: the editor (`omarchy update cursor-editor`), the Agent CLI (`omarchy update cursor-agent`), and the Origin CLI (`omarchy update origin`). `omarchy update cursor` covers all three. Each route skips when that product is not installed, so they are safe to run on any machine. Add `--check` to see what would happen without downloading.
 
+AUR packages update unattended too, with one exception: whoever controls a package decides what its next build runs, so the update holds a package back and tells you when that changes. That means the package gets a new maintainer (other than one of its co-maintainers taking over) or a new co-maintainer, or is orphaned, or an orphan gets a new build. It also covers a name that now belongs to a different AUR package from the one you installed, and one the AUR did not list when the update first saw it. A package that needs a held one waits with it. Check the package on the AUR, and if you trust it, run `omarchy-pkg-aur-maintainer trust <package>` so the next update installs it; until then it stays held. To switch to a different AUR package under the same name, remove the installed one and install it from the AUR again. The first time the update sees an AUR package, it records who controls it as the trusted state. If the AUR cannot be checked, no AUR package is updated that time.
+
 When new releases are made, a circle arrow icon will appear to the right of your clock. Click it and the update process will start.
 
 You can also update Cursor products on demand:

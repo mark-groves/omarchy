@@ -1,0 +1,319 @@
+#!/bin/bash
+
+# omarchy:summary=Hold AUR updates when control of the package changes
+# omarchy:args=held | trust <package>
+# omarchy:examples=omarchy pkg aur-maintainer trust howdy-next
+
+# AUR packages update unattended. The one change worth stopping for is who
+# controls a package: whoever can push to it decides what its next build runs.
+# held records each installed AUR package's AUR package base, maintainer and
+# co-maintainers the first time it sees them, then prints the packages to
+# leave out of the update:
+#
+# - the maintainer changed (unless a recorded co-maintainer took over), or a
+#   co-maintainer was added;
+# - an orphan has a new build, which only someone who adopted it could push;
+# - the name now belongs to a different AUR package base than the one
+#   installed (someone registered "<pkg>-debug", say), or a name the AUR did
+#   not list at first sight appears;
+# - it needs a held package, by name or by what that package provides, which
+#   yay would otherwise build as a dependency even though it is ignored.
+#
+# A package stays held until trust accepts what the AUR shows now. Records of
+# packages that are no longer installed are dropped.
+
+set -euo pipefail
+
+state="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/aur-maintainers"
+
+usage() {
+  echo "Usage: omarchy-pkg-aur-maintainer held | trust <package>" >&2
+}
+
+# Prints "name base version maintainer co-maintainers dependencies provides",
+# tab-separated, for each named package the AUR lists, with "-" for none.
+# Names go in a POST body, since a long query string is refused. Fails if the
+# AUR cannot be reached or does not answer as the RPC does.
+aur_info() {
+  local args=()
+  local pkg
+
+  for pkg in "$@"; do
+    args+=(--data-urlencode "arg[]=$pkg")
+  done
+  curl -sSf --connect-timeout 30 --retry 3 --retry-delay 3 -A "omarchy-update" \
+    "${args[@]}" "https://aur.archlinux.org/rpc/v5/info" |
+    jq -rn '
+      def list: if length == 0 then "-" else join(" ") end;
+      def names: map(sub("[<>=].*$"; "")) | unique | list;
+      input |
+      if .type != "multiinfo" then error("unexpected AUR reply") else .results[] end |
+      [
+        .Name,
+        .PackageBase,
+        .Version,
+        (.Maintainer // "-"),
+        ((.CoMaintainers // []) | sort | if length == 0 then "-" else join(",") end),
+        (((.Depends // []) + (.MakeDepends // []) + (.CheckDepends // [])) | names),
+        ((.Provides // []) | names)
+      ] | @tsv'
+}
+
+installed_base() {
+  local version desc
+
+  version=$(pacman -Q "$1" | cut -d' ' -f2)
+  desc="$(pacman-conf DBPath)local/$1-$version/desc"
+  if [[ -f $desc ]] && grep -qx '%BASE%' "$desc"; then
+    awk '$0 == "%BASE%" { getline; print; exit }' "$desc"
+  else
+    echo "$1"
+  fi
+}
+
+# The trusted record for a package: "base maintainer co-maintainers status
+# version". status is ok, held (notified) or unnotified (held, alert pending).
+recorded() {
+  if [[ -f $state ]]; then
+    awk -F '\t' -v name="$1" '$1 == name { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6; exit }' "$state"
+  fi
+}
+
+# Rewrites the state through a temp file in the same directory, so a crash
+# leaves the old state, never half of one. $1 is an awk program.
+rewrite_state() {
+  local tmp
+
+  mkdir -p -- "$(dirname -- "$state")"
+  tmp=$(mktemp "$state.XXXXXX")
+  if [[ -f $state ]]; then
+    awk -F '\t' -v OFS='\t' "${@:2}" "$1" "$state" >"$tmp"
+  fi
+  mv -f -- "$tmp" "$state"
+}
+
+# record <name> <base> <maintainer> <co-maintainers> <status> <version>
+record() {
+  rewrite_state '$1 != name' -v name="$1"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >>"$state"
+}
+
+set_status() {
+  rewrite_state '$1 == name { $5 = status } { print }' -v name="$1" -v status="$2"
+}
+
+describe() {
+  if [[ $1 == "-" ]]; then
+    echo "nobody (orphaned)"
+  else
+    echo "$1"
+  fi
+}
+
+# Prints the co-maintainers in $2 that $1 does not have.
+added_co_maintainers() {
+  comm -13 <(tr ',' '\n' <<<"$1" | grep -vx -- '-' | sort) <(tr ',' '\n' <<<"$2" | grep -vx -- '-' | sort) | paste -sd ' '
+}
+
+held() {
+  local packages
+
+  mapfile -t packages < <(pacman -Qmq)
+  if (( ${#packages[@]} > 0 )); then
+    check_packages "${packages[@]}"
+  fi
+  prune_state "${packages[@]}"
+}
+
+# Drops the records of packages that are no longer installed, so one
+# installed again later is seen afresh rather than held against an old record.
+prune_state() {
+  local tmp
+
+  if [[ -f $state ]]; then
+    tmp=$(mktemp "$state.XXXXXX")
+    awk -F '\t' 'FNR == NR { installed[$1] = 1; next } $1 in installed' <(printf '%s\n' "$@") "$state" >"$tmp"
+    mv -f -- "$tmp" "$state"
+  fi
+}
+
+check_packages() {
+  local packages=("$@")
+  local current name base version maintainer co deps provides
+  local rbase rmaintainer rco rstatus rversion reason added dep changed held_name
+  local -A aur_base=() aur_version=() aur_maintainer=() aur_co=() aur_deps=() aur_provides=() hold=() held_names=()
+  local new_holds=()
+
+  # Fetched before anything is compared, so an unreachable AUR fails the
+  # command instead of looking like a reply with nothing to hold.
+  current=$(aur_info "${packages[@]}")
+  while IFS=$'\t' read -r name base version maintainer co deps provides; do
+    if [[ -n $name ]]; then
+      aur_base[$name]=$base
+      aur_version[$name]=$version
+      aur_maintainer[$name]=$maintainer
+      aur_co[$name]=$co
+      aur_deps[$name]=$deps
+      aur_provides[$name]=$provides
+    fi
+  done <<<"$current"
+
+  for name in "${packages[@]}"; do
+    IFS=$'\t' read -r rbase rmaintainer rco rstatus rversion <<<"$(recorded "$name")" || true
+    if [[ ! -v aur_base[$name] ]]; then
+      # yay cannot update it from the AUR. Remember that the name was free,
+      # so whoever registers it later is not trusted on sight.
+      if [[ -z $rbase ]]; then
+        record "$name" "!absent" "-" "-" "ok" "-"
+      fi
+      continue
+    fi
+
+    reason=""
+    if [[ -z $rbase ]]; then
+      if [[ ${aur_base[$name]} != "$(installed_base "$name")" ]]; then
+        reason="a different AUR package (${aur_base[$name]}) uses this name, not the one installed"
+        rbase=$(installed_base "$name")
+        rmaintainer=${aur_maintainer[$name]}
+        rco=${aur_co[$name]}
+        rversion=${aur_version[$name]}
+      else
+        record "$name" "${aur_base[$name]}" "${aur_maintainer[$name]}" "${aur_co[$name]}" "ok" "${aur_version[$name]}"
+      fi
+    elif [[ $rstatus == "held" || $rstatus == "unnotified" ]]; then
+      reason="still held until you trust it"
+    elif [[ $rbase == "!absent" ]]; then
+      if [[ ${aur_base[$name]} != "$(installed_base "$name")" ]]; then
+        reason="a different AUR package (${aur_base[$name]}) now uses this name, not the one installed"
+      else
+        reason="was not on the AUR when first seen, and is now maintained by $(describe "${aur_maintainer[$name]}")"
+      fi
+    elif [[ ${aur_base[$name]} != "$rbase" ]]; then
+      reason="now comes from a different AUR package (${aur_base[$name]}), not $rbase"
+    elif [[ ${aur_maintainer[$name]} != "$rmaintainer" ]]; then
+      if [[ ${aur_maintainer[$name]} != "-" && ,$rco, == *",${aur_maintainer[$name]},"* ]]; then
+        # A trusted co-maintainer took over, the AUR's normal handover.
+        record "$name" "$rbase" "${aur_maintainer[$name]}" "${aur_co[$name]}" "ok" "${aur_version[$name]}"
+      else
+        reason="AUR maintainer changed from $(describe "$rmaintainer") to $(describe "${aur_maintainer[$name]}")"
+      fi
+    elif [[ $rmaintainer == "-" && ${aur_version[$name]} != "$rversion" ]]; then
+      reason="is orphaned but has a new build (${aur_version[$name]}), which only someone who adopted it could push"
+    fi
+    if [[ -z $reason && $rbase != "!absent" && -n $rbase ]]; then
+      added=$(added_co_maintainers "$rco" "${aur_co[$name]}")
+      if [[ -n $added ]]; then
+        reason="new AUR co-maintainer: $added"
+      fi
+    fi
+
+    if [[ -n $reason ]]; then
+      hold[$name]=1
+      echo "$name: $reason. Held back; if you trust it: omarchy-pkg-aur-maintainer trust $name" >&2
+      if [[ $rstatus != "held" ]]; then
+        new_holds+=("$name")
+        record "$name" "$rbase" "$rmaintainer" "$rco" "unnotified" "$rversion"
+      fi
+    fi
+  done
+
+  # yay builds an AUR dependency an update needs even when it is ignored, so
+  # anything that needs a held package, or something a held package provides,
+  # waits with it.
+  changed=1
+  while (( changed )); do
+    changed=0
+    for held_name in "${!hold[@]}"; do
+      held_names[$held_name]=$held_name
+      for dep in ${aur_provides[$held_name]:--}; do
+        if [[ $dep != "-" ]]; then
+          held_names[$dep]=$held_name
+        fi
+      done
+    done
+    for name in "${!aur_deps[@]}"; do
+      if [[ -v hold[$name] ]]; then
+        continue
+      fi
+      for dep in ${aur_deps[$name]}; do
+        if [[ -v held_names[$dep] ]]; then
+          hold[$name]=1
+          changed=1
+          echo "$name: needs $dep, which ${held_names[$dep]} provides and is held. Held back with it." >&2
+          break
+        fi
+      done
+    done
+  done
+
+  # The alert is best effort: without a desktop session it cannot be shown, so
+  # the hold stays marked unnotified and the next update tries again.
+  if (( ${#new_holds[@]} > 0 )); then
+    if omarchy-notification-send -u critical "$(omarchy-i18n update.aurHeld)" \
+      "$(omarchy-i18n --count "${#new_holds[@]}" update.aurHeldBody "$(printf '%s, ' "${new_holds[@]}" | sed 's/, $//')")" >/dev/null 2>&1; then
+      for name in "${new_holds[@]}"; do
+        set_status "$name" "held"
+      done
+    else
+      echo "Could not show the hold notification; it will be tried again next update." >&2
+    fi
+  fi
+  if (( ${#hold[@]} > 0 )); then
+    printf '%s\n' "${!hold[@]}" | sort
+  fi
+}
+
+trust() {
+  local current="" name="" base version maintainer co deps provides
+  local rbase rmaintainer rco rstatus rversion trusted_base
+
+  if ! pacman -Qmq | grep -qx -- "$1"; then
+    echo "$1 is not an installed AUR package" >&2
+    exit 1
+  elif ! current=$(aur_info "$1"); then
+    echo "Could not reach the AUR, so nothing was trusted" >&2
+    exit 1
+  else
+    IFS=$'\t' read -r name base version maintainer co deps provides <<<"$current" || true
+  fi
+
+  IFS=$'\t' read -r rbase rmaintainer rco rstatus rversion <<<"$(recorded "$1")" || true
+  if [[ -z $rbase || $rbase == "!absent" ]]; then
+    trusted_base=$(installed_base "$1")
+  else
+    trusted_base=$rbase
+  fi
+
+  if [[ $name != "$1" ]]; then
+    echo "$1 is not in the AUR" >&2
+    exit 1
+  elif [[ $base != "$trusted_base" ]]; then
+    echo "$1 now belongs to a different AUR package ($base) than the one installed ($trusted_base)." >&2
+    echo "Trusting it would replace the installed package with that one. To switch, remove $1 and install it from the AUR again." >&2
+    exit 1
+  elif [[ $rstatus == "ok" && $maintainer == "$rmaintainer" && -z $(added_co_maintainers "$rco" "$co") ]]; then
+    echo "Nothing to accept for $1: who controls it on the AUR has not changed."
+    echo "If the update still holds it back, it needs a held package; trust that one instead."
+  else
+    record "$1" "$base" "$maintainer" "$co" "ok" "$version"
+    echo "Accepted $1 on the AUR: maintainer $(describe "$maintainer"), co-maintainers ${co//,/, } (was: maintainer $(describe "${rmaintainer:--}"), co-maintainers ${rco:--})"
+  fi
+}
+
+case ${1:-} in
+  held)
+    held
+    ;;
+  trust)
+    if (( $# == 2 )); then
+      trust "$2"
+    else
+      usage
+      exit 1
+    fi
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
