@@ -1,17 +1,25 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 
 # omarchy:summary=Fire the IR emitter on cameras that need a UVC control before a face scan
-# omarchy:args=[--sysfs DIR --print]
+# omarchy:args=[--sysfs DIR --print|--sysfs DIR --dev DIR]
 # omarchy:hidden=true
 
 """Fire the IR emitter immediately before a face scan.
 
 The Bison 5986:1195 emitter resets to off on USB autosuspend, so a boot
-oneshot cannot hold it. This command runs from PAM on every scan.
+oneshot cannot hold it. This command runs from PAM on every scan: as root
+under sudo (euid 0) and in polkit's helper service, and as the user on the
+lock screen. -I keeps PYTHON* variables, the user site and the script's own
+directory out of the interpreter. The device nodes are opened first and the
+process then drops to nobody with no groups, so no ioctl runs as root.
+
+--sysfs and --dev are a test seam: a fake sysfs either prints its matches or
+fires at a fake device directory, never at the real /dev.
 """
 import ctypes, fcntl, glob, os, signal, sys
 
 UVCIOC_CTRL_QUERY, GET_LEN, SET_CUR = 0xC0107521, 0x85, 0x01
+NOBODY = 65534
 # The whole run takes about 21 ms. A stalled driver must not hold a login.
 WATCHDOG_SECONDS = 2
 # (idVendor, idProduct, bInterfaceNumber): the RGB and IR sensors of one camera
@@ -26,7 +34,23 @@ class XuQuery(ctypes.Structure):
 
 
 def usage():
-    print("Usage: omarchy-hw-ir-emitter [--sysfs DIR --print]", file=sys.stderr)
+    print("Usage: omarchy-hw-ir-emitter [--sysfs DIR --print|--sysfs DIR --dev DIR]", file=sys.stderr)
+
+
+def drop_privileges():
+    # The lock screen already runs this as the user. Under sudo the real uid is
+    # the user but the effective and saved ids are root, so all three go.
+    # polkit's helper service is root and keeps the capabilities and the
+    # @setuid syscalls this needs.
+    if os.geteuid() != 0:
+        return True
+    try:
+        os.setgroups([])
+        os.setresgid(NOBODY, NOBODY, NOBODY)
+        os.setresuid(NOBODY, NOBODY, NOBODY)
+    except OSError:
+        return False
+    return os.getresuid() == (NOBODY,) * 3 and os.getresgid() == (NOBODY,) * 3 and not os.getgroups()
 
 
 def matches(sysfs):
@@ -54,21 +78,33 @@ def xu(fd, unit, selector, query, size, data=None):
 
 
 def main(argv):
-    sysfs, do_print, had_sysfs, i = "/sys", False, False, 0
+    sysfs, dev, do_print, i = None, None, False, 0
     while i < len(argv):
         if argv[i] == "--print":
             do_print, i = True, i + 1
-        elif argv[i] == "--sysfs":
-            if i + 1 >= len(argv):
-                usage()
-                return 64
-            sysfs, had_sysfs, i = argv[i + 1], True, i + 2
+        elif argv[i] in ("--sysfs", "--dev") and i + 1 < len(argv):
+            if argv[i] == "--sysfs":
+                sysfs = argv[i + 1]
+            else:
+                dev = argv[i + 1]
+            i += 2
         else:
             usage()
             return 64
-    if had_sysfs and not do_print:
+    # Compare resolved paths, so /dev/, //dev or a link to /dev is still /dev.
+    real_dev = dev is None or os.path.realpath(dev) == os.path.realpath("/dev")
+    if dev is not None and (sysfs is None or real_dev):
         usage()
         return 64
+    if sysfs is not None and real_dev and not do_print:
+        usage()
+        return 64
+    # Each default on its own, so a --dev that was given is never swapped for
+    # the real /dev.
+    if sysfs is None:
+        sysfs = "/sys"
+    if dev is None:
+        dev = "/dev"
     if do_print:
         for name, controls in matches(sysfs):
             for c in controls:
@@ -77,13 +113,17 @@ def main(argv):
         return 0
     signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
     signal.alarm(WATCHDOG_SECONDS)
+    opened = []
     try:
-        for name, controls in matches("/sys"):
+        for name, controls in matches(sysfs):
             try:
-                fd = os.open("/dev/" + name, os.O_RDWR | os.O_NONBLOCK)
+                opened.append((os.open(os.path.join(dev, name), os.O_RDWR | os.O_NONBLOCK), controls))
             except OSError:
                 continue
-            try:
+        # The open file keeps its access after the drop. A drop that does not
+        # land fires nothing.
+        if drop_privileges():
+            for fd, controls in opened:
                 for c in controls:
                     try:
                         n = xu(fd, c["unit"], c["selector"], GET_LEN, 2)[0]
@@ -91,10 +131,11 @@ def main(argv):
                         xu(fd, c["unit"], c["selector"], SET_CUR, n, vals[:n])
                     except OSError:
                         continue
-            finally:
-                os.close(fd)
     except OSError:
         pass
+    finally:
+        for fd, _ in opened:
+            os.close(fd)
     return 0
 
 
