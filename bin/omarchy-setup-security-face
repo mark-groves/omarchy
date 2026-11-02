@@ -7,6 +7,9 @@ set -euo pipefail
 
 readonly MODULE=/usr/lib/security/pam_howdy.so
 readonly HOWDY_HELPER_DROPIN=/usr/lib/systemd/system/polkit-agent-helper@.service.d/10-howdy.conf
+readonly HOWDY_CONFIG=/etc/howdy/config.ini
+readonly INI_SECTION='^[[:space:]]*\[([^]]*)\]'
+readonly LID_SKIP='^[[:space:]]*abort_if_lid_closed[[:space:]]*[=:][[:space:]]*([^[:space:]#;]*)'
 
 if [[ ! -f $MODULE ]]; then
   echo -e "\e[31mhowdy-next is not installed ($MODULE is missing).\e[0m"
@@ -18,49 +21,83 @@ if [[ ! -f $HOWDY_HELPER_DROPIN ]]; then
   exit 1
 fi
 
+# This runs in a terminal, where sudo can ask for the password. The whole
+# script runs as root from here, and tests each stack as the invoking user.
 if (( EUID != 0 )); then
-  exec pkexec "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
+  exec sudo "$(readlink -f -- "${BASH_SOURCE[0]}")" "$@"
 fi
 
 script_bin=$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")
-export PATH="$script_bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$script_bin:/usr/bin:/bin"
+unset TMPDIR
+source "$script_bin/omarchy-security-face-functions"
+
+# The stacks have no lid gate of their own: with the lid shut, Howdy skips the
+# camera itself unless abort_if_lid_closed is turned off under [core]. It is on
+# by default. Howdy reads the file with inih, so this reads it the same way: a
+# UTF-8 BOM is skipped, section and key match in any case, a section line ends
+# at its ], and a key takes : as well as =.
+lid_skip_turned_off() {
+  local line section="" value="" first=1
+  if [[ ! -e $HOWDY_CONFIG ]]; then
+    return 1
+  fi
+  [[ -f $HOWDY_CONFIG && -r $HOWDY_CONFIG ]] || face_stop "Cannot read $HOWDY_CONFIG."
+  while IFS= read -r line || [[ -n $line ]]; do
+    if (( first )); then
+      line=${line#$'\xef\xbb\xbf'}
+      first=0
+    fi
+    line=${line,,}
+    if [[ $line =~ $INI_SECTION ]]; then
+      section=${BASH_REMATCH[1]}
+    elif [[ $section == "core" && $line =~ $LID_SKIP ]]; then
+      value=${BASH_REMATCH[1]}
+    fi
+  done <"$HOWDY_CONFIG"
+  [[ $value == "false" || $value == "0" || $value == "no" || $value == "off" ]]
+}
+
+face_start
 
 echo -e "\e[32mSetting up face authentication for lock, sudo, and system prompts.\n\e[0m"
 echo "Howdy is installed. Enroll a face model with howdy if you have not already."
+echo "Each stack is tested as $face_user right after it is written, and put back if a check fails."
 echo
 
-# PAM runs the emitter helper by absolute path on every surface, and the polkit
-# helper's sandbox hides /home, so a linked checkout cannot be that path. A copy
-# under /usr/local/bin is reachable from all three and owned by no package.
-echo "Installing the IR emitter helper..."
-emitter_helper=/usr/local/bin/omarchy-hw-ir-emitter
-mkdir -p "$(dirname "$emitter_helper")"
-emitter_tmp=$(mktemp "$emitter_helper.new.XXXXXX")
-cat "$script_bin/omarchy-hw-ir-emitter" >"$emitter_tmp"
-chmod 755 "$emitter_tmp"
-mv -Tf "$emitter_tmp" "$emitter_helper"
+# Nothing is written until every check here passes.
+if "${face_as_user[@]}" "$script_bin/omarchy-sudo-passwordless" --active; then
+  face_stop "Passwordless sudo is on for $face_user, so sudo would skip the password prompt and the checks would prove nothing. Turn it off with omarchy-sudo-passwordless --disable, then run this again."
+fi
+if lid_skip_turned_off; then
+  face_stop "abort_if_lid_closed is off in $HOWDY_CONFIG, so with the lid shut a scan would wait on a camera you cannot face. Set it back to true under [core], then run this again."
+fi
+face_read_shape lane ask
+face_read_shape sudo ask
+face_read_shape polkit-1 ask
+face_show_diff sudo ask
+face_show_diff polkit-1 ask
 
-echo "Configuring lock screen for face authentication..."
-lock_pam=/etc/pam.d/omarchy-lock-face
-lock_tmp=$(mktemp "$lock_pam.new.XXXXXX")
-tee "$lock_tmp" >/dev/null <<'EOF'
-#%PAM-1.0
-auth       optional                    pam_exec.so quiet /usr/local/bin/omarchy-hw-ir-emitter
-auth       required                    pam_howdy.so
-account    include                     system-local-login
-EOF
-chmod 644 "$lock_tmp"
-mv -Tf "$lock_tmp" "$lock_pam"
+echo "Installing the face helpers in /usr/local/lib/omarchy-face..."
+face_apply helpers install
 
-echo "Configuring sudo for face authentication..."
-omarchy-pam-pair-add /etc/pam.d/sudo pam_howdy.so
+# The lock screen's face lane is its own PAM conversation beside the password
+# one, so a broken lane cannot lock anyone out and needs no live check.
+echo "Configuring the lock screen for face authentication..."
+face_apply lane install
 
-echo "Configuring polkit for face authentication..."
-omarchy-apply-polkit-pam add face
+face_convert sudo ask "System prompts were not changed, so pkexec and run0 work as before."
+face_convert polkit-1 ask "sudo keeps Ask first. Run this again to retry system prompts."
+echo
+
+face_delete_old_emitter
 
 echo "Pinning howdy-compare to one CPU..."
-omarchy-apply-howdy-compare install
+"$script_bin/omarchy-apply-howdy-compare" install
 
 echo -e "\e[32m\nFace authentication is now used for lock, sudo, and system prompts.\e[0m"
-echo "Password remains the fallback. Look at the lid camera when asked."
+echo "At sudo and system prompts, press Enter on an empty password to use your face. A typed password never starts the camera, and sudo run by a program with no terminal cannot start a scan."
+echo "On the lock screen, click the face or press Enter on the empty field. If face misses, type the password."
 echo "This command does not enroll. Change the face with howdy."
+echo
+echo "Ask first makes a scan wait for your Enter, but it cannot prove the Enter was yours. A program running as you can still answer a prompt itself: it can run sudo inside a terminal of its own (script -c 'sudo ...'), or press Enter in a system prompt with wtype. Linux has no secure desktop to stop that, so a prompt you did not expect is a reason to stop and look."
