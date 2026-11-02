@@ -376,6 +376,11 @@ assert(polkit.shouldRestartFaceOnUnlock(false, true, false), 'a request still pe
 assert(!polkit.shouldRestartFaceOnUnlock(false, true, true), 'a request already resolved under the lock does not replay')
 assert(!polkit.shouldRestartFaceOnUnlock(false, false, false), 'an idle agent does not open a card at unlock')
 assert(!polkit.shouldRestartFaceOnUnlock(true, true, false), 'a pending request does not restart while still locked')
+// Ask first scans on an empty answer, so a stray Enter must not send one.
+assert(!polkit.emptySubmitArmed(10000, 10100, false), 'an empty Enter 100ms after the field took focus is refused')
+assert(polkit.emptySubmitArmed(10000, 10700, false), 'an empty Enter 700ms after the field took focus is accepted')
+assert(!polkit.emptySubmitArmed(10000, 10700, true), 'an autorepeated empty Enter is refused')
+assert(!polkit.emptySubmitArmed(0, 10700, false), 'an empty Enter before the field took focus for the prompt is refused')
 assert(
   !/sessionLockedSeen/.test(agentQml),
   'an agent created under an existing lock still restarts a pending card at unlock'
