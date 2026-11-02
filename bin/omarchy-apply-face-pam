@@ -1,0 +1,617 @@
+#!/bin/bash
+
+# omarchy:summary=Write the fixed face lines of the sudo, polkit-1 and lock screen PAM stacks
+# omarchy:group=apply
+# omarchy:args=[--root DIR] <helpers|lane> <install|remove> | [--root DIR] <sudo|polkit-1> <ask|off|restore> | [--root DIR] [--from FILE] shape <sudo|polkit-1|lane> | [--root DIR] [--from FILE] --print <sudo|polkit-1> <ask|off>
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+set -euo pipefail
+
+# Root runs this from face setup, so it trusts nothing it inherits: commands
+# come from /usr/bin, and scratch files go under /tmp, where nobody else can
+# rename them. Root's PATH has no Omarchy commands, so the tools this builds
+# on are the ones next to it.
+if (( EUID == 0 )); then
+  export PATH=/usr/bin:/bin
+  unset TMPDIR
+fi
+
+self=$(readlink -e -- "${BASH_SOURCE[0]}")
+bin_dir=${self%/*}
+source "$bin_dir/omarchy-security-functions"
+
+readonly FACE_DIR=/usr/local/lib/omarchy-face
+readonly -a HELPERS=(ask-hint authtok-empty omarchy-hw-ir-emitter)
+readonly VENDOR_POLKIT=/usr/lib/pam.d/polkit-1
+readonly STATE_DIR=/var/lib/omarchy/face-pam
+readonly POLKIT_LOCK=/run/lock/omarchy-polkit-pam.lock
+readonly LANE=omarchy-lock-face
+readonly LID_GATE=/usr/bin/omarchy-hw-laptop-closed
+
+# Old setup wrote a plain auth line on pam_howdy.so and ran the emitter from
+# /usr/local/bin. The Ask first block has neither: its face line is -auth and
+# its emitter lives in FACE_DIR.
+readonly LEGACY_FACE='^[[:space:]]*auth[[:space:]].*pam_howdy\.so|/usr/local/bin/omarchy-hw-ir-emitter'
+readonly FACE_MARK='pam_howdy\.so|/usr/local/lib/omarchy-face/|omarchy-hw-ir-emitter'
+readonly FINGERPRINT_GATE='^[[:space:]]*auth[[:space:]]+\[success=1 default=ignore\][[:space:]]+pam_exec\.so[[:space:]]'
+readonly FINGERPRINT_LINE='^[[:space:]]*auth[[:space:]].*pam_fprintd\.so'
+readonly SYSTEM_AUTH_INCLUDE='^[[:space:]]*auth[[:space:]]+include[[:space:]]+system-auth[[:space:]]*$'
+# libpam reads the type and the include keyword in any case.
+readonly NUMERIC_JUMP='^[[:space:]]*-?[Aa][Uu][Tt][Hh][[:space:]]+\[[^]]*=[0-9]'
+readonly AUTH_INCLUDE='^[[:space:]]*-?[Aa][Uu][Tt][Hh][[:space:]]+[Ii][Nn][Cc][Ll][Uu][Dd][Ee][[:space:]]'
+
+root=""
+work=""
+staged=""
+lock_fd=""
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-apply-face-pam [--root DIR] helpers install|remove
+       omarchy-apply-face-pam [--root DIR] lane install|remove
+       omarchy-apply-face-pam [--root DIR] sudo|polkit-1 ask|off|restore
+       omarchy-apply-face-pam [--root DIR] [--from FILE] shape sudo|polkit-1|lane
+       omarchy-apply-face-pam [--root DIR] [--from FILE] --print sudo|polkit-1 ask|off
+
+ask puts the Ask first block directly above the first "auth include system-auth".
+off takes every face line out; polkit-1 off that leaves the vendor text deletes the /etc copy.
+Each write records what the stack was first, and restore puts exactly that back.
+shape prints ask, off, legacy or unknown.
+--print writes the rendered stack to stdout and changes nothing; --from reads FILE in place of the stack.
+--root prefixes every path. Writes need root.
+USAGE
+}
+
+usage_error() {
+  usage >&2
+  exit 64
+}
+
+refuse() {
+  echo "omarchy-apply-face-pam: $1" >&2
+  exit 1
+}
+
+cleanup() {
+  if [[ -n $staged ]]; then
+    rm -f -- "$staged"
+  fi
+  if [[ -n $work ]]; then
+    rm -rf -- "$work"
+  fi
+}
+
+# Ask first: the password prompt comes up as usual, an empty answer starts a
+# face scan, and a typed one never reaches face. Every line is fixed text, so
+# a line that matches one of these exactly is this command's own.
+# - ask-hint says how to start a scan, only when one can start. On sudo it
+#   is given tty, and stays quiet unless PAM_TTY is a /dev/ path, the same
+#   test as the tty line below.
+# - authtok-empty asks for the password and exits 0 only on an empty answer.
+#   Anything typed jumps over the rest of the block to the system-auth
+#   include. A failed conversation (Ctrl+C, or a caller with no terminal)
+#   ends the attempt rather than falling through to pam_unix.
+# - sudo only: an empty answer from a caller with no controlling terminal
+#   (echo | sudo -S from a service, or an askpass that prints an empty line)
+#   stops before the camera, with no faillock strike. sudo sets PAM_TTY from
+#   its controlling terminal, not from stdin, and leaves it unset without
+#   one; polkit's helper never sets it, so polkit-1 has no such line.
+# - pam_warn logs the start of a scan from the PAM caller itself.
+# - The emitter lights the IR camera, and its result never counts.
+# - The face line ends the stack either way: an empty answer that reached
+#   pam_unix would cost a faillock strike.
+# The gate's jump counts every line after it: 4 on sudo, 3 on polkit-1.
+print_block() {
+  if [[ $1 == "sudo" ]]; then
+    cat <<'EOF'
+auth   [default=ignore]                         pam_exec.so quiet quiet_log stdout /usr/local/lib/omarchy-face/ask-hint tty
+auth   [success=ignore conv_err=die default=4]  pam_exec.so quiet quiet_log expose_authtok /usr/local/lib/omarchy-face/authtok-empty
+auth   [success=ignore default=die]             pam_succeed_if.so quiet tty =~ /dev/*
+auth   [default=ignore]                         pam_warn.so
+auth   [default=ignore]                         pam_exec.so quiet quiet_log /usr/local/lib/omarchy-face/omarchy-hw-ir-emitter
+-auth  [success=done default=die]               pam_howdy.so
+EOF
+  else
+    cat <<'EOF'
+auth   [default=ignore]                         pam_exec.so quiet quiet_log stdout /usr/local/lib/omarchy-face/ask-hint
+auth   [success=ignore conv_err=die default=3]  pam_exec.so quiet quiet_log expose_authtok /usr/local/lib/omarchy-face/authtok-empty
+auth   [default=ignore]                         pam_warn.so
+auth   [default=ignore]                         pam_exec.so quiet quiet_log /usr/local/lib/omarchy-face/omarchy-hw-ir-emitter
+-auth  [success=done default=die]               pam_howdy.so
+EOF
+  fi
+}
+
+# The lock screen's face lane, run by its own PamContext beside the password
+# lane. It succeeds only on a face match: a miss, a skipped scan or a missing
+# module fails through pam_deny. The emitter line is [default=ignore], never
+# optional: an optional success would turn a face miss into an unlock. With
+# the lid shut, Howdy's abort_if_lid_closed skips the camera.
+print_lane() {
+  cat <<'EOF'
+#%PAM-1.0
+auth   [default=ignore]  pam_exec.so quiet quiet_log /usr/local/lib/omarchy-face/omarchy-hw-ir-emitter
+-auth  sufficient        pam_howdy.so
+auth   required          pam_deny.so
+account include system-local-login
+EOF
+}
+
+print_ask_hint() {
+  cat <<'EOF'
+#!/bin/bash
+# Written by omarchy-apply-face-pam. sudo and polkit run it through pam_exec
+# before the password prompt. pam_exec starts it with PAM's own environment
+# only (pam_getenvlist and the PAM items), so a caller's BASH_ENV or exported
+# functions never reach it, and it needs no privilege: under sudo, bash may
+# drop to the real uid, which changes nothing here. Builtins only.
+#
+# Offer face only when an empty answer can reach it: without the gate an
+# empty answer is an empty password, and without the module it is an error.
+# sudo passes tty, because its stack lets an empty answer through only from
+# a terminal: then PAM_TTY, which pam_exec exports, must be a /dev/ path.
+if [[ -x /usr/local/lib/omarchy-face/authtok-empty && -f /usr/lib/security/pam_howdy.so ]] &&
+  [[ $1 != "tty" || $PAM_TTY == /dev/* ]]; then
+  printf '%s\n' "Press Enter on an empty password to use your face."
+fi
+exit 0
+EOF
+}
+
+print_authtok_empty() {
+  cat <<'EOF'
+#!/bin/bash
+# Written by omarchy-apply-face-pam. pam_exec writes the answer to the
+# password prompt on stdin. Exit 0, the face path, only on an empty answer
+# read from that pipe; any byte, or anything unexpected, is the password
+# path. It reads at most one byte and keeps nothing. pam_exec starts it with
+# PAM's own environment only (pam_getenvlist and the PAM items), so a
+# caller's BASH_ENV or exported functions never reach it, and it needs no
+# privilege: under sudo, bash may drop to the real uid. Builtins only.
+byte=""
+if [[ -p /dev/stdin ]] && ! IFS= read -r -d '' -n 1 byte && [[ -z $byte ]]; then
+  exit 0
+else
+  exit 1
+fi
+EOF
+}
+
+is_regular() {
+  [[ -f $1 && ! -L $1 ]]
+}
+
+is_absent() {
+  [[ ! -e $1 && ! -L $1 ]]
+}
+
+has_legacy_face() {
+  grep -qE -- "$LEGACY_FACE" "$1"
+}
+
+has_face_mark() {
+  grep -qE -- "$FACE_MARK" "$1"
+}
+
+# polkit-1 without an /etc copy is the vendor file. It is read, not spelled
+# out here, so changes to it keep arriving.
+copy_vendor_polkit() {
+  local vendor=$root$VENDOR_POLKIT
+  is_regular "$vendor" || refuse "$vendor is missing"
+  cat -- "$vendor" >"$1" || refuse "cannot read $vendor"
+}
+
+read_stack() {
+  local target=$1 source=$2 dest=$3
+  if [[ $target == "polkit-1" ]] && is_absent "$source"; then
+    copy_vendor_polkit "$dest"
+  elif is_absent "$source"; then
+    refuse "$source is missing"
+  elif is_regular "$source"; then
+    cat -- "$source" >"$dest" || refuse "cannot read $source"
+  else
+    refuse "$source is not a regular file"
+  fi
+}
+
+# Old shapes go back out through the tools that wrote them. The compiler is
+# what turns a shared face and fingerprint lid gate back into fingerprint's
+# own, and its exit 3 means nothing is left but the vendor text.
+strip_legacy() {
+  local target=$1 source=$2 dest=$3 status=0
+  if ! has_legacy_face "$source"; then
+    cat -- "$source" >"$dest" || refuse "cannot read $source"
+  elif [[ $target == "sudo" ]]; then
+    "$bin_dir/omarchy-pam-pair-drop" --from "$source" --print pam_howdy.so >"$dest" ||
+      refuse "omarchy-pam-pair-drop could not take the old face lines out of sudo"
+  else
+    "$bin_dir/omarchy-apply-polkit-pam" --from "$source" --print remove face >"$dest" || status=$?
+    if (( status == 3 )); then
+      copy_vendor_polkit "$dest"
+    elif (( status != 0 )); then
+      refuse "omarchy-apply-polkit-pam could not take the old face lines out of polkit-1"
+    fi
+  fi
+}
+
+# Every line of the block is taken out wherever it is, so a stack where old
+# tools split the block is still taken apart line by line.
+strip_block() {
+  local target=$1 source=$2 line ours keep
+  local -a block
+  mapfile -t block < <(print_block "$target")
+  while IFS= read -r line || [[ -n $line ]]; do
+    keep=1
+    for ours in "${block[@]}"; do
+      if [[ $line == "$ours" ]]; then
+        keep=0
+        break
+      fi
+    done
+    if (( keep )); then
+      printf '%s\n' "$line"
+    fi
+  done <"$source"
+}
+
+# Anything face-shaped that neither the old tools nor the block account for
+# is a hand edit or a half-written stack. Refuse rather than leave a jump
+# count pointing at the wrong line. The one lid gate that may stay is
+# fingerprint's own: [success=1 default=ignore] directly above pam_fprintd.so.
+check_leftovers() {
+  local i
+  local -a lines
+  mapfile -t lines <"$1"
+  for i in "${!lines[@]}"; do
+    if [[ ${lines[i]} =~ $FACE_MARK ]]; then
+      refuse "line $((i + 1)) is a face line no known shape accounts for: ${lines[i]}"
+    fi
+    if [[ ${lines[i]} == *"$LID_GATE"* ]]; then
+      if [[ ! ${lines[i]} =~ $FINGERPRINT_GATE || ! ${lines[i + 1]:-} =~ $FINGERPRINT_LINE ]]; then
+        refuse "line $((i + 1)) is a lid gate that does not guard one fingerprint line: ${lines[i]}"
+      fi
+    fi
+  done
+}
+
+# The block goes directly above the first system-auth include, below any
+# fingerprint or FIDO2 lines: at the very top a typed password would land on
+# the fingerprint gate. A jump above that point, other than fingerprint's own
+# gate over its one line, could count across the new lines, so it is refused.
+# So is any other include above it: libpam splices the included lines into
+# the stack, and a jump at their end would count into the block where this
+# cannot see it. A substack keeps its jumps to itself, so it may stay.
+insert_block() {
+  local target=$1 source=$2 line inserted=0
+  local -a lines block
+  mapfile -t lines <"$source"
+  mapfile -t block < <(print_block "$target")
+  for line in "${lines[@]}"; do
+    if (( ! inserted )); then
+      if [[ $line =~ $SYSTEM_AUTH_INCLUDE ]]; then
+        printf '%s\n' "${block[@]}"
+        inserted=1
+      elif [[ $line =~ $NUMERIC_JUMP && $line != *"$LID_GATE"* ]]; then
+        refuse "a jump above the system-auth include would count across the face lines: $line"
+      elif [[ $line =~ $AUTH_INCLUDE ]]; then
+        refuse "an include above the system-auth include could jump across the face lines: $line"
+      fi
+    fi
+    printf '%s\n' "$line"
+  done
+  if (( ! inserted )); then
+    refuse "no auth include system-auth line to put the face lines above"
+  fi
+}
+
+# Every step checks its own result: shape renders inside a condition, where
+# set -e does not apply.
+render() {
+  local target=$1 mode=$2 source=$3 dest=$4 scratch
+  scratch=$(mktemp -d -p "$work") || refuse "cannot make a scratch directory"
+  read_stack "$target" "$source" "$scratch/stack"
+  strip_legacy "$target" "$scratch/stack" "$scratch/legacy"
+  strip_block "$target" "$scratch/legacy" >"$scratch/stripped" || refuse "cannot strip the face lines"
+  check_leftovers "$scratch/stripped"
+  if [[ $mode == "ask" ]]; then
+    insert_block "$target" "$scratch/stripped" >"$dest"
+  else
+    cat -- "$scratch/stripped" >"$dest" || refuse "cannot write the rendered stack"
+  fi
+}
+
+# The mode read back from the stack: ask when rendering ask changes nothing;
+# off when no face line is there and rendering off changes nothing; legacy
+# for any other stack ask can rewrite, such as old face lines or a block old
+# tools or a hand edit took lines out of; unknown when rendering ask refuses
+# a stack that is neither, so --print ask always has the reason. It says what
+# the stack is, not that ask can be written over it: an off stack can still
+# hold a jump ask refuses. Whether a mode can be written is --print's answer.
+stack_shape() {
+  local target=$1 source=$2 rendered=$work/shape
+  if is_absent "$source"; then
+    if [[ $target == "polkit-1" ]]; then
+      echo off
+    else
+      echo unknown
+    fi
+  elif ! is_regular "$source"; then
+    echo unknown
+  elif (render "$target" ask "$source" "$rendered") 2>/dev/null && cmp -s -- "$rendered" "$source"; then
+    echo ask
+  elif ! has_face_mark "$source" && (render "$target" off "$source" "$rendered") 2>/dev/null &&
+    cmp -s -- "$rendered" "$source"; then
+    echo off
+  elif (render "$target" ask "$source" "$rendered") 2>/dev/null; then
+    echo legacy
+  else
+    echo unknown
+  fi
+}
+
+lane_shape() {
+  local source=$1
+  if is_absent "$source"; then
+    echo off
+  elif ! is_regular "$source"; then
+    echo unknown
+  elif cmp -s -- "$source" <(print_lane); then
+    echo ask
+  elif grep -q pam_howdy.so -- "$source" && ! grep -qF -- "$FACE_DIR/" "$source"; then
+    echo legacy
+  else
+    echo unknown
+  fi
+}
+
+require_root() {
+  if (( EUID != 0 )); then
+    refuse "writing face PAM files needs root"
+  fi
+}
+
+require_root_directory() {
+  omarchy_security_assert_root_directory "$1" "$2" ||
+    refuse "$1 is not a root-owned directory with mode $2"
+}
+
+# A new name in the same directory, renamed over the old one: a reader sees
+# the old file or the new one, never half of either.
+replace_file() {
+  local source=$1 dest=$2 mode=$3
+  staged=$(mktemp "$dest.new.XXXXXX")
+  install -o root -g root -m "$mode" -T -- "$source" "$staged"
+  mv -Tf -- "$staged" "$dest"
+  staged=""
+}
+
+# Before each write, what the stack was: a copy, or a marker that there was no
+# file. Each write replaces the record, so restore puts back exactly the file
+# the last write replaced and never an older one. No package owns
+# /var/lib/omarchy, so the first write may have to make it.
+record_previous() {
+  local name=$1 file=$2 state=$root$STATE_DIR
+  if is_absent "$root/var/lib/omarchy"; then
+    install -d -o root -g root -m 0755 -- "$root/var/lib/omarchy"
+  fi
+  omarchy_security_prepare_private_root_directory "$state" "$root/var/lib/omarchy" ||
+    refuse "$state must be a root-owned 0700 directory under a root-owned 755 $root/var/lib/omarchy"
+  if is_absent "$file"; then
+    : >"$work/absent"
+    replace_file "$work/absent" "$state/$name.absent" 600
+    rm -f -- "$state/$name.previous"
+  else
+    replace_file "$file" "$state/$name.previous" 600
+    rm -f -- "$state/$name.absent"
+  fi
+}
+
+# The compiler's own lock, so a fingerprint or FIDO2 change cannot interleave.
+lock_polkit() {
+  exec {lock_fd}>"$root$POLKIT_LOCK" || refuse "cannot open $root$POLKIT_LOCK"
+  flock "$lock_fd"
+}
+
+require_helpers() {
+  local name dir=$root$FACE_DIR
+  for name in "${HELPERS[@]}"; do
+    if ! is_regular "$dir/$name" || [[ ! -x $dir/$name ]]; then
+      refuse "$dir/$name is missing; run helpers install first"
+    fi
+  done
+}
+
+write_stack() {
+  local target=$1 mode=$2 file=$root/etc/pam.d/$1
+  require_root
+  require_root_directory "$root/etc/pam.d" 755
+  if [[ $target == "polkit-1" ]]; then
+    lock_polkit
+  fi
+  if [[ $mode == "ask" ]]; then
+    require_helpers
+  fi
+  render "$target" "$mode" "$file" "$work/rendered"
+  record_previous "$target" "$file"
+  if [[ $target == "polkit-1" && $mode == "off" ]] && cmp -s -- "$work/rendered" "$root$VENDOR_POLKIT"; then
+    rm -f -- "$file"
+  else
+    replace_file "$work/rendered" "$file" 644
+  fi
+}
+
+restore_stack() {
+  local target=$1 file=$root/etc/pam.d/$1 state=$root$STATE_DIR
+  require_root
+  require_root_directory "$root/etc/pam.d" 755
+  if [[ $target == "polkit-1" ]]; then
+    lock_polkit
+  fi
+  if is_absent "$state"; then
+    refuse "nothing recorded for $file; there is nothing to restore"
+  fi
+  require_root_directory "$state" 700
+  if [[ -e $state/$target.previous && -e $state/$target.absent ]]; then
+    refuse "both $state/$target.previous and $state/$target.absent exist; restore $file by hand"
+  elif is_regular "$state/$target.previous"; then
+    replace_file "$state/$target.previous" "$file" 644
+    rm -f -- "$state/$target.previous"
+  elif is_regular "$state/$target.absent"; then
+    rm -f -- "$file"
+    rm -f -- "$state/$target.absent"
+  else
+    refuse "nothing recorded for $file; there is nothing to restore"
+  fi
+}
+
+# PAM runs the helpers as root before authentication, so every directory on
+# their path must be root's alone, or a helper could be swapped before a scan.
+prepare_helper_dir() {
+  local dir=$root$FACE_DIR
+  require_root_directory "$root/usr/local" 755
+  require_root_directory "$root/usr/local/lib" 755
+  if is_absent "$dir"; then
+    install -d -o root -g root -m 755 -- "$dir"
+  fi
+  require_root_directory "$dir" 755
+}
+
+install_helpers() {
+  local dir=$root$FACE_DIR emitter=$bin_dir/omarchy-hw-ir-emitter
+  require_root
+  is_regular "$emitter" || refuse "$emitter is missing"
+  prepare_helper_dir
+  print_ask_hint >"$work/ask-hint"
+  print_authtok_empty >"$work/authtok-empty"
+  replace_file "$work/ask-hint" "$dir/ask-hint" 755
+  replace_file "$work/authtok-empty" "$dir/authtok-empty" 755
+  replace_file "$emitter" "$dir/omarchy-hw-ir-emitter" 755
+}
+
+# A stack that still names the helpers would lose its gate: an empty answer
+# would become an empty password and cost a faillock strike.
+remove_helpers() {
+  local dir=$root$FACE_DIR name users
+  require_root
+  if is_absent "$dir"; then
+    return 0
+  fi
+  prepare_helper_dir
+  require_root_directory "$root/etc/pam.d" 755
+  users=$(grep -lsF -- "$FACE_DIR/" "$root/etc/pam.d"/* || true)
+  if [[ -n $users ]]; then
+    refuse "the face helpers are still named by: ${users//$'\n'/ }"
+  fi
+  for name in "${HELPERS[@]}"; do
+    rm -f -- "$dir/$name"
+  done
+  rmdir --ignore-fail-on-non-empty -- "$dir"
+}
+
+install_lane() {
+  require_root
+  require_root_directory "$root/etc/pam.d" 755
+  print_lane >"$work/lane"
+  replace_file "$work/lane" "$root/etc/pam.d/$LANE" 644
+}
+
+remove_lane() {
+  require_root
+  require_root_directory "$root/etc/pam.d" 755
+  rm -f -- "$root/etc/pam.d/$LANE"
+}
+
+set_root() {
+  local resolved
+  if ! resolved=$(realpath -e -- "$1" 2>/dev/null) || [[ ! -d $resolved ]]; then
+    echo "omarchy-apply-face-pam: --root must be a directory" >&2
+    exit 64
+  fi
+  root=${resolved%/}
+}
+
+main() {
+  local from="" have_from=0 print=0 target verb source
+  local -a words=()
+
+  while (( $# > 0 )); do
+    case $1 in
+      --root)
+        (( $# >= 2 )) || usage_error
+        set_root "$2"
+        shift 2
+        ;;
+      --from)
+        (( $# >= 2 )) || usage_error
+        from=$2
+        have_from=1
+        shift 2
+        ;;
+      --print)
+        print=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        usage_error
+        ;;
+      *)
+        words+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  (( ${#words[@]} == 2 )) || usage_error
+  target=${words[0]}
+  verb=${words[1]}
+
+  omarchy_security_install_signal_exit_traps
+  trap cleanup EXIT
+  work=$(mktemp -d)
+
+  if (( print )); then
+    case "$target $verb" in
+      "sudo ask"|"sudo off"|"polkit-1 ask"|"polkit-1 off") ;;
+      *) usage_error ;;
+    esac
+    source=$root/etc/pam.d/$target
+    if (( have_from )); then
+      source=$from
+    fi
+    render "$target" "$verb" "$source" "$work/rendered"
+    cat -- "$work/rendered"
+  elif [[ $target == "shape" ]]; then
+    source=$root/etc/pam.d/$verb
+    if [[ $verb == "lane" ]]; then
+      source=$root/etc/pam.d/$LANE
+    fi
+    if (( have_from )); then
+      source=$from
+    fi
+    case $verb in
+      sudo|polkit-1) stack_shape "$verb" "$source" ;;
+      lane) lane_shape "$source" ;;
+      *) usage_error ;;
+    esac
+  elif (( have_from )); then
+    echo "omarchy-apply-face-pam: --from goes with --print or shape" >&2
+    exit 64
+  else
+    case "$target $verb" in
+      "helpers install") install_helpers ;;
+      "helpers remove") remove_helpers ;;
+      "lane install") install_lane ;;
+      "lane remove") remove_lane ;;
+      "sudo ask"|"sudo off"|"polkit-1 ask"|"polkit-1 off") write_stack "$target" "$verb" ;;
+      "sudo restore"|"polkit-1 restore") restore_stack "$target" ;;
+      *) usage_error ;;
+    esac
+  fi
+}
+
+main "$@"
