@@ -75,6 +75,11 @@ installed() {
   printf '%%NAME%%\n%s\n\n%%BASE%%\n%s\n' "$1" "$2" >"$test_tmp/db/local/$1-1-1/desc"
 }
 
+# reinstalled <name> <base>: the same name, now installed from another package base.
+reinstalled() {
+  printf '%%NAME%%\n%s\n\n%%BASE%%\n%s\n' "$1" "$2" >"$test_tmp/db/local/$1-1-1/desc"
+}
+
 uninstalled() {
   grep -vx -- "$1" "$test_tmp/installed" >"$test_tmp/installed.new" || true
   mv -- "$test_tmp/installed.new" "$test_tmp/installed"
@@ -171,7 +176,12 @@ if run omarchy-pkg-aur-maintainer trust geant4-debug 2>"$test_tmp/err"; then
   fail "trust refuses to switch a package to a different AUR package base"
 fi
 grep -Fq "remove geant4-debug and install it from the AUR again" "$test_tmp/err" || fail "the refusal says how to switch" "$(cat "$test_tmp/err")"
-pass "a name taken by a different AUR package is held, and trust will not switch to it"
+# Doing that, without an update in between to drop the old record.
+reinstalled geant4-debug geant4-debug
+[[ $(held) == "howdy-next-debug" ]] || fail "a package installed again from the AUR is seen afresh" "$(cat "$test_tmp/err")"
+run omarchy-pkg-aur-maintainer trust geant4-debug >/dev/null 2>"$test_tmp/err" ||
+  fail "trust accepts a package installed again from the AUR" "$(cat "$test_tmp/err")"
+pass "a name taken by a different AUR package is held, trust will not switch to it, and installing it again does"
 
 installed needs-debug needs-debug
 aur needs-debug needs-debug '"nathawatc"' null '["howdy-next-debug>=3"]'
@@ -179,10 +189,10 @@ installed foo-git foo-git
 aur foo-git foo-git '"alice"' null '[]' 1-1 '["foo=1.0"]'
 installed bar bar
 aur bar bar '"alice"' null '["foo>=2"]'
-[[ $(held) == "geant4-debug howdy-next-debug needs-debug" ]] ||
+[[ $(held) == "howdy-next-debug needs-debug" ]] ||
   fail "a package that needs a held one is held, and new packages are trusted on sight" "$(cat "$test_tmp/err")"
 aur foo-git foo-git '"mallory"' null '[]' 1-1 '["foo=1.0"]'
-[[ $(held) == "bar foo-git geant4-debug howdy-next-debug needs-debug" ]] ||
+[[ $(held) == "bar foo-git howdy-next-debug needs-debug" ]] ||
   fail "a package that needs a held one, by name or by what it provides, is held with it" "$(cat "$test_tmp/err")"
 run omarchy-pkg-aur-maintainer trust bar >"$test_tmp/out"
 grep -Fq "trust that one instead" "$test_tmp/out" || fail "trust explains a hold that comes from a dependency" "$(cat "$test_tmp/out")"
@@ -206,7 +216,7 @@ grep -Fq "Could not reach the AUR" "$test_tmp/err" || fail "trust says why it fa
 pass "held and trust fail when the AUR cannot be checked, and trust refuses what is not installed"
 
 run omarchy-update-aur-pkgs >/dev/null 2>&1
-[[ $(<"$test_tmp/yay-args") == "-Sua --noconfirm --cleanafter --ignore gcc14,gcc14-libs,bar,foo-git,geant4-debug,howdy-next-debug,needs-debug" ]] ||
+[[ $(<"$test_tmp/yay-args") == "-Sua --noconfirm --cleanafter --ignore gcc14,gcc14-libs,bar,foo-git,howdy-next-debug,needs-debug" ]] ||
   fail "the update skips every held package" "$(cat "$test_tmp/yay-args")"
 rm -f -- "$test_tmp/yay-args"
 TEST_AUR_DOWN=1 run omarchy-update-aur-pkgs >/dev/null 2>&1 || fail "an unreachable maintainer check does not fail the update"
@@ -214,13 +224,13 @@ TEST_AUR_DOWN=1 run omarchy-update-aur-pkgs >/dev/null 2>&1 || fail "an unreacha
 pass "the AUR update skips held packages, and installs nothing it could not check"
 
 trust foo-git
-for name in geant4-debug howdy-next-debug; do
+for name in howdy-next-debug; do
   uninstalled "$name"
 done
 run omarchy-update-aur-pkgs >"$test_tmp/update" 2>&1
 [[ -f $test_tmp/yay-args && $(<"$test_tmp/yay-args") == "-Sua --noconfirm --cleanafter --ignore gcc14,gcc14-libs" ]] ||
   fail "the update installs packages once nothing is held" "$(cat "$test_tmp/update")"
-if grep -E -q '^(geant4-debug|howdy-next-debug)'$'\t' "$state"; then
+if grep -E -q '^howdy-next-debug'$'\t' "$state"; then
   fail "records of packages that are no longer installed are dropped" "$(cat "$state")"
 fi
 pass "packages update once nothing is held, and records of removed packages are dropped"

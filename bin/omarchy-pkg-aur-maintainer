@@ -160,6 +160,13 @@ check_packages() {
 
   for name in "${packages[@]}"; do
     IFS=$'\t' read -r rbase rmaintainer rco rstatus rversion <<<"$(recorded "$name")" || true
+    # A held update never changes the installed package base, so a different
+    # one means the package was installed again by hand, from whichever AUR
+    # package the user chose: see it afresh, as on first sight.
+    if [[ -n $rbase && $rbase != "!absent" && $rbase != "$(installed_base "$name")" ]]; then
+      rbase=""
+      rstatus=""
+    fi
     if [[ ! -v aur_base[$name] ]]; then
       # yay cannot update it from the AUR. Remember that the name was free,
       # so whoever registers it later is not trusted on sight.
@@ -278,11 +285,9 @@ trust() {
   fi
 
   IFS=$'\t' read -r rbase rmaintainer rco rstatus rversion <<<"$(recorded "$1")" || true
-  if [[ -z $rbase || $rbase == "!absent" ]]; then
-    trusted_base=$(installed_base "$1")
-  else
-    trusted_base=$rbase
-  fi
+  # What trust must never do is let an update replace the installed package
+  # with a different AUR package, so the base that counts is the installed one.
+  trusted_base=$(installed_base "$1")
 
   if [[ $name != "$1" ]]; then
     echo "$1 is not in the AUR" >&2
