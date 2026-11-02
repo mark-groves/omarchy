@@ -228,6 +228,19 @@ function shouldRestartFaceOnUnlock(sessionLocked, agentActive, resolvedUnderLock
   return !sessionLocked && !!agentActive && !resolvedUnderLock
 }
 
+// On an Ask first stack an empty answer starts a face scan, so an Enter that
+// was not aimed at the card must not send one: a key still held or repeating
+// from the terminal or launcher that raised the prompt, or one pressed in the
+// instant the card appears. An empty answer counts only once the field has
+// had focus for the current prompt this long, and never from autorepeat.
+// armedAtMs is 0 until the field has taken focus for the prompt.
+var EMPTY_SUBMIT_ARM_MS = 600
+
+function emptySubmitArmed(armedAtMs, nowMs, isAutoRepeat) {
+  if (isAutoRepeat || !(armedAtMs > 0)) return false
+  return nowMs - armedAtMs >= EMPTY_SUBMIT_ARM_MS
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     promptLooksFingerprint: promptLooksFingerprint,
@@ -252,6 +265,7 @@ if (typeof module !== "undefined") {
     shouldHoldFaceSuccess: shouldHoldFaceSuccess,
     polkitCardVisible: polkitCardVisible,
     shouldArmFaceHold: shouldArmFaceHold,
-    shouldRestartFaceOnUnlock: shouldRestartFaceOnUnlock
+    shouldRestartFaceOnUnlock: shouldRestartFaceOnUnlock,
+    emptySubmitArmed: emptySubmitArmed
   }
 }

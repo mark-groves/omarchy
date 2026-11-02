@@ -37,6 +37,14 @@ Item {
   property string pamRaw: ""
   property bool laptopClosed: false
   property int shakeOffset: 0
+  // When the field took keyboard focus for the prompt on screen, in ms; 0
+  // while it has not. An empty answer counts only once this is old enough
+  // (PolkitModel.emptySubmitArmed). Each prompt rearms it: Quickshell clears
+  // isResponseRequired on submit and sets it again for the next prompt,
+  // including the one a new session asks after a miss.
+  property real emptySubmitArmedAt: 0
+  readonly property bool promptFieldFocused: passwordInput.activeFocus && root.responseRequired && root.cardVisible
+  onPromptFieldFocusedChanged: rearmEmptySubmit()
 
   // LockCover is a host singleton the lock service writes. Polkit does not
   // take a shell property: that injection is the host, and this file owns
@@ -283,7 +291,14 @@ Item {
     passwordInput.text = ""
     refreshLidState()
     syncFromFlow()
+    // A new request is a new prompt, even when the field kept focus from
+    // the one before it.
+    rearmEmptySubmit()
     Qt.callLater(refocus)
+  }
+
+  function rearmEmptySubmit() {
+    emptySubmitArmedAt = promptFieldFocused ? Date.now() : 0
   }
 
   function refocus() {
@@ -294,9 +309,19 @@ Item {
     else keyCatcher.forceActiveFocus()
   }
 
-  function submitResponse() {
+  // Every Enter, from the field or from keyCatcher, arrives here with its
+  // autorepeat flag. A typed answer goes through as before. An empty one
+  // starts a face scan on an Ask first stack, so it is dropped until armed.
+  function submitResponse(isAutoRepeat) {
     var flow = polkitAgent.flow
     if (!flow || !flow.isResponseRequired) return
+    if (passwordInput.text === "" && !PolkitModel.emptySubmitArmed(root.emptySubmitArmedAt, Date.now(), isAutoRepeat)) {
+      // Date.now() is the wall clock. Should it step back past the arm, start
+      // the arm again from now rather than hold empty Enter shut until the
+      // clock catches up.
+      if (Date.now() < root.emptySubmitArmedAt) rearmEmptySubmit()
+      return
+    }
     submitted = true
     errorFlash = false
     flow.submit(passwordInput.text)
@@ -535,7 +560,7 @@ Item {
             root.cancelRequest()
             event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (root.responseRequired) root.submitResponse()
+            if (root.responseRequired) root.submitResponse(event.isAutoRepeat)
             event.accepted = true
           }
         }
@@ -680,10 +705,14 @@ Item {
             cursorVisible: activeFocus && !root.submitted && !root.errorFlash
             readOnly: root.submitted || root.errorFlash
             enabled: root.dialogVisible
-            onAccepted: root.submitResponse()
+            // Enter is taken here rather than through onAccepted, which does
+            // not say whether the key was an autorepeat.
             Keys.onPressed: function(event) {
               if (event.key === Qt.Key_Escape) {
                 root.cancelRequest()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                root.submitResponse(event.isAutoRepeat)
                 event.accepted = true
               }
             }
