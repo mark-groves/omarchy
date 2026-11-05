@@ -124,6 +124,9 @@ assert(
   'no scan starts between a suspend being announced and the resume settling'
 )
 
+// Lid close: the lock and the suspend land together. A scan that froze
+// inside the suspend failed on resume with the camera still gone, and that
+// failure played as a miss on a surface that was not presenting yet.
 const sleepHold = serviceQml.match(/function holdFaceForSleep\(\) \{[\s\S]*?\n  \}/)
 assert(sleepHold, 'lock has holdFaceForSleep')
 assert(
@@ -145,6 +148,9 @@ assert(
   'the wall-clock jump after a suspend resumes face, and a sleep that never comes releases it'
 )
 
+// A fast match used to cut straight from a barely started scan to the
+// result. PAM's answer waits, display-only, for the plugin's scanMs() (its
+// boot) or a ceiling.
 const finished = serviceQml.match(/function handleFaceFinished\([\s\S]*?\n  \}/)
 assert(
   finished && /if \(!faceScanSeen && scanMs > 0 && faceConfigured && !fingerprintConfigured\) \{[\s\S]*?facePendingMatch = true[\s\S]*?faceMatchWaitTimer\.restart\(\)/.test(finished[0]),
@@ -196,6 +202,9 @@ assert(
   /faceConfigured/.test(viewQml) && /objectName:\s*"faceIndicator"/.test(viewQml),
   'the lock field shows a face glyph when face is configured'
 )
+
+// The shared face card on lock. Before this, a scan and a miss were both
+// silent: nothing face-related was bound into the view at all.
 
 assert(
   /property string faceState/.test(serviceQml) && /faceState:\s*root\.faceState/.test(serviceQml),
@@ -269,6 +278,8 @@ assert(
   'the glyph is the face button while face can be asked for, and yields to the card once it paints'
 )
 
+// On request (the default) the camera stays off and the card hidden until
+// the user asks: the face button, or Space / Enter on an empty field.
 assert(
   /readonly property bool faceOnRequest: String\(lockConfig\.face \|\| "request"\) !== "automatic"/.test(serviceQml),
   'lock.face defaults to on request; only "automatic" scans by itself'
