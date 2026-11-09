@@ -24,7 +24,7 @@ fi
 fixture="$SHELL_TEST_DIR/fixtures/face-canvas-runtime"
 # Qt logs to journald when stderr is not a terminal; the RESULT lines must
 # reach this capture.
-output=$(cd "$fixture" && QT_FORCE_STDERR_LOGGING=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 30 "$qml_bin" -I . Harness.qml 2>&1) \
+output=$(cd "$fixture" && QT_FORCE_STDERR_LOGGING=1 QML_DISABLE_DISK_CACHE=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 30 "$qml_bin" -I . Harness.qml 2>&1) \
   || fail "face canvas harness runs" "$output"
 
 field() {
@@ -57,3 +57,11 @@ pass "the hold lasts at least its 300 ms of presented frames"
 (( $(field inactive played) == 1 && $(field inactive elapsed) == 0 )) \
   || fail "an inactive card credits no swaps to a new cycle" "$output"
 pass "an inactive card credits no swaps to a new cycle"
+
+# The same canvas at scale 2, against a stub plugin.
+output=$(cd "$fixture" && QT_SCALE_FACTOR=2 QT_FORCE_STDERR_LOGGING=1 QML_DISABLE_DISK_CACHE=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 60 "$qml_bin" -I . Pacing.qml 2>&1) \
+  || fail "face canvas pacing harness runs" "$output"
+
+(( $(field sizing sharp0) == 220 )) \
+  || fail "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself" "$output"
+pass "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself"
