@@ -62,7 +62,7 @@ pass "an inactive card credits no swaps to a new cycle"
 output=$(cd "$fixture" && QT_SCALE_FACTOR=2 QT_FORCE_STDERR_LOGGING=1 QML_DISABLE_DISK_CACHE=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 60 "$qml_bin" -I . Pacing.qml 2>&1) \
   || fail "face canvas pacing harness runs" "$output"
 
-(( $(field sizing sharp0) == 220 )) \
+(( $(field sizing sharp0) == 220 && $(field sizing sharp1) == 165 )) \
   || fail "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself" "$output"
 pass "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself"
 
@@ -72,3 +72,7 @@ pass "the plugin makes a frame only once the last one has landed"
 (( $(field pacing artElapsed) * 2 >= $(field pacing wall) )) \
   || fail "a card slower than the swap credit still moves its art with the wall clock" "$output"
 pass "a card slower than the swap credit still moves its art with the wall clock"
+
+(( $(field ladder during) == 0 && $(field ladder remembered) == 1 && $(field ladder next) == 1 )) \
+  || fail "a slow plugin steps the next showing down a level without rebuilding the current one" "$output"
+pass "a slow plugin steps the next showing down a level without rebuilding the current one"

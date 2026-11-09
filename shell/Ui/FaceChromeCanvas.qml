@@ -121,15 +121,25 @@ Item {
   property var frameKey: ""
   property var frameOps: []
   property bool frameDue: false
+  // frame()'s cost inside the current onPaint, so the replay can be timed
+  // apart from it.
+  property real frameCostMs: 0
   function currentOps(side) {
     var key = side + "|" + root.cardState + "|" + FaceChrome.revision
     if (root.frameDue || key !== root.frameKey) {
       root.frameDue = false
       root.frameKey = key
-      root.advanceArt(Date.now())
+      var started = Date.now()
+      root.advanceArt(started)
       root.frameOps = FaceChrome.frame(side, root.cardState, root.artClock, root.artElapsed)
+      root.frameCostMs = Date.now() - started
+      root.dispatchJsMs += root.frameCostMs
     }
     return root.frameOps
+  }
+
+  function noteReplay(ms) {
+    root.dispatchJsMs += ms
   }
 
   // Rasterising a frame of a few thousand antialiased segments costs tens
@@ -142,54 +152,92 @@ Item {
   // it runs.
   readonly property int paintStallMs: 500
 
-  // When a frame takes longer than slowPaintMs to reach the screen, the card
-  // steps down a quality level: the sharp layer rasterises smaller and is
-  // scaled up on the GPU, and the bloom source repaints less often. The level
-  // a card settles on is kept in FaceChrome for every surface, so each new
-  // showing starts where the last one ended instead of spending its first
-  // second on frames the machine already proved too slow. A long run of fast
-  // frames steps back up.
+  // Quality levels, each cheaper than the last: the sharp layer rasterises
+  // at a fraction of the card's size and is scaled up on the GPU, and the
+  // bloom source, with its replay, repaints less often.
+  //
+  // Qt's Canvas already rasterises at the window's device pixel ratio, so
+  // sizes here are logical: a 220 px card on a scale 2 panel rasterises its
+  // sharp layer at 440 device pixels at level 0, and at 330 and 220 below.
   readonly property var qualityLevels: [
     { sharp: 1, glowEvery: 1 },
     { sharp: 0.75, glowEvery: 2 },
     { sharp: 0.5, glowEvery: 3 }
   ]
-  readonly property int slowPaintMs: 60
-  readonly property int fastPaintMs: 20
+  // The level a card paints at is chosen when it is shown and kept for the
+  // whole showing: changing it rebuilds both layers and the bloom, which
+  // stops the card presenting for a moment. The showing measures its frames
+  // and leaves a recommendation in FaceChrome.qualityLevel, which is where
+  // the next showing on any surface starts.
+  //
+  // Two costs are measured apart, because a level mostly changes only one
+  // of them: the canvas thread landing a sharp frame (raster, which shrinks
+  // with the layer), and the GUI thread making it (the plugin's frame() and
+  // the replay of both layers, which only the bloom's cadence trims). Either
+  // one smoothed over budget for qualitySamples frames in a row steps down.
+  // recoverSamples frames in a row with the level above predicted to fit,
+  // with room to spare, step back up. A showing makes one such call. Its
+  // first frames pay for V4 warm-up and image allocation and are not judged.
+  readonly property int slowPaintMs: 40
+  readonly property int slowJsMs: 40
+  readonly property real recoverMargin: 0.75
+  readonly property int warmupFrames: 2
   readonly property int qualitySamples: 6
-  readonly property int recoverSamples: 40
+  readonly property int recoverSamples: 30
   property int qualityLevel: 0
-  property real paintLatencyMs: 0
+  property real rasterLatencyMs: 0
+  property real jsLatencyMs: 0
   property int paintSamples: 0
+  property int overBudgetFrames: 0
+  property int roomyFrames: 0
+  property bool qualityJudged: false
   property int sharpDispatches: 0
-  // Sizes here are logical. Qt's Canvas already rasterises at the window's
-  // device pixel ratio, so a 220 px card on a scale 2 panel paints its sharp
-  // layer at 440 device pixels at full quality; multiplying by the ratio
-  // here as well rasterised four times the pixels the panel can show.
+  property real dispatchJsMs: 0
   readonly property real sharpScale: root.qualityLevels[root.qualityLevel].sharp
   readonly property int glowEvery: root.qualityLevels[root.qualityLevel].glowEvery
 
   function resetQuality() {
     root.qualityLevel = Math.max(0, Math.min(root.qualityLevels.length - 1, FaceChrome.qualityLevel))
-    root.paintLatencyMs = 0
+    root.rasterLatencyMs = 0
+    root.jsLatencyMs = 0
     root.paintSamples = 0
+    root.overBudgetFrames = 0
+    root.roomyFrames = 0
+    root.qualityJudged = false
   }
 
+  // Remember a level for the next showing. This showing keeps its layers.
   function setQuality(level) {
-    root.qualityLevel = level
-    root.paintSamples = 0
+    root.qualityJudged = true
     FaceChrome.qualityLevel = level
-    console.log("face card paint", Math.round(root.paintLatencyMs), "ms, quality level", root.qualityLevel)
+    console.log("face card paint raster", Math.round(root.rasterLatencyMs), "ms, js", Math.round(root.jsLatencyMs),
+      "ms at quality level", root.qualityLevel + ": level", level, "from the next showing")
   }
 
-  function notePaintLatency(ms) {
+  // Raster at another level, from this one. About a quarter of a frame's
+  // raster is per stroke whatever the size (measured: 31, 22 and 13 ms for
+  // the same frames at 440, 330 and 220 px), and the rest scales with area.
+  function rasterAt(level) {
+    var ratio = root.qualityLevels[level].sharp / root.qualityLevels[root.qualityLevel].sharp
+    return root.rasterLatencyMs * (0.25 + 0.75 * ratio * ratio)
+  }
+
+  function notePaintLatency(rasterMs, jsMs) {
     root.paintSamples += 1
-    root.paintLatencyMs = root.paintSamples === 1 ? ms : root.paintLatencyMs * 0.7 + ms * 0.3
-    if (root.paintSamples >= root.qualitySamples && root.paintLatencyMs > root.slowPaintMs
-        && root.qualityLevel < root.qualityLevels.length - 1) {
-      root.setQuality(root.qualityLevel + 1)
-    } else if (root.paintSamples >= root.recoverSamples && root.paintLatencyMs < root.fastPaintMs
-        && root.qualityLevel > 0) {
+    var judged = root.paintSamples - root.warmupFrames
+    if (judged < 1) return
+    root.rasterLatencyMs = judged === 1 ? rasterMs : root.rasterLatencyMs * 0.7 + rasterMs * 0.3
+    root.jsLatencyMs = judged === 1 ? jsMs : root.jsLatencyMs * 0.7 + jsMs * 0.3
+    if (root.qualityJudged) return
+    var level = root.qualityLevel
+    var over = root.rasterLatencyMs > root.slowPaintMs || root.jsLatencyMs > root.slowJsMs
+    var roomy = level > 0 && root.rasterAt(level - 1) < root.slowPaintMs * root.recoverMargin
+      && root.jsLatencyMs < root.slowJsMs * root.recoverMargin
+    root.overBudgetFrames = over ? root.overBudgetFrames + 1 : 0
+    root.roomyFrames = roomy ? root.roomyFrames + 1 : 0
+    if (root.overBudgetFrames >= root.qualitySamples && level < root.qualityLevels.length - 1) {
+      root.setQuality(level + 1)
+    } else if (root.roomyFrames >= root.recoverSamples) {
       root.setQuality(root.qualityLevel - 1)
     }
   }
@@ -204,21 +252,30 @@ Item {
     }
     layer.pending = false
     layer.inFlightSince = now
+    layer.jsDoneAt = 0
     layer.requestPaint()
     return true
   }
 
   function layerPainted(layer) {
     if (layer === root.canvas && root.painting && root.shown && root.side > 0) root.glassLit = true
-    if (layer === root.canvas && layer.inFlightSince > 0) root.notePaintLatency(Date.now() - layer.inFlightSince)
+    if (layer === root.canvas && layer.inFlightSince > 0) root.noteLanding(layer)
     layer.inFlightSince = 0
     if (layer.pending) root.repaint()
+  }
+
+  // A dispatched sharp frame landed.
+  function noteLanding(layer) {
+    var now = Date.now()
+    var rasterMs = layer.jsDoneAt > 0 ? now - layer.jsDoneAt : -1
+    if (rasterMs >= 0) root.notePaintLatency(rasterMs, root.dispatchJsMs)
   }
 
   function repaint() {
     if (!root.requestLayer(root.canvas)) return
     // A frame is due. Whichever layer paints first makes it.
     root.frameDue = true
+    root.dispatchJsMs = 0
     root.sharpDispatches += 1
     if (root.glowOn && root.sharpDispatches % root.glowEvery === 0) root.requestLayer(root.glowCanvas)
   }
@@ -375,7 +432,8 @@ Item {
   // source had when it started, so a smaller bloom source after a quality
   // step is drawn shrunk into its top-left corner, and a larger one spills
   // past the card. Both layers, and the bloom with them, are rebuilt
-  // whenever the card's side or its quality level changes.
+  // whenever the card's side or its quality level changes, and the level
+  // only changes as a showing begins.
   readonly property int side: Math.min(root.width, root.height)
   readonly property string layerKey: root.side + ":" + root.qualityLevel
   property Canvas canvas: null
@@ -396,6 +454,7 @@ Item {
         visible: false
 
         property real inFlightSince: 0
+        property real jsDoneAt: 0
         property bool pending: false
 
         Component.onCompleted: root.glowCanvas = glowLayer
@@ -409,7 +468,10 @@ Item {
           }
           // Qt polishes the most recently requested layer first, so this often
           // paints before the sharp layer and makes the frame for both.
+          root.frameCostMs = 0
+          var started = Date.now()
           Painter.paintGlow(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
+          root.noteReplay(Date.now() - started - root.frameCostMs)
         }
         onPainted: root.layerPainted(glowLayer)
 
@@ -456,6 +518,9 @@ Item {
       visible: root.painting
 
       property real inFlightSince: 0
+      // When this frame's replay finished and its commands went to the
+      // canvas thread: the start of its raster.
+      property real jsDoneAt: 0
       property bool pending: false
 
       Component.onCompleted: root.canvas = sharpLayer
@@ -467,7 +532,11 @@ Item {
           ctx.reset()
           return
         }
-        Painter.paint(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
+        var ops = root.currentOps(root.side)
+        var started = Date.now()
+        Painter.paint(ctx, root.side, ops, root.paintPalette, width / root.side)
+        sharpLayer.jsDoneAt = Date.now()
+        root.noteReplay(sharpLayer.jsDoneAt - started)
       }
       onPainted: root.layerPainted(sharpLayer)
 

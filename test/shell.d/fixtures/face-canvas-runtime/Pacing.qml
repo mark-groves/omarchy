@@ -3,7 +3,8 @@ import "../../../../shell/Ui" as Ui
 import qs.Commons
 
 // The real FaceChromeCanvas against a stub plugin, run at scale 2: how big
-// its layers are, and how it paces a slow plugin.
+// its layers are, how it paces a slow plugin, and when its quality level
+// changes.
 Window {
   id: win
   width: 240
@@ -76,11 +77,32 @@ Window {
         + " artElapsed=" + Math.round(FaceChrome.lastElapsed)
         + " wall=" + (win.firstSwapAt > 0 ? Date.now() - win.firstSwapAt : 0))
       win.hide()
+      // 60 ms of plugin JS a frame is over the GUI thread's budget.
+      win.show(0, 60)
+      return 50
+    },
+    function() {
+      if (FaceChrome.qualityLevel === 0 && win.waited < 5000) {
+        win.waited += 50
+        return -50
+      }
+      win.during = win.card.qualityLevel
+      win.hide()
+      win.remembered = FaceChrome.qualityLevel
+      win.show(FaceChrome.qualityLevel, 0)
+      return 300
+    },
+    function() {
+      win.report("ladder", "during=" + win.during + " remembered=" + win.remembered + " next=" + win.card.qualityLevel)
+      win.hide()
       Qt.quit()
       return 0
     }
   ]
   property int sharp0: -1
+  property int during: -1
+  property int remembered: -1
+  property int waited: 0
   property int step: 0
 
   Timer {
@@ -89,9 +111,10 @@ Window {
     running: true
     onTriggered: {
       var wait = win.steps[win.step]()
-      win.step += 1
+      // A negative wait repeats the step.
+      if (wait >= 0) win.step += 1
       if (win.step < win.steps.length) {
-        interval = Math.max(1, wait)
+        interval = Math.max(1, Math.abs(wait))
         restart()
       }
     }

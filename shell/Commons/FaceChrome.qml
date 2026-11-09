@@ -40,9 +40,10 @@ QtObject {
   // it can degrade on an older host.
   readonly property int opLevel: 3
 
-  // The quality level the face card last settled on (FaceChromeCanvas). It
-  // is a property of this machine and this plugin, so every surface starts
-  // from it and a new plugin starts again at full quality.
+  // The quality level the next face card starts at (FaceChromeCanvas). It
+  // is a property of this machine and this plugin: each showing reads it as
+  // it begins, keeps it to the end, and leaves here the level its own frames
+  // call for. A new plugin starts again at full quality.
   property int qualityLevel: 0
 
   property var api: null
