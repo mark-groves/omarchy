@@ -443,6 +443,8 @@
   "polkit.authorizeRunning": "Authorize running '%1'",
   "polkit.checking": "Checking...",
   "polkit.enterPassword": "Enter password",
+  "polkit.retryFace": "Press Enter to try again",
+  "polkit.useFace": "Press Enter to use your face",
   "polkit.wrong": "Wrong",
   "power.battery": "Battery",
   "power.batterySize": "Battery size",
