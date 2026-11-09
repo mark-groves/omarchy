@@ -61,7 +61,27 @@ Item {
   // hold starts at the first presented frame of the cycle, which is 0 until
   // the frame clock actually runs.
   property real elapsed: 0
-  property real clock: 0
+
+  // The plugin's clocks. They follow the wall clock while the card presents,
+  // so a frame that lands late shows the art where it should be by then:
+  // a slow card skips ahead, it never plays in slow motion. Both start
+  // counting at the cycle's first presented frame and pause while the card
+  // is not presenting. They advance together, so artClock - artElapsed is
+  // constant through a state, as the plugin contract requires.
+  property real artClock: 0
+  property real artElapsed: 0
+  property real artWallMs: 0
+
+  function advanceArt(now) {
+    if (root.artWallMs > 0 && root.presenting && root.cyclePresented) {
+      var step = now - root.artWallMs
+      if (step > 0) {
+        root.artClock += step
+        root.artElapsed += step
+      }
+    }
+    root.artWallMs = now
+  }
 
   // Surfaces bump this when a new result should play, including a repeat of
   // the same state string. PAM time is not part of the cycle.
@@ -94,25 +114,32 @@ Item {
   property int animationTicks: 0
   property int presentedSwaps: 0
 
-  // Both layers paint the same frame. The plugin runs once per frame, not
-  // once per layer.
+  // Both layers paint the same frame, and the plugin runs once per frame
+  // dispatched: repaint() marks a frame due, and whichever layer paints
+  // first asks the plugin for it at the art clock's time then. A layer that
+  // repaints on its own (a new context, a resize) redraws the frame it has.
   property var frameKey: ""
   property var frameOps: []
+  property bool frameDue: false
   function currentOps(side) {
-    var key = side + "|" + root.cardState + "|" + root.clock + "|" + root.elapsed + "|" + FaceChrome.revision
-    if (key !== root.frameKey) {
+    var key = side + "|" + root.cardState + "|" + FaceChrome.revision
+    if (root.frameDue || key !== root.frameKey) {
+      root.frameDue = false
       root.frameKey = key
-      root.frameOps = FaceChrome.frame(side, root.cardState, root.clock, root.elapsed)
+      root.advanceArt(Date.now())
+      root.frameOps = FaceChrome.frame(side, root.cardState, root.artClock, root.artElapsed)
     }
     return root.frameOps
   }
 
   // Rasterising a frame of a few thousand antialiased segments costs tens
-  // to hundreds of milliseconds on the CPU, whatever the scene graph backend.
-  // Both layers rasterise on Qt's canvas thread so the window keeps
-  // presenting and the password field keeps taking keys. That thread queues
-  // every requested frame, so each layer keeps at most one in flight: a slow
-  // raster drops frames instead of piling them up.
+  // of milliseconds on the CPU, whatever the scene graph backend. Both layers
+  // rasterise on Qt's canvas thread so the window keeps presenting and the
+  // password field keeps taking keys. Each layer keeps at most one frame in
+  // flight, and the next frame (the plugin's frame() and the replay on this
+  // thread) is only made once the last one has landed: a slow raster drops
+  // frames instead of queueing them, and costs the GUI thread nothing while
+  // it runs.
   readonly property int paintStallMs: 500
 
   // When a frame takes longer than slowPaintMs to reach the screen, the card
@@ -190,6 +217,8 @@ Item {
 
   function repaint() {
     if (!root.requestLayer(root.canvas)) return
+    // A frame is due. Whichever layer paints first makes it.
+    root.frameDue = true
     root.sharpDispatches += 1
     if (root.glowOn && root.sharpDispatches % root.glowEvery === 0) root.requestLayer(root.glowCanvas)
   }
@@ -203,6 +232,8 @@ Item {
 
   function beginCycle() {
     elapsed = 0
+    artElapsed = 0
+    artWallMs = Date.now()
     lastSwapMs = 0
     resultLatched = false
     scanShownLatched = false
@@ -220,12 +251,10 @@ Item {
     var now = Date.now()
     var gap = root.lastSwapMs > 0 ? now - root.lastSwapMs : 0
     root.lastSwapMs = now
+    root.advanceArt(now)
     root.cyclePresented = true
     var next = Playback.creditSwap(root.elapsed, gap, true)
-    if (next !== root.elapsed) {
-      root.clock += next - root.elapsed
-      root.elapsed = next
-    }
+    if (next !== root.elapsed) root.elapsed = next
     root.repaint()
     if (Playback.resultComplete(root.cardState, root.elapsed, root.holdMs)) root.finishResult("frames")
     if (root.cardState === "scanning" && !root.scanShownLatched && root.elapsed >= FaceChrome.scanMs()) {
@@ -260,6 +289,7 @@ Item {
   onPresentEpochChanged: root.repaint()
   onPresentingChanged: {
     root.lastSwapMs = 0
+    root.artWallMs = Date.now()
     if (root.presenting) root.repaint()
   }
   // The glass lights with the first frame of the instrument, so a slow first
@@ -378,8 +408,7 @@ Item {
             return
           }
           // Qt polishes the most recently requested layer first, so this often
-          // paints before the sharp layer. The frame key keeps it to one plugin
-          // call either way.
+          // paints before the sharp layer and makes the frame for both.
           Painter.paintGlow(ctx, root.side, root.currentOps(root.side), root.paintPalette, width / root.side)
         }
         onPainted: root.layerPainted(glowLayer)

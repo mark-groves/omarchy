@@ -58,10 +58,17 @@ pass "the hold lasts at least its 300 ms of presented frames"
   || fail "an inactive card credits no swaps to a new cycle" "$output"
 pass "an inactive card credits no swaps to a new cycle"
 
-# The same canvas at scale 2, against a stub plugin.
+# The same canvas at scale 2, against a stub plugin that can be made slow.
 output=$(cd "$fixture" && QT_SCALE_FACTOR=2 QT_FORCE_STDERR_LOGGING=1 QML_DISABLE_DISK_CACHE=1 XDG_RUNTIME_DIR=$(mktemp -d) QT_QPA_PLATFORM=offscreen timeout 60 "$qml_bin" -I . Pacing.qml 2>&1) \
   || fail "face canvas pacing harness runs" "$output"
 
 (( $(field sizing sharp0) == 220 )) \
   || fail "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself" "$output"
 pass "the sharp layer is sized in logical pixels, since Canvas applies the pixel ratio itself"
+
+(( $(field pacing ahead) <= 1 )) || fail "the plugin makes a frame only once the last one has landed" "$output"
+pass "the plugin makes a frame only once the last one has landed"
+
+(( $(field pacing artElapsed) * 2 >= $(field pacing wall) )) \
+  || fail "a card slower than the swap credit still moves its art with the wall clock" "$output"
+pass "a card slower than the swap credit still moves its art with the wall clock"
