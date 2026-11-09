@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Commons as Commons
 import "../Commons/FaceCardPainter.js" as Painter
 import "../Commons/FacePlayback.js" as Playback
+import "../Commons/FaceProbe.js" as Probe
 import "../Commons/FaceTheme.js" as FaceTheme
 
 // The shared face-scan card, painted by the host.
@@ -18,14 +19,17 @@ Item {
   // "scanning" | "recognized" | "notRecognized". Anything else paints nothing.
   property string cardState: "scanning"
   property bool active: true
+  // Which face surface this card is ("lock", "lock-preview", "polkit",
+  // "polkit-preview"). It only names the card in the probe lines.
+  property string surface: ""
 
   property color accent: Commons.Color.polkit.accent
   property color foreground: Commons.Color.polkit.text
   property color errorColor: Commons.Color.polkit.textError
   // What the card is composited over. Additive light only reads on a dark
-  // surface; on a light theme the card paints normally, and its bloom is a
+  // backdrop; on a light theme the card paints normally, and its bloom is a
   // coloured halo that needs nearly full opacity to read against the light.
-  property color surface: Commons.Color.polkit.background
+  property color backdrop: Commons.Color.polkit.background
   // The GPU bloom behind the strokes. Off paints exactly the sharp layer.
   property bool glowEnabled: true
   // The software scene graph draws no shader effects, so there the painter
@@ -43,7 +47,7 @@ Item {
   // Role colours 3..5 follow the theme: see FaceTheme.js.
   readonly property var roleColors: root.glass ? root.glassTheme.roles
     : FaceTheme.roles(String(root.accent), String(root.foreground), String(root.errorColor), Commons.Color.palette)
-  readonly property bool darkSurface: root.glass || FaceTheme.luminance(String(root.surface)) < 0.5
+  readonly property bool darkSurface: root.glass || FaceTheme.luminance(String(root.backdrop)) < 0.5
   readonly property var paintPalette: ({
     accent: root.roleColors[0], foreground: root.roleColors[1], errorColor: root.roleColors[2],
     roles: root.roleColors, additive: root.darkSurface,
@@ -134,12 +138,14 @@ Item {
       root.frameOps = FaceChrome.frame(side, root.cardState, root.artClock, root.artElapsed)
       root.frameCostMs = Date.now() - started
       root.dispatchJsMs += root.frameCostMs
+      if (root.showing) Probe.note(root.showing.frame, root.frameCostMs)
     }
     return root.frameOps
   }
 
   function noteReplay(ms) {
     root.dispatchJsMs += ms
+    if (root.showing) Probe.note(root.showing.replay, ms)
   }
 
   // Rasterising a frame of a few thousand antialiased segments costs tens
@@ -268,6 +274,10 @@ Item {
   function noteLanding(layer) {
     var now = Date.now()
     var rasterMs = layer.jsDoneAt > 0 ? now - layer.jsDoneAt : -1
+    if (root.showing) {
+      root.showing.paints += 1
+      Probe.note(root.showing.raster, rasterMs)
+    }
     if (rasterMs >= 0) root.notePaintLatency(rasterMs, root.dispatchJsMs)
   }
 
@@ -277,13 +287,15 @@ Item {
     root.frameDue = true
     root.dispatchJsMs = 0
     root.sharpDispatches += 1
+    if (root.showing) root.showing.dispatches += 1
     if (root.glowOn && root.sharpDispatches % root.glowEvery === 0) root.requestLayer(root.glowCanvas)
   }
 
   function finishResult(why) {
     if (root.resultLatched || !Playback.isHeldState(root.cardState)) return
     root.resultLatched = true
-    console.log("face hold played", root.cardState, "by", why, "swaps", root.presentedSwaps, "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed), "kicks", root.stallKicks)
+    console.log("face hold played", root.cardState, "by", why, "surface", root.surface || "-", "swaps", root.presentedSwaps,
+      "ticks", root.animationTicks, "elapsed", Math.round(root.elapsed), "kicks", root.stallKicks)
     root.resultPlayed()
   }
 
@@ -297,6 +309,7 @@ Item {
     cyclePresented = false
     if (stallCeiling.running) stallCeiling.restart()
     root.repaint()
+    root.probeEvent(root.cardState)
   }
 
   function notePresentedFrame() {
@@ -310,6 +323,7 @@ Item {
     root.lastSwapMs = now
     root.advanceArt(now)
     root.cyclePresented = true
+    root.noteProbeSwap(now)
     var next = Playback.creditSwap(root.elapsed, gap, true)
     if (next !== root.elapsed) root.elapsed = next
     root.repaint()
@@ -355,11 +369,91 @@ Item {
 
   onShownChanged: {
     if (!root.shown) root.glassLit = false
-    if (!root.shown) return
+    if (root.shown) root.beginShowing()
+    else root.endShowing()
+  }
+  Component.onCompleted: if (root.shown) root.beginShowing()
+  Component.onDestruction: root.endShowing()
+
+  // ---- probes: one showing at a time, read by the face dev tools.
+  property var showing: null
+  readonly property string probeWindow: Probe.windowFor(root.surface)
+
+  // Where the card is laid out in its window: the sum of its ancestors'
+  // positions. Scale and other transforms are left out, so a card growing
+  // in from 0.97 has not moved; a card whose column reflows has.
+  function layoutRect() {
+    var x = 0
+    var y = 0
+    for (var item = root; item; item = item.parent) {
+      x += item.x
+      y += item.y
+    }
+    return { x: Math.round(x), y: Math.round(y), w: Math.round(root.width), h: Math.round(root.height) }
+  }
+
+  // A state the card entered, kept until its first presented frame: a
+  // column lays the card out in its next polish, so only a presented frame
+  // shows where the card is for that state. The line keeps the time the
+  // state was entered.
+  property var probePending: null
+
+  function probeEvent(state) {
+    if (!root.showing) return
+    var pending = root.probePending
+    if (pending && pending.state === state) return
+    if (pending) root.flushProbeEvent()
+    root.probePending = { state: state, t: Date.now() }
+  }
+
+  function flushProbeEvent() {
+    var pending = root.probePending
+    if (!pending || !root.showing) return
+    root.probePending = null
+    var rect = root.layoutRect()
+    Probe.noteRect(root.showing, rect)
+    console.log(Probe.eventLine(root.surface, pending.state, pending.t, rect, root.probeWindow))
+  }
+
+  function noteProbeSwap(now) {
+    var s = root.showing
+    if (!s) return
+    s.swaps += 1
+    if (s.firstSwapAt === 0) s.firstSwapAt = now
+    if (s.lastSwapAt > 0) Probe.noteGap(s.gaps, now - s.lastSwapAt)
+    s.lastSwapAt = now
+    if (root.probePending) root.flushProbeEvent()
+    else Probe.noteRect(s, root.layoutRect())
+  }
+
+  function beginShowing() {
+    if (root.showing) return
     root.lastKickMs = 0
     root.resetQuality()
-    console.log("face card shown: scene graph api", root.GraphicsInfo.api, "bloom", root.glowOn ? "gpu" : "off",
-      "surface", String(root.surface), root.darkSurface ? "dark" : "light")
+    root.showing = Probe.newShowing(Date.now(), root.qualityLevel)
+    console.log("face card shown:", root.surface || "-", "quality level", root.qualityLevel,
+      "scene graph api", root.GraphicsInfo.api, "bloom", root.glowOn ? "gpu" : "off",
+      "backdrop", String(root.backdrop), root.darkSurface ? "dark" : "light")
+    root.probeEvent(root.cardState)
+  }
+
+  function endShowing() {
+    var s = root.showing
+    if (!s) return
+    root.flushProbeEvent()
+    root.showing = null
+    s.hiddenAt = Date.now()
+    console.log(Probe.summaryLine(root.surface, s, FaceChrome.qualityLevel))
+  }
+
+  // The current showing's costs, for the offscreen bench.
+  function perfSnapshot() {
+    var s = root.showing || Probe.newShowing(0, root.qualityLevel)
+    return {
+      frameMs: Probe.mean(s.frame), replayMs: Probe.mean(s.replay), rasterMs: Probe.mean(s.raster),
+      jsMs: s.dispatches ? (s.frame.sum + s.replay.sum) / s.dispatches : 0,
+      frameCalls: s.frame.n, dispatches: s.dispatches, landed: s.paints
+    }
   }
 
   // Ticks keep the draw requested. They do not move the hold: after resume
@@ -368,6 +462,7 @@ Item {
     running: root.active && root.painting && root.visible
     onTriggered: {
       root.animationTicks += 1
+      if (root.showing) root.showing.ticks += 1
       root.repaint()
       root.kickIfStalled()
     }
