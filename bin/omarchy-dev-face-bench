@@ -1,0 +1,176 @@
+#!/bin/bash
+
+# omarchy:summary=Benchmark the shell's face card renderer offscreen against a face plugin
+# omarchy:args=[--plugin <FaceCardFrame.js>] [--shell <dir>] [--seconds <n>] [--levels <0,1,2>] [--scale <dpr>] [--keep]
+# omarchy:hidden=true
+
+set -euo pipefail
+
+ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+FIXTURE_DIR="$ROOT_DIR/test/shell.d/fixtures/face-canvas-runtime"
+SHELL_DIR="$ROOT_DIR/shell"
+PLUGIN=""
+SECONDS_PER_LEVEL=4
+LEVELS="0,1,2"
+SCALE=2
+KEEP=false
+
+show_help() {
+  cat <<'EOF'
+Usage:
+  omarchy dev face bench [--plugin <FaceCardFrame.js>] [--shell <dir>] [--seconds <n>]
+                         [--levels <0,1,2>] [--scale <dpr>] [--keep]
+
+Run the shell's face card offscreen (Qt's OpenGL scene graph, no display, no
+camera) against a face plugin's frame module, loaded through the shell's own
+FaceChrome. For each quality level it reports:
+- frame():  the plugin's JS per frame on the GUI thread
+- replay:   the host painter's JS per frame (sharp layer, glow layer)
+- raster:   the canvas thread's time to land a frame, alone and in the card
+- paints/s: frames the card actually landed, with ticks and swaps per second
+
+Options:
+  --plugin <file>   Frame module to load (default: the installed plugin with a
+                    polkitFace entry point, lowest id first)
+  --shell <dir>     Shell tree to measure (default: this checkout's shell/)
+  --seconds <n>     Seconds of scanning per level (default: 4)
+  --levels <list>   Quality levels to run (default: 0,1,2)
+  --scale <dpr>     Device pixel ratio to emulate (default: 2)
+  --keep            Keep the scratch directory and the raw log
+EOF
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --plugin) PLUGIN="$2"; shift 2 ;;
+    --plugin=*) PLUGIN="${1#*=}"; shift ;;
+    --shell) SHELL_DIR="$2"; shift 2 ;;
+    --shell=*) SHELL_DIR="${1#*=}"; shift ;;
+    --seconds) SECONDS_PER_LEVEL="$2"; shift 2 ;;
+    --seconds=*) SECONDS_PER_LEVEL="${1#*=}"; shift ;;
+    --levels) LEVELS="$2"; shift 2 ;;
+    --levels=*) LEVELS="${1#*=}"; shift ;;
+    --scale) SCALE="$2"; shift 2 ;;
+    --scale=*) SCALE="${1#*=}"; shift ;;
+    --keep) KEEP=true; shift ;;
+    -h|--help) show_help; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; show_help >&2; exit 1 ;;
+  esac
+done
+
+if [[ ! $SECONDS_PER_LEVEL =~ ^[1-9][0-9]*$ ]]; then
+  echo "--seconds takes a whole number of seconds, not '$SECONDS_PER_LEVEL'." >&2
+  exit 1
+fi
+if [[ ! $LEVELS =~ ^[0-2](,[0-2])*$ ]]; then
+  echo "--levels takes quality levels 0 to 2 separated by commas, not '$LEVELS'." >&2
+  exit 1
+fi
+if [[ ! $SCALE =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--scale takes a device pixel ratio such as 2 or 1.5, not '$SCALE'." >&2
+  exit 1
+fi
+
+# The face plugin the shell would load: an installed plugin with a polkitFace
+# entry point, lowest id first, as FaceChrome.urlFromRegistry picks it.
+if [[ -z $PLUGIN ]]; then
+  for manifest in "$HOME/.config/omarchy/plugins"/*/manifest.json; do
+    [[ -f $manifest ]] || continue
+    entry=$(jq -r '.entryPoints.polkitFace // empty' "$manifest" 2>/dev/null || true)
+    if [[ -n $entry && $entry != */* ]]; then
+      PLUGIN="$(dirname -- "$manifest")/$entry"
+      break
+    fi
+  done
+fi
+if [[ -z $PLUGIN || ! -f $PLUGIN ]]; then
+  echo "No face plugin frame module found; pass --plugin <FaceCardFrame.js>." >&2
+  exit 1
+fi
+PLUGIN=$(realpath -- "$PLUGIN")
+SHELL_DIR=$(realpath -- "$SHELL_DIR")
+if [[ ! -f $SHELL_DIR/Ui/FaceChromeCanvas.qml || ! -f $SHELL_DIR/Commons/FaceChrome.qml ]]; then
+  echo "Not a shell tree with the face renderer: $SHELL_DIR" >&2
+  exit 1
+fi
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-face-bench.XXXXXX")
+cleanup() {
+  if [[ $KEEP == "true" ]]; then
+    echo "Kept $scratch"
+  else
+    rm -rf -- "$scratch"
+  fi
+}
+trap cleanup EXIT
+
+# The import tree: the bench window, the shell tree under test, Quickshell
+# stubbed down to FileView, and qs.Commons with the shell's real FaceChrome.
+mkdir -p "$scratch/qs/Commons" "$scratch/xdg/cache" "$scratch/xdg/config" "$scratch/xdg/runtime"
+chmod 700 "$scratch/xdg/runtime"
+cp "$FIXTURE_DIR/bench/Bench.qml" "$scratch/Bench.qml"
+cp -r "$FIXTURE_DIR/bench/Quickshell" "$scratch/Quickshell"
+ln -s "$SHELL_DIR" "$scratch/shell"
+cp "$FIXTURE_DIR/qs/Commons/Color.qml" "$FIXTURE_DIR/qs/Commons/Style.qml" "$scratch/qs/Commons/"
+ln -s "$SHELL_DIR/Commons/FaceChrome.qml" "$scratch/qs/Commons/FaceChrome.qml"
+cat >"$scratch/qs/Commons/qmldir" <<'EOF'
+module qs.Commons
+singleton Color 1.0 Color.qml
+singleton Style 1.0 Style.qml
+singleton FaceChrome 1.0 FaceChrome.qml
+EOF
+
+log="$scratch/bench.log"
+budget=$(( (SECONDS_PER_LEVEL + 8) * 3 + 30 ))
+echo "Benchmarking $SHELL_DIR against $PLUGIN at device pixel ratio $SCALE..."
+status=0
+(
+  cd "$scratch"
+  QT_FORCE_STDERR_LOGGING=1 \
+  QML_DISABLE_DISK_CACHE=1 \
+  QML_XHR_ALLOW_FILE_READ=1 \
+  QT_QPA_PLATFORM=offscreen \
+  QT_QUICK_BACKEND=rhi \
+  QSG_RHI_BACKEND=opengl \
+  QT_SCALE_FACTOR="$SCALE" \
+  XDG_CACHE_HOME="$scratch/xdg/cache" \
+  XDG_CONFIG_HOME="$scratch/xdg/config" \
+  XDG_RUNTIME_DIR="$scratch/xdg/runtime" \
+    timeout "$budget" /usr/lib/qt6/bin/qml -I . Bench.qml -- \
+      "--plugin=$PLUGIN" "--seconds=$SECONDS_PER_LEVEL" "--levels=$LEVELS"
+) >"$log" 2>&1 || status=$?
+
+results=$(sed -n 's/^.*RESULT //p' "$log")
+printf '%s\n' "$results"
+if (( status != 0 )) || ! grep -q "RESULT done" "$log"; then
+  echo "The bench did not finish (exit $status). Last lines of its log:" >&2
+  tail -n 20 "$log" >&2
+  KEEP=true
+  exit 1
+fi
+
+# One row per level. GUI ms is frame() plus both layers' replay per frame, as
+# the card measured them; paints/s are frames that landed while scanning and
+# while showing a result.
+echo
+awk '
+  function value(name,   i) {
+    for (i = 1; i <= NF; i++) if (index($i, name "=") == 1) return substr($i, length(name) + 2)
+    return ""
+  }
+  /^frame state=all / { frame = value("mean") }
+  /^size level=/ { level = value("level"); px[level] = value("sharpRasterPx"); order[++levels] = level }
+  /^isolated level=/ && / replay / { replay[value("level"), value("layer")] = value("mean") }
+  /^isolated level=/ && / raster / { alone[value("level"), value("layer")] = value("mean") }
+  /^pipeline level=/ && / raster / && /phase=scanning/ { card[value("level")] = value("mean") }
+  /^pipeline level=/ && /paintsPerSec=/ { paints[value("level"), value("phase")] = value("paintsPerSec") }
+  /^pipeline level=/ && / card / && /phase=scanning/ { gui[value("level")] = value("jsMs") }
+  END {
+    printf "%-6s %-9s %-11s %-21s %-21s %-7s %s\n", "level", "sharp px", "frame() ms", "replay ms sharp/glow", "raster ms alone/card", "GUI ms", "paints/s scan/result"
+    for (i = 1; i <= levels; i++) {
+      l = order[i]
+      printf "%-6s %-9s %-11s %-21s %-21s %-7s %s\n", l, px[l], frame, replay[l, "sharp"] "/" replay[l, "glow"],
+        alone[l, "sharp"] "/" card[l], (gui[l] == "" ? "-" : gui[l]), paints[l, "scanning"] "/" paints[l, "recognized"]
+    }
+  }
+' <<<"$results"
