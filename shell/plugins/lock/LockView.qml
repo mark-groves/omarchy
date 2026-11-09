@@ -22,6 +22,9 @@ Item {
   // it stays hidden until the user asks.
   property bool faceCardActive: true
   property bool faceOnRequest: false
+  // Set by the lock service once a face match has played: everything over
+  // the wallpaper fades out before the session lock is released.
+  property bool unlocking: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
@@ -96,12 +99,12 @@ Item {
       faceCardLeaving = false
       faceCardExit.stop()
       faceCardEnter.restart()
-    } else if (faceCardRevealed) {
+    } else if (faceCardRevealed && !unlocking) {
       faceCardLeaving = true
       faceCardEnter.stop()
       faceCardExit.restart()
     } else {
-      // Never on screen: nothing to fade.
+      // Never on screen, or under content that has already faded out.
       resetFaceCard()
     }
   }
@@ -300,6 +303,23 @@ Item {
       hoverEnabled: true
       onClicked: { root.wakeRequested(); root.forcePasswordFocus() }
       onPositionChanged: root.wakeRequested()
+    }
+  }
+
+  // Everything drawn over the wallpaper. Once a face match has played, the
+  // lock service fades this out before it releases the session lock; the
+  // lock surface keeps every input until then.
+  Item {
+    id: foreground
+    objectName: "lockForeground"
+    anchors.fill: parent
+    opacity: root.unlocking ? 0 : 1
+    Behavior on opacity {
+      id: foregroundFade
+      OpacityAnimator {
+        duration: Style.duration(foregroundFade.targetValue > 0 ? 180 : 150)
+        easing.type: Easing.OutCubic
+      }
     }
 
     // Host-owned. The chrome plugin supplies numbers and never sees this

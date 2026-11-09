@@ -28,6 +28,10 @@ Item {
   // lets the recognised (or miss) frame play out. Completion comes from the
   // canvas, after presented frames, and does not change the PAM result.
   property bool faceHolding: false
+  // A played match fading the lock's content out before finishUnlock. The
+  // hold stays set through it, so no scan, request or blank starts under it.
+  property bool faceUnlocking: false
+  readonly property int faceUnlockFadeMs: 150
   // Set when a suspend is announced. A scan begun now would freeze inside
   // the suspend and fail on resume with the camera still gone, so none
   // starts until the resume is seen (or the announced sleep never comes).
@@ -267,6 +271,8 @@ Item {
     fingerprintAuthenticating = false
     faceAuthenticating = false
     faceHolding = false
+    faceUnlocking = false
+    faceUnlockFade.stop()
     fingerprintUnreachedStreak = 0
     fingerprintAttemptFastError = false
     fingerprintAttemptPromptedAtMs = 0
@@ -435,6 +441,8 @@ Item {
       facePendingMatch = false
       faceUnlockCeiling.stop()
       faceMatchWaitTimer.stop()
+      faceUnlocking = false
+      faceUnlockFade.stop()
     }
     cancelFaceRequest("sleep")
     faceAwaitingResume = true
@@ -734,14 +742,13 @@ Item {
 
   function completeFacePlayback() {
     faceUnlockCeiling.stop()
-    if (!faceHolding) return
-    var recognized = faceState === "recognized"
-    faceHolding = false
-    if (!lockRequested) return
-    if (recognized) {
-      finishUnlock()
+    if (!faceHolding || faceUnlocking) return
+    if (faceState === "recognized" && lockRequested) {
+      fadeOutForUnlock()
       return
     }
+    faceHolding = false
+    if (!lockRequested) return
     // On request, a miss hands back to the button rather than scanning again.
     if (faceOnRequest) {
       faceRequested = false
@@ -750,6 +757,21 @@ Item {
     // The retry may already be running. If it fired while the card was still
     // playing, startFace refused it, so arm another gap once the miss is done.
     if (!faceRetryTimer.running && faceConfigured && !laptopClosed && !displaysBlank) faceRetryTimer.restart()
+  }
+
+  // PAM approved this match before its card played. The lock's content now
+  // fades out on the lock surface, which keeps every input until
+  // finishUnlock releases the session; a suspend meanwhile drops the unlock
+  // as it drops any held match (holdFaceForSleep).
+  function fadeOutForUnlock() {
+    var fadeMs = Style.duration(faceUnlockFadeMs)
+    if (fadeMs <= 0) {
+      finishUnlock()
+      return
+    }
+    faceUnlocking = true
+    faceUnlockFade.interval = fadeMs
+    faceUnlockFade.restart()
   }
 
   function abandonFacePlaybackIfUnplayable() {
@@ -886,6 +908,7 @@ Item {
         faceScanning: root.faceAuthenticating || root.faceHolding
         faceCardActive: root.faceCardActive
         faceOnRequest: root.faceOnRequest
+        unlocking: root.faceUnlocking
         onFaceRequested: root.requestFace()
         onFaceCancelRequested: root.cancelFaceRequest("escape")
         onFaceResultPlayed: root.completeFacePlayback()
@@ -893,7 +916,7 @@ Item {
         authenticatingPassword: root.authenticatingPassword
         failureMessage: root.failureMessage
         failedAttempts: root.failedAttempts
-        inputEnabled: root.lockRequested
+        inputEnabled: root.lockRequested && !root.faceUnlocking
         loadBackground: root.locked
         displaysBlank: root.displaysBlank
         passwordText: root.enteredPassword
@@ -1106,6 +1129,17 @@ Item {
       if (!root.faceHolding || root.faceState !== "recognized") return
       root.logEvent("face-unlock: card did not finish in " + interval + "ms")
       root.completeFacePlayback()
+    }
+  }
+
+  // Ends the fade before a face unlock (fadeOutForUnlock).
+  Timer {
+    id: faceUnlockFade
+    interval: 150
+    repeat: false
+    onTriggered: {
+      if (!root.faceUnlocking) return
+      root.finishUnlock()
     }
   }
 

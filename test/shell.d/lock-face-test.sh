@@ -135,8 +135,8 @@ assert(
   'an announced suspend drops the in-flight scan and holds new ones'
 )
 assert(
-  /function holdFaceForSleep\(\) \{[\s\S]*?if \(faceHolding \|\| facePendingMatch\) \{[\s\S]*?faceHolding = false\s*facePendingMatch = false\s*faceUnlockCeiling\.stop\(\)\s*faceMatchWaitTimer\.stop\(\)[\s\S]*?\}\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
-  'a suspend drops a held or waiting result before resetting the card, so no hold is stranded across the resume'
+  /function holdFaceForSleep\(\) \{[\s\S]*?if \(faceHolding \|\| facePendingMatch\) \{[\s\S]*?faceHolding = false\s*facePendingMatch = false\s*faceUnlockCeiling\.stop\(\)\s*faceMatchWaitTimer\.stop\(\)\s*faceUnlocking = false\s*faceUnlockFade\.stop\(\)[\s\S]*?\}\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
+  'a suspend drops a held or waiting result, or a match already fading out, so nothing is stranded across the resume and the lock stays'
 )
 assert(
   /function noteSleepRequested\(\) \{\s*if \(!lockRequested\) return\s*holdFaceForSleep\(\)/.test(serviceQml),
@@ -230,9 +230,12 @@ assert(
   /if \(root\.holdFaceResult\("recognized"\)\) return\s*\n\s*finishUnlock\(\)/.test(playMatch[0]),
   'with no card to play a match still unlocks immediately'
 )
+const completePlayback = serviceQml.match(/function completeFacePlayback\(\) \{[\s\S]*?\n  \}/)
+const unlockFade = serviceQml.match(/id:\s*faceUnlockFade[\s\S]*?onTriggered:\s*\{[\s\S]*?\n    \}/)
 assert(
-  /function completeFacePlayback\(\)[\s\S]*?finishUnlock\(\)/.test(serviceQml),
-  'a played-out match ends in an unlock'
+  completePlayback && /if \(faceState === "recognized" && lockRequested\) \{\s*fadeOutForUnlock\(\)/.test(completePlayback[0]) &&
+    unlockFade && /if \(!root\.faceUnlocking\) return\s*root\.finishUnlock\(\)/.test(unlockFade[0]),
+  'a played-out match fades the lock out, then unlocks only while that unlock is still owed'
 )
 assert(
   /releaseUnmatchedFace\(\)/.test(faceFinished[0]) && /holdFaceResult\("notRecognized"\)/.test(serviceQml),
@@ -257,8 +260,9 @@ assert(
 
 const teardown = serviceQml.match(/function resetAuthenticationState\(\) \{[\s\S]*?\n  \}/)
 assert(
-  teardown && /faceHolding = false/.test(teardown[0]) && /faceRetryTimer\.stop\(\)/.test(teardown[0]),
-  'tearing the lock down clears a display hold so it cannot unlock later'
+  teardown && /faceHolding = false/.test(teardown[0]) && /faceRetryTimer\.stop\(\)/.test(teardown[0]) &&
+    /faceUnlocking = false\s*faceUnlockFade\.stop\(\)/.test(teardown[0]),
+  'tearing the lock down clears a display hold and an unlock fade so neither can unlock later'
 )
 
 assert(
