@@ -1584,6 +1584,15 @@ Item {
         face: root.faceConfigured,
         laptopClosed: root.laptopClosed,
         authenticating: root.authenticating,
+        faceState: root.faceState,
+        faceRequested: root.faceRequested,
+        faceHolding: root.faceHolding,
+        facePendingMatch: root.facePendingMatch,
+        faceAuthenticating: root.faceAuthenticating,
+        faceCardActive: root.faceCardActive,
+        faceUnlocking: root.faceUnlocking,
+        preview: root.previewVisible,
+        previewFace: previewFaceDriver.scenario,
         lastEvent: root.lastEvent,
         lastEventAt: root.lastEventAt
       })
