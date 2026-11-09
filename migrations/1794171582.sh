@@ -8,9 +8,9 @@ omarchy-hw-amd || exit 0
 
 if [[ ! -f $drop_in ]]; then
   sudo mkdir -p /etc/limine-entry-tool.d
-  cat <<EOF | sudo tee "$drop_in" >/dev/null
+  cat <<'EOF' | sudo tee "$drop_in" >/dev/null
 # AMD: keep the firmware's USB4 display link at boot
-KERNEL_CMDLINE[default]+=" $param"
+KERNEL_CMDLINE[default]+=" thunderbolt.host_reset=0"
 EOF
 fi
 
