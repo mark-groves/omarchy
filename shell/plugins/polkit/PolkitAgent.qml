@@ -5,9 +5,10 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 
-// The polkit agent: Quickshell's PolkitAgent service and the card's window.
-// PolkitController.qml owns the request, the face lane and the field's
-// rules; PolkitCard.qml draws them.
+// The polkit agent: Quickshell's PolkitAgent service, the card's windows and
+// the `polkit` IPC target. PolkitController.qml owns the request, the face
+// lane and the field's rules; PolkitCard.qml draws them. The preview window
+// draws the same card from a scripted FakeFlow and takes no input at all.
 Item {
   id: root
 
@@ -57,6 +58,55 @@ Item {
       anchors.fill: parent
       controller: polkitController
       shown: polkitController.realShown
+    }
+  }
+
+  // Display only: never the keyboard, no input region, and a card whose
+  // field takes no text. Built on first use.
+  LazyLoader {
+    active: polkitController.previewLoaded
+
+    PanelWindow {
+      id: previewPanel
+      Binding { target: previewPanel.contentItem; property: "LayoutMirroring.enabled"; value: Commons.I18n.rightToLeft }
+      Binding { target: previewPanel.contentItem; property: "LayoutMirroring.childrenInherit"; value: true }
+
+      visible: polkitController.previewShown
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      WlrLayershell.namespace: "omarchy-polkit-preview"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
+      mask: Region {}
+
+      PolkitCard {
+        anchors.fill: parent
+        controller: polkitController
+        preview: true
+        shown: polkitController.previewShown
+      }
+    }
+  }
+
+  // Strings only. preview refuses while a real request owns the card, and a
+  // real request ends any preview.
+  ShellIpc {
+    target: "polkit"
+
+    // "match", "miss", "typed" or "cancel", optionally ":scanMs" (the time
+    // from the scan's start to PAM's answer, or to the Esc).
+    function preview(scenario: string): string {
+      return polkitController.startPreview(scenario)
+    }
+
+    function hidePreview(): string {
+      polkitController.stopPreview()
+      return "ok"
+    }
+
+    function status(): string {
+      return polkitController.statusJson()
     }
   }
 }

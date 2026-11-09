@@ -5,8 +5,8 @@ import qs.Commons
 
 // Runs the real polkit controller and card in a plain window, offscreen:
 // PanelWindow has no backend there, and nothing here touches polkitd. A
-// recording stand-in for AuthFlow plays the requests. Each step waits for a
-// condition, then acts and checks.
+// recording stand-in for AuthFlow plays the real requests; the preview runs
+// its own FakeFlow. Each step waits for a condition, then acts and checks.
 ShellRoot {
   id: top
 
@@ -16,8 +16,9 @@ ShellRoot {
   property var failures: []
   property var controller: null
   property var realCard: null
+  property var previewCard: null
   property var flow: null
-  // Card rects seen in each face state.
+  // Card rects seen in each face state, per card.
   property var rects: ({})
 
   function fail(message) {
@@ -84,6 +85,14 @@ ShellRoot {
 
   Window {
     id: win
+    width: 1600
+    height: 1000
+    visible: true
+    color: "black"
+  }
+
+  Window {
+    id: previewWin
     width: 1600
     height: 1000
     visible: true
@@ -157,7 +166,7 @@ ShellRoot {
 
   readonly property var steps: [
     {
-      name: "build the controller and the card",
+      name: "build the controller and both cards",
       run: function() {
         var cc = Qt.createComponent(top.plugin + "PolkitController.qml", Component.PreferSynchronous)
         if (cc.status !== Component.Ready) return top.fail("PolkitController failed to load: " + cc.errorString())
@@ -166,8 +175,13 @@ ShellRoot {
         if (card.status !== Component.Ready) return top.fail("PolkitCard failed to load: " + card.errorString())
         top.realCard = card.createObject(win.contentItem, { controller: top.controller, width: win.width, height: win.height })
         top.realCard.shown = Qt.binding(function() { return top.controller.realShown })
-        top.controller.laneChanged.connect(function() { top.sample(top.realCard, "real") })
-        top.check(top.controller.realCard === top.realCard, "the card registers with the controller")
+        top.previewCard = card.createObject(previewWin.contentItem, { controller: top.controller, preview: true, width: previewWin.width, height: previewWin.height })
+        top.previewCard.shown = Qt.binding(function() { return top.controller.previewShown })
+        top.controller.laneChanged.connect(function() {
+          top.sample(top.realCard, "real")
+          top.sample(top.previewCard, "preview")
+        })
+        top.check(top.controller.realCard === top.realCard && top.controller.previewCard === top.previewCard, "each card registers with the controller")
         win.requestActivate()
       }
     },
@@ -282,6 +296,7 @@ ShellRoot {
     {
       wait: 200,
       run: function() {
+        top.check(top.controller.startPreview("match") === "busy", "a preview is refused while a real request owns the card")
         top.controller.cancelRequest()
         top.check(top.flow.cancels === 1, "Esc cancels the request")
         top.check(top.controller.lane.phase === "closing", "Esc fades the card out")
@@ -291,6 +306,33 @@ ShellRoot {
       until: function() { return top.controller.lane.phase === "closed" && !top.controller.realShown },
       run: function() {
         top.sameRectEverywhere("real", ["idle", "scanning", "recognized", "notRecognized"])
+        top.check(top.controller.startPreview("bogus") !== "ok", "an unknown preview scenario is refused")
+        top.check(top.controller.startPreview("match:300") === "ok", "the preview starts")
+        top.check(top.controller.previewing && top.previewCard.current && !top.realCard.current, "the preview drives only the preview card")
+      }
+    },
+    {
+      name: "the preview plays a match from its scripted flow",
+      until: function() { return top.controller.lane.faceState === "scanning" },
+      run: function() {
+        var field = top.find(top.previewCard, "polkitPasswordInput")
+        top.check(!field.activeFocus && field.readOnly && !field.enabled, "the preview's field takes no focus or text")
+        top.check(!top.controller.wantsKeyboard && !top.controller.realShown, "the preview never holds the keyboard")
+      }
+    },
+    {
+      until: function() { return top.controller.lane.faceState === "recognized" },
+      run: function() {
+        var status = JSON.parse(top.controller.statusJson())
+        top.check(status.surface === "polkit-preview" && status.window === "omarchy-polkit-preview", "status names the preview surface")
+        top.check(status.faceState === "recognized" && status.rect.h > 0, "status reports the face state and the card rect")
+      }
+    },
+    {
+      until: function() { return !top.controller.previewing && top.controller.lane.phase === "closed" },
+      run: function() {
+        top.sameRectEverywhere("preview", ["idle", "scanning", "recognized"])
+        top.check(top.rects["preview:idle"][0] === top.rects["real:idle"][0], "the preview card sits where the real one does")
       }
     }
   ]

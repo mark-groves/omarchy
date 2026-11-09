@@ -7,7 +7,9 @@ import "../../Commons/FacePlayback.js" as Playback
 
 // One polkit request at a time: the flow it came on, the face lane
 // (PolkitModel.faceLaneStep), the field's submit rules and the cards' state.
-// PolkitAgent.qml feeds it Quickshell's flows.
+// PolkitAgent.qml feeds it Quickshell's flows; the display-only preview feeds
+// it a FakeFlow instead and draws it in a window that takes no input. Both
+// go through the same code, so a preview shows what a request would.
 Item {
   id: root
   visible: false
@@ -18,18 +20,20 @@ Item {
   property bool agentActive: false
   property string pamPath: "/etc/pam.d/polkit-1"
 
-  // The card registers itself (PolkitCard.qml).
+  // Each card registers itself (PolkitCard.qml).
   property Item realCard: null
+  property Item previewCard: null
 
   // ---- The flow ------------------------------------------------------------
   // Captured when the request starts. Quickshell drops polkitAgent.flow as a
   // request completes and emits authenticationSucceeded only after that, so
   // a card following polkitAgent.flow lost the success signal.
   property QtObject trackedFlow: null
-  readonly property QtObject flow: trackedFlow
+  property bool previewing: false
+  readonly property QtObject flow: previewing ? fakeFlow : trackedFlow
   readonly property bool flowLive: !!root.flow && !root.flow.isCompleted
-  // Bumped for every request, so a deferred callback for one never lands on
-  // the next.
+  // Bumped for every request and preview, so a deferred callback for one
+  // never lands on the next.
   property int requestSerial: 0
   // A request has started and the card waits for the lid check, which
   // decides its layout, before it shows: the layout never changes after.
@@ -47,13 +51,20 @@ Item {
   property bool errorFlash: false
   property int shakeOffset: 0
 
+  property string previewScenario: ""
+  property int previewScanMs: 0
+  // The preview's typed scenario: a count of dots, never text.
+  property int previewDots: 0
+  // The preview window is built on first use and kept.
+  property bool previewLoaded: false
+
   // When the field took keyboard focus for the prompt on screen, in ms; 0
   // while it has not. An empty answer counts only once this is old enough
   // (PolkitModel.emptySubmitArmed). Each prompt rearms it: Quickshell clears
   // isResponseRequired on submit and sets it again for the next prompt,
   // including the one a new session asks after a miss.
   property real emptySubmitArmedAt: 0
-  readonly property bool promptFieldFocused: !!root.realCard && root.realCard.fieldFocused
+  readonly property bool promptFieldFocused: !root.previewing && !!root.realCard && root.realCard.fieldFocused
     && root.responseRequired && root.cardVisible
   onPromptFieldFocusedChanged: rearmEmptySubmit()
 
@@ -73,10 +84,12 @@ Item {
 
   readonly property bool dialogVisible: root.starting || root.lane.phase !== "closed"
   readonly property bool cardVisible: PolkitModel.polkitCardVisible(dialogVisible, sessionLocked, resolvedUnderLock)
-  readonly property bool realShown: root.cardVisible
+  readonly property bool realShown: root.cardVisible && !root.previewing
+  readonly property bool previewShown: root.cardVisible && root.previewing
   // Exclusive only while a real request can still take an answer. Once PAM
   // has approved, or the card is leaving, what is left is display only.
   readonly property bool wantsKeyboard: root.realShown && root.flowLive && PolkitModel.faceLaneWantsKeyboard(root.lane)
+  readonly property bool realBusy: root.agentActive || root.starting || (!root.previewing && root.lane.phase !== "closed")
 
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
   readonly property bool waitingOnPam: dialogVisible && !responseRequired && root.lane.pending === "" && !errorFlash
@@ -90,8 +103,8 @@ Item {
   readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
   readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
 
-  readonly property string surfaceName: "polkit"
-  readonly property string windowName: "omarchy-polkit"
+  readonly property string surfaceName: root.previewing ? "polkit-preview" : "polkit"
+  readonly property string windowName: root.previewing ? "omarchy-polkit-preview" : "omarchy-polkit"
 
   onSlotUrlChanged: {
     // FaceChrome is the face module. An empty slot is a missing dialog.
@@ -144,9 +157,10 @@ Item {
 
   // What the face card can play now. FaceChrome.sourceUrl is shared with the
   // lock and set whenever a face plugin is installed, so only this request's
-  // resolved polkitFace slot says a face card is expected.
+  // resolved polkitFace slot says a face card is expected; the preview
+  // always draws the installed one.
   function faceEnv() {
-    var expected = PolkitModel.faceSlotResolved(presentation)
+    var expected = root.previewing ? FaceChrome.sourceUrl !== "" : PolkitModel.faceSlotResolved(presentation)
     // A cleared source never loads or fails, so a hold does not wait on it.
     var waits = expected && FaceChrome.sourceUrl !== "" && FaceChrome.failure === ""
     return {
@@ -194,11 +208,15 @@ Item {
     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
   }
 
+  function activeCard() {
+    return root.previewing ? root.previewCard : root.realCard
+  }
+
   function noteProbe(force) {
     var state = PolkitModel.faceLaneProbeState(root.lane)
     if (state === root.probeState && !force) return
     root.probeState = state
-    var card = root.realCard
+    var card = root.activeCard()
     var line = {
       surface: root.surfaceName,
       state: state,
@@ -235,7 +253,7 @@ Item {
     failed = !!flow.failed
   }
 
-  // Drops whatever the last request left, without an exit.
+  // Drops whatever the last request or preview left, without an exit.
   function resetLane() {
     faceMatchWait.stop()
     errorTimer.stop()
@@ -243,6 +261,7 @@ Item {
     lidWait.stop()
     root.errorFlash = false
     root.shakeOffset = 0
+    root.previewDots = 0
     var closed = PolkitModel.faceLaneInitial()
     closed.epoch = root.lane.epoch
     root.lane = closed
@@ -256,11 +275,17 @@ Item {
     root.errorFlash = false
     root.shakeOffset = 0
     root.resetSnapshot()
+    if (root.previewing) {
+      fakeFlow.stop()
+      root.previewing = false
+      root.previewDots = 0
+    }
   }
 
   // ---- A real request --------------------------------------------------------
 
   function beginRealFlow(flow) {
+    if (root.previewing) root.stopPreview()
     root.requestSerial += 1
     root.resetLane()
     root.trackedFlow = flow
@@ -282,7 +307,7 @@ Item {
     lidWait.stop()
     if (!root.starting) return
     root.starting = false
-    if (!root.flowLive) return
+    if (!root.flowLive || root.previewing) return
     root.dispatch({
       type: "open",
       trigger: PolkitModel.faceLaneTriggerFor(root.pamSteps, root.laptopClosed),
@@ -293,7 +318,7 @@ Item {
   }
 
   function noteRealFlowGone() {
-    root.noteFlowEnded()
+    if (!root.previewing) root.noteFlowEnded()
   }
 
   // The flow has ended. Success and cancel signals all land before this
@@ -314,7 +339,7 @@ Item {
   }
 
   function refocus() {
-    if (!root.realCard) return
+    if (root.previewing || !root.realCard) return
     // dialogVisible stays true while the card is hidden under the lock.
     // Focusing then does not stick, so wait until the window is shown.
     if (!root.cardVisible) return
@@ -327,7 +352,7 @@ Item {
   // starts a face scan on an Ask first stack, so it is dropped until armed,
   // and an Automatic stack never sends one.
   function submitResponse(isAutoRepeat) {
-    if (!root.realCard) return
+    if (root.previewing || !root.realCard) return
     var flow = root.trackedFlow
     if (!flow || !flow.isResponseRequired) return
     if (root.starting) root.lidSettled()
@@ -360,6 +385,7 @@ Item {
   }
 
   function cancelRequest() {
+    if (root.previewing) return
     if (root.starting) root.lidSettled()
     var flow = root.trackedFlow
     if (root.realCard) root.realCard.clearField()
@@ -369,13 +395,13 @@ Item {
 
   function showWrong() {
     root.errorFlash = true
-    if (root.realCard) root.realCard.clearField()
+    if (root.realCard && !root.previewing) root.realCard.clearField()
     errorTimer.restart()
     shakeAnimation.restart()
     Qt.callLater(root.refocus)
   }
 
-  // The face card's callbacks.
+  // The face card's callbacks, from whichever card is on screen.
   function cardScanShown() {
     root.dispatch({ type: "scanShown" })
   }
@@ -388,12 +414,98 @@ Item {
     root.dispatch({ type: "closed" })
   }
 
+  // ---- The preview -------------------------------------------------------------
+
+  function startPreview(spec) {
+    var parsed = PolkitModel.parsePreviewSpec(spec)
+    if (!parsed) return "unknown scenario: use match, miss, typed or cancel, optionally with :scanMs"
+    // A real request owns the card, and the lock covers everything.
+    if (root.realBusy) return "busy"
+    if (root.sessionLocked) return "locked"
+    if (root.previewing) root.stopPreview()
+    root.requestSerial += 1
+    root.resetLane()
+    root.resolvedUnderLock = false
+    root.probeLog = []
+    root.previewLoaded = true
+    root.previewScenario = parsed.scenario
+    root.previewScanMs = parsed.scanMs
+    root.previewing = true
+    fakeFlow.start(parsed.scenario, parsed.scanMs)
+    root.syncFromFlow()
+    // The preview is always the Ask first card a face stack would show.
+    root.dispatch({ type: "open", trigger: "ask", prompt: false })
+    return "ok"
+  }
+
+  function stopPreview() {
+    if (!root.previewing) return
+    fakeFlow.stop()
+    root.resetLane()
+    root.noteProbe(false)
+    root.previewing = false
+  }
+
+  // The scripted user. Nothing here reads a field: the preview has none.
+  function previewUserAction(kind) {
+    if (!root.previewing || root.flow !== fakeFlow) return
+    if (kind === "type") {
+      root.previewDots += 1
+      return
+    }
+    if (kind === "cancel") {
+      root.dispatch({ type: "cancelled" })
+      fakeFlow.cancelAuthenticationRequest()
+      return
+    }
+    if (!fakeFlow.isResponseRequired) return
+    if (kind === "submitEmpty") {
+      root.dispatch({ type: "submitEmpty" })
+      fakeFlow.submit()
+    } else if (kind === "submitTyped") {
+      root.previewDots = 0
+      root.dispatch({ type: "submitTyped" })
+      fakeFlow.submit()
+    }
+  }
+
+  function statusJson() {
+    var card = root.activeCard()
+    return JSON.stringify({
+      surface: root.surfaceName,
+      window: root.windowName,
+      previewing: root.previewing,
+      scenario: root.previewing ? root.previewScenario : "",
+      scanMs: root.previewing ? root.previewScanMs : 0,
+      visible: root.cardVisible,
+      starting: root.starting,
+      phase: root.lane.phase,
+      faceState: root.lane.faceState,
+      trigger: root.lane.trigger,
+      prompt: root.lane.prompt,
+      pending: root.lane.pending,
+      hold: root.lane.hold,
+      pendingMatch: root.lane.pendingMatch,
+      retry: root.lane.retry,
+      outcome: root.lane.outcome,
+      keyboard: root.wantsKeyboard ? "exclusive" : "none",
+      rect: root.rectJson(card ? card.cardRect : Qt.rect(0, 0, 0, 0)),
+      faceRect: root.rectJson(card ? card.faceRect : Qt.rect(0, 0, 0, 0)),
+      t: Date.now(),
+      events: root.probeLog
+    })
+  }
+
   // ---- Session lock --------------------------------------------------------------
 
   // Only transitions reach this, so an unlock here always follows a lock,
   // including one that was already up when this agent was created.
   onSessionLockedChanged: {
     if (root.sessionLocked) {
+      if (root.previewing) {
+        root.stopPreview()
+        return
+      }
       root.dispatch({ type: "locked" })
       return
     }
@@ -405,6 +517,11 @@ Item {
     Qt.callLater(root.refocus)
   }
 
+  FakeFlow {
+    id: fakeFlow
+    onUserAction: function(kind) { root.previewUserAction(kind) }
+  }
+
   Connections {
     target: root.flow
     ignoreUnknownSignals: true
@@ -412,7 +529,7 @@ Item {
     function onIsResponseRequiredChanged() {
       root.syncFromFlow()
       if (root.responseRequired) root.dispatch({ type: "prompt" })
-      else if (root.realCard) root.realCard.clearField()
+      else if (root.realCard && !root.previewing) root.realCard.clearField()
       Qt.callLater(root.refocus)
     }
 

@@ -4,10 +4,11 @@ First-party `omarchy.polkit` owns PAM detection, the exclusive overlay, the pass
 
 The plugin's files split the work:
 
-- `PolkitAgent.qml` - Quickshell's `PolkitAgent` service and the card's window, `omarchy-polkit`.
-- `PolkitController.qml` - one request at a time: the flow it came on, the face lane, the field's submit rules and the probe lines.
+- `PolkitAgent.qml` - Quickshell's `PolkitAgent` service, the card's two windows (`omarchy-polkit` for requests, `omarchy-polkit-preview` for the preview) and the `polkit` IPC target.
+- `PolkitController.qml` - one request at a time: the flow it came on, the face lane, the field's submit rules, the probe lines and `status`.
 - `PolkitCard.qml` - the pixels: scrim, card, face area, captions, field and justification pill. `PolkitCaption.qml` is one caption slot.
 - `PolkitModel.js` - pure: reading the PAM stack, slot resolution, and the face lane reducer.
+- `FakeFlow.qml` - the preview's scripted stand-in for `AuthFlow`.
 
 ## Manifest
 
@@ -68,6 +69,17 @@ An Automatic stack scans from the start, its password prompt is the miss, and it
 
 The card and scrim fade and grow in over 200 ms and fade out over 130 ms, on render-thread Animators. The controller follows the flow captured when the request started: Quickshell drops `polkitAgent.flow` as a request completes and emits `authenticationSucceeded` only after that.
 
-## Probes
+## Preview and probes
 
-Each change of what the card shows logs one line on the shell's journal tag, `face-probe-event {"surface":"polkit", "state":…, "t":<epoch ms>, "rect":{"x":…,"y":…,"w":…,"h":…}, "window":"omarchy-polkit"}`, where the state is `idle`, `scanning`, `recognized`, `notRecognized`, `password` (a card with no face lane), `closing` or `hidden`, and the rect is the card's, in its window.
+A display-only preview plays the Ask first card from a scripted `FakeFlow` on this host's journal timings, so the card can be recorded in every state with no polkitd, PAM or camera:
+
+```bash
+omarchy-shell polkit preview match        # also miss, typed, cancel
+omarchy-shell polkit preview miss:2500    # ms from the scan's start to PAM's answer (or to the Esc)
+omarchy-shell polkit status               # JSON: phase, faceState, the card rect and recent states
+omarchy-shell polkit hidePreview
+```
+
+The scan time defaults to 510 ms for a match, 4300 ms for a miss, 250 ms for a typed password and 1200 ms before a cancel. The preview runs through the same controller and card as a real request, in its own `omarchy-polkit-preview` window that never takes the keyboard, has no input region, and draws a field that takes no text; `FakeFlow.submit()` takes no answer. It is refused while a real request owns the card, and a real request ends it.
+
+Each change of what the card shows logs one line on the shell's journal tag, `face-probe-event {"surface":"polkit" | "polkit-preview", "state":…, "t":<epoch ms>, "rect":{"x":…,"y":…,"w":…,"h":…}, "window":"omarchy-polkit" | "omarchy-polkit-preview"}`, where the state is `idle`, `scanning`, `recognized`, `notRecognized`, `password` (a card with no face lane), `closing` or `hidden`, and the rect is the card's, in its window.

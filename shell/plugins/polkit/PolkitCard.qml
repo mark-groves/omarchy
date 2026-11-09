@@ -8,6 +8,8 @@ import "../../Commons/FaceTheme.js" as FaceTheme
 // The polkit card as pixels: scrim, card, face area, captions, the password
 // field and the justification pill. It reads everything from a
 // PolkitController and hands keys and the face card's callbacks back to it.
+// The agent draws the real request with one of these and the display-only
+// preview with another; only the one the controller is showing gets its lane.
 //
 // Host-owned throughout. The face chrome plugin supplies numbers to the
 // FaceChromeCanvas and never sees this item, its window or the field.
@@ -15,14 +17,15 @@ Item {
   id: root
 
   property var controller: null
+  // The preview card never takes keys or text.
+  property bool preview: false
   // This card's window is on screen.
   property bool shown: false
 
-  readonly property bool current: !!controller
+  readonly property bool current: !!controller && controller.previewing === root.preview
   readonly property var lane: current ? controller.lane : PolkitModel.faceLaneInitial()
   readonly property string phase: lane.phase
-  // Takes keys and text.
-  property bool interactive: true
+  readonly property bool interactive: !root.preview
   readonly property var presentation: controller ? controller.presentation : ({})
   readonly property bool faceLayout: lane.trigger === "ask" || lane.trigger === "auto"
   readonly property string cardKind: presentation && presentation.kind ? presentation.kind : "password"
@@ -555,6 +558,18 @@ Item {
             }
           }
 
+          // The preview's typed scenario: dots, with no text behind them.
+          Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.preview && root.current && root.controller.previewDots > 0
+            textFormat: Text.PlainText
+            text: "\u2022".repeat(root.current ? root.controller.previewDots : 0)
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.iconLarge
+          }
+
           Text {
             textFormat: Text.PlainText
             anchors.left: parent.left
@@ -566,7 +581,7 @@ Item {
             font.family: root.fontFamily
             font.pixelSize: Style.font.iconLarge
             elide: Text.ElideRight
-            visible: passwordInput.text.length === 0
+            visible: passwordInput.text.length === 0 && !(root.preview && root.current && root.controller.previewDots > 0)
           }
 
           Rectangle {
@@ -614,9 +629,21 @@ Item {
     }
   }
 
-  Component.onCompleted: if (root.controller) root.controller.realCard = root
+  Component.onCompleted: {
+    if (!root.controller) return
+    if (root.preview) root.controller.previewCard = root
+    else root.controller.realCard = root
+    // Built while its lane was already open: the preview's window loads on
+    // first use. Report the state again now that it has a rect.
+    if (root.phase === "open") {
+      root.enter()
+      if (root.current) root.controller.noteProbe(true)
+    }
+  }
 
   Component.onDestruction: {
-    if (root.controller && root.controller.realCard === root) root.controller.realCard = null
+    if (!root.controller) return
+    if (root.preview && root.controller.previewCard === root) root.controller.previewCard = null
+    if (!root.preview && root.controller.realCard === root) root.controller.realCard = null
   }
 }

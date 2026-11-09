@@ -593,6 +593,24 @@ function faceLaneProbeState(lane) {
   return l.faceState || "idle"
 }
 
+// The display-only preview: which scripted request to play, and the time
+// from the scan's start (from Enter, for typed) to PAM's answer or the Esc.
+var PREVIEW_SCENARIOS = {
+  match: 510,
+  miss: 4300,
+  typed: 250,
+  cancel: 1200
+}
+
+// "match", "match:1100" or "match 1100". null for anything else.
+function parsePreviewSpec(spec) {
+  var match = String(spec || "").replace(/^\s+|\s+$/g, "").match(/^([a-z]+)(?:[:\s]+(\d+))?$/)
+  if (!match || !Object.prototype.hasOwnProperty.call(PREVIEW_SCENARIOS, match[1])) return null
+  var scanMs = match[2] === undefined ? PREVIEW_SCENARIOS[match[1]] : Number(match[2])
+  if (!isFinite(scanMs) || scanMs < 1 || scanMs > 15000) return null
+  return { scenario: match[1], scanMs: scanMs }
+}
+
 // The session lock covers every other surface. A polkit card opened under it
 // is what shows up as a stray "authenticating" card the moment the lock drops.
 function polkitCardVisible(dialogVisible, sessionLocked, resolvedUnderLock) {
@@ -655,6 +673,8 @@ if (typeof module !== "undefined") {
     faceLaneCaptions: faceLaneCaptions,
     faceLaneProbeState: faceLaneProbeState,
     isAskHint: isAskHint,
+    PREVIEW_SCENARIOS: PREVIEW_SCENARIOS,
+    parsePreviewSpec: parsePreviewSpec,
     polkitCardVisible: polkitCardVisible,
     shouldArmFaceHold: shouldArmFaceHold,
     shouldRestartFaceOnUnlock: shouldRestartFaceOnUnlock,

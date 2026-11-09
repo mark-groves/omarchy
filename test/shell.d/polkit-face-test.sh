@@ -441,6 +441,10 @@ for (const matchMs of [500, 1100, 2100]) {
 }
 
 assertEqual(polkit.faceLaneProbeState(polkit.faceLaneInitial()), 'hidden', 'a closed lane probes as hidden')
+assertDeepEqual(polkit.parsePreviewSpec('match'), { scenario: 'match', scanMs: 510 }, 'a preview defaults to the journal\'s median match')
+assertDeepEqual(polkit.parsePreviewSpec('miss:4300'), { scenario: 'miss', scanMs: 4300 }, 'a preview takes a scan time')
+assertEqual(polkit.parsePreviewSpec('match:0'), null, 'a zero scan time is refused')
+assertEqual(polkit.parsePreviewSpec('unlock'), null, 'an unknown preview is refused')
 
 // --- What the agent may and may not hold ------------------------------------
 
@@ -448,6 +452,7 @@ const pluginDir = path.join(root, 'shell/plugins/polkit')
 const agentQml = fs.readFileSync(path.join(pluginDir, 'PolkitAgent.qml'), 'utf8')
 const controllerQml = fs.readFileSync(path.join(pluginDir, 'PolkitController.qml'), 'utf8')
 const cardQml = fs.readFileSync(path.join(pluginDir, 'PolkitCard.qml'), 'utf8')
+const fakeQml = fs.readFileSync(path.join(pluginDir, 'FakeFlow.qml'), 'utf8')
 const pluginQml = fs.readdirSync(pluginDir).filter((name) => name.endsWith('.qml'))
   .map((name) => fs.readFileSync(path.join(pluginDir, name), 'utf8')).join('\n')
 
@@ -470,6 +475,18 @@ assert(/function refocus\(\) \{[\s\S]*?if \(!root\.cardVisible\) return/.test(co
 // authenticationSucceeded; the flow is held from the request's start.
 assert(/onAuthenticationRequestStarted:\s*polkitController\.beginRealFlow\(polkitAgent\.flow\)/.test(agentQml), 'the agent hands over each request\'s flow as it starts')
 assert(!/polkitAgent/.test(controllerQml.replace(/\/\/.*$/gm, '')) && /target:\s*root\.flow\b/.test(controllerQml), 'the controller follows the flow it was handed, not polkitAgent.flow')
+
+// The preview draws the card and nothing else.
+const previewWindow = agentQml.slice(agentQml.indexOf('LazyLoader'), agentQml.indexOf('ShellIpc'))
+assert(/"omarchy-polkit-preview"/.test(previewWindow) && /keyboardFocus:\s*WlrKeyboardFocus\.None/.test(previewWindow) && /mask:\s*Region \{\}/.test(previewWindow),
+  'the preview window never takes the keyboard or the pointer')
+assert(/preview:\s*true/.test(previewWindow), 'the preview window draws the preview card')
+assert(/function submit\(\) \{/.test(fakeQml) && !/TextInput|function submit\(\w/.test(fakeQml), 'the fake flow takes no answer')
+assert(/readOnly:\s*!root\.interactive/.test(cardQml) && /activeFocusOnPress:\s*root\.interactive/.test(cardQml), 'the preview card\'s field takes no text')
+assert(/function submitResponse\(isAutoRepeat\) \{\s*if \(root\.previewing/.test(controllerQml) && /function previewUserAction\(kind\) \{\s*if \(!root\.previewing \|\| root\.flow !== fakeFlow\) return/.test(controllerQml),
+  'a preview never answers a real flow, and a real answer never reaches the preview')
+assert(/if \(root\.realBusy\) return "busy"/.test(controllerQml) && /function beginRealFlow\(flow\) \{\s*if \(root\.previewing\) root\.stopPreview\(\)/.test(controllerQml),
+  'a real request ends a preview, and a preview waits for a real request')
 
 const painter = fs.readFileSync(path.join(root, 'shell/Commons/FaceCardPainter.js'), 'utf8')
 assert(
@@ -497,9 +514,9 @@ assert(/FaceChrome\.bindFromRegistry\(pluginRegistry\)/.test(shellQml), 'the she
 JS
 
 # The real controller and card, offscreen: no compositor, no polkitd, no
-# display. PanelWindow has no backend there, so the fixture draws the card in
-# a plain window and plays requests through a recording stand-in for
-# AuthFlow.
+# display. PanelWindow has no backend there, so the fixture draws the cards
+# in plain windows and plays requests through a recording stand-in for
+# AuthFlow, then the preview through its own FakeFlow.
 if ! command -v quickshell >/dev/null 2>&1; then
   skip "quickshell not installed; skipping the offscreen polkit card"
   exit 0
@@ -513,4 +530,4 @@ printf 'state:      open\n' >"$QML_FIXTURE_TMP/lid/LID0/state"
 WAYLAND_DISPLAY="" HYPRLAND_INSTANCE_SIGNATURE="" DBUS_SESSION_BUS_ADDRESS="unix:path=$QML_FIXTURE_TMP/run/no-bus" \
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QT_FORCE_STDERR_LOGGING=1 QML_DISABLE_DISK_CACHE=1 \
 XDG_RUNTIME_DIR="$QML_FIXTURE_TMP/run" OMARCHY_ACPI_LID_PATH="$QML_FIXTURE_TMP/lid" OMARCHY_INPUT_CLASS_PATH="$QML_FIXTURE_TMP/input" \
-  run_qml_fixture polkit-card "the polkit card plays a match, a miss and a password in one place" Ui Commons
+  run_qml_fixture polkit-card "the polkit card plays a match, a miss, a password and the preview in one place" Ui Commons
