@@ -16,6 +16,11 @@ hl.layer_rule({ match = { namespace = "^(omarchy-menu|omarchy-image-selector|oma
 -- layer only dips the screen toward the empty desktop during the handoff.
 hl.layer_rule({ match = { namespace = "^(omarchy-background|owe-background)$" }, no_anim = true, animation = "none" })
 
+-- The face cards fade and grow themselves in QML: the polkit dialog and its
+-- preview, the lock preview, and the face plugin's sudo card. A compositor
+-- fade on top would stack a second, slower fade on that motion.
+hl.layer_rule({ match = { namespace = "^(omarchy-polkit|omarchy-polkit-preview|omarchy-lock-preview|markgroves-face-card)$" }, no_anim = true, animation = "none" })
+
 -- Dev gallery is the main shell workbench; open it maximized like
 -- SUPER+ALT+F so component previews have the whole workspace.
 o.window({ class = "^org.quickshell$", title = "^Omarchy shell – dev gallery$" }, { maximize = true })
