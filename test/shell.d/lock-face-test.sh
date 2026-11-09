@@ -356,3 +356,13 @@ assert(
   'lock preview keeps the scan animation running only while the preview is shown'
 )
 JS
+
+# The card is laid out in a window, as on screen, since positioners settle on
+# the window's polish. Offscreen, so it needs no compositor.
+if ! command -v quickshell >/dev/null 2>&1; then
+  skip "quickshell not installed; skipping the lock face card layout"
+  exit 0
+fi
+require_command jq
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software run_qml_fixture lock-face-card \
+  "the lock face card and its captions stay put from idle through scanning, recognized and not recognized" Ui Commons

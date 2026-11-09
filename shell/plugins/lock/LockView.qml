@@ -53,6 +53,9 @@ Item {
   // surface is not presenting yet never shows a stuck frame.
   property bool faceCardRevealed: false
   onFaceCardPaintingChanged: if (!faceCardPainting) faceCardRevealed = false
+  // The captions under the card, one line each, in slots of fixed height.
+  readonly property int faceCaptionGap: Style.space(10)
+
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -132,6 +135,94 @@ Item {
     text: "●".repeat(passwordInput.text.length)
   }
 
+  // One caption line under the face card. Its slot is one line of its font
+  // high whatever it says, so no change of words can move the card. New
+  // words fade in over the old, which leave in half the time so the two
+  // never read at once (motion.md).
+  component FaceCaption: Item {
+    id: caption
+
+    property string text: ""
+    property color color: "white"
+    property font font
+    property real lineOpacity: 1
+    // Off while the card is not on screen, so a new showing starts on its
+    // own words instead of fading in from the last ones.
+    property bool animate: true
+
+    // Two lines take turns; the front one shows the current words.
+    property bool frontIsA: true
+    property string textA: ""
+    property string textB: ""
+    property color colorA: "white"
+    property color colorB: "white"
+
+    function settle() {
+      var shownText = frontIsA ? textA : textB
+      var shownColor = frontIsA ? colorA : colorB
+      if (shownText === text && Qt.colorEqual(shownColor, color)) return
+      if (frontIsA) {
+        textB = text
+        colorB = color
+      } else {
+        textA = text
+        colorA = color
+      }
+      frontIsA = !frontIsA
+    }
+
+    height: Math.ceil(lineMetrics.height)
+
+    // A state changes the words and their colour together: one swap for both.
+    onTextChanged: Qt.callLater(caption.settle)
+    onColorChanged: Qt.callLater(caption.settle)
+    Component.onCompleted: {
+      textA = text
+      colorA = color
+    }
+
+    FontMetrics {
+      id: lineMetrics
+      font: caption.font
+    }
+
+    Text {
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: caption.textA
+      color: caption.colorA
+      font: caption.font
+      opacity: caption.frontIsA ? caption.lineOpacity : 0
+      Behavior on opacity {
+        id: fadeA
+        enabled: caption.animate
+        OpacityAnimator {
+          duration: Style.duration(fadeA.targetValue > 0 ? 180 : 90)
+          easing.type: Easing.OutCubic
+        }
+      }
+    }
+
+    Text {
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: caption.textB
+      color: caption.colorB
+      font: caption.font
+      opacity: caption.frontIsA ? 0 : caption.lineOpacity
+      Behavior on opacity {
+        id: fadeB
+        enabled: caption.animate
+        OpacityAnimator {
+          duration: Style.duration(fadeB.targetValue > 0 ? 180 : 90)
+          easing.type: Easing.OutCubic
+        }
+      }
+    }
+  }
+
   Rectangle {
     anchors.fill: parent
     color: Commons.Color.background
@@ -172,14 +263,19 @@ Item {
     // Host-owned. The chrome plugin supplies numbers and never sees this
     // item or the field it sits above. The same large card as polkit, so
     // the instrument has room for its detail and its bloom.
-    Column {
+    //
+    // It hangs from the field by fixed slots: the card, then one line per
+    // caption whatever the caption says, so it never moves between idle,
+    // scanning, recognized and not recognized.
+    Item {
       id: faceCard
       objectName: "faceCard"
       visible: root.faceCardPainting
       enabled: false
       opacity: root.faceCardRevealed ? 1 : 0
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-      spacing: Style.space(10)
+      width: faceIndicator.width
+      height: faceIndicator.height + root.faceCaptionGap + faceStatus.height + root.faceCaptionGap + faceHint.height
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: inputField.top
       anchors.bottomMargin: Style.space(18)
@@ -187,6 +283,7 @@ Item {
       FaceChromeCanvas {
         id: faceIndicator
         objectName: "faceCardIndicator"
+        anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         width: Style.space(FaceChrome.cardSide)
         height: width
@@ -205,25 +302,33 @@ Item {
         backdrop: Commons.Color.lock.background
       }
 
-      Text {
-        textFormat: Text.PlainText
-        anchors.horizontalCenter: parent.horizontalCenter
+      FaceCaption {
+        id: faceStatus
+        objectName: "faceStatusCaption"
+        anchors.top: faceIndicator.bottom
+        anchors.topMargin: root.faceCaptionGap
+        width: parent.width
         text: root.faceState === "notRecognized" ? Commons.I18n.t("face.notRecognized")
           : (root.faceState === "recognized" ? Commons.I18n.t("face.recognized") : Commons.I18n.t("face.lookAtTheCamera"))
         color: root.faceState === "notRecognized" ? Commons.Color.lock.textError : Commons.Color.lock.text
-        opacity: 0.86
+        lineOpacity: 0.86
+        animate: root.faceCardRevealed
         font.family: Style.font.family
         font.pixelSize: Style.font.body
       }
 
-      Text {
-        textFormat: Text.PlainText
-        anchors.horizontalCenter: parent.horizontalCenter
+      // A recognized face needs no second line; its slot stays, empty.
+      FaceCaption {
+        id: faceHint
+        objectName: "faceHintCaption"
+        anchors.top: faceStatus.bottom
+        anchors.topMargin: root.faceCaptionGap
+        width: parent.width
         text: root.faceState === "notRecognized" ? Commons.I18n.t("face.typeYourPassword")
           : (root.faceState === "scanning" ? Commons.I18n.t("face.orTypeYourPassword") : "")
-        visible: text !== ""
         color: Commons.Color.lock.text
-        opacity: 0.44
+        lineOpacity: 0.44
+        animate: root.faceCardRevealed
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
