@@ -8,6 +8,7 @@ run_node_test <<'JS'
 const fs = require('fs')
 const serviceQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/Service.qml'), 'utf8')
 const viewQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/LockView.qml'), 'utf8')
+const previewDriverQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/PreviewFaceDriver.qml'), 'utf8')
 const applyLock = fs.readFileSync(path.join(root, 'bin/omarchy-apply-lock'), 'utf8')
 
 assert(
@@ -357,8 +358,14 @@ assert(
   'lock never loads a plugin Item next to its password field'
 )
 assert(
-  /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
+  /faceScanning:\s*root\.previewVisible\s*&&/.test(serviceQml),
   'lock preview keeps the scan animation running only while the preview is shown'
+)
+assert(
+  !/PamContext|finishUnlock|sessionLock|completeFacePlayback/.test(previewDriverQml) &&
+    /onFaceResultPlayed:\s*previewFaceDriver\.resultPlayed\(\)/.test(serviceQml) &&
+    /keyboardFocus:\s*root\.previewVisible && !previewFaceDriver\.driven \? WlrKeyboardFocus\.Exclusive : WlrKeyboardFocus\.None/.test(serviceQml),
+  'a face run on the lock preview is display only: no PAM, no unlock and no keyboard'
 )
 JS
 

@@ -121,6 +121,8 @@ Item {
 
   onLockedChanged: LockCover.covered = locked
   onLockRequestedChanged: publishLockState()
+  // Hiding the preview, by IPC or a click, ends a face run on it.
+  onPreviewVisibleChanged: if (!previewVisible) previewFaceDriver.stop()
 
   // Decisions read the lock state afresh. A property binding that missed a change
   // notification once reported locked after an unlock, and a lock request before
@@ -932,6 +934,13 @@ Item {
     }
   }
 
+  // Plays the face lane on the preview for `lock previewFace`. It is bound
+  // to the preview window alone and has no way to PAM or the session lock.
+  PreviewFaceDriver {
+    id: previewFaceDriver
+    unlockFadeMs: root.faceUnlockFadeMs
+  }
+
   PanelWindow {
     id: previewWindow
     // Right-to-left languages read this window mirrored.
@@ -943,7 +952,9 @@ Item {
     color: "transparent"
     WlrLayershell.namespace: "omarchy-lock-preview"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    // A face run is recorded while the desktop is in use, so it never takes
+    // the keyboard, not even for the moment it is hidden.
+    WlrLayershell.keyboardFocus: root.previewVisible && !previewFaceDriver.driven ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
 
     LockView {
@@ -951,16 +962,26 @@ Item {
       backgroundPath: root.backgroundPath
       videoPosterPath: root.videoPosterPath
       backgroundVersion: root.backgroundVersion
-      fingerprintConfigured: root.fingerprintConfigured || root.fingerprintUnavailable
-      fingerprintUnavailable: root.fingerprintUnavailable
-      faceConfigured: root.faceConfigured
-      faceState: "scanning"
-      faceScanning: root.previewVisible && root.faceConfigured
-      faceCardActive: true
+      // A face run shows the face lane whatever this machine has set up.
+      fingerprintConfigured: !previewFaceDriver.driven && (root.fingerprintConfigured || root.fingerprintUnavailable)
+      fingerprintUnavailable: !previewFaceDriver.driven && root.fingerprintUnavailable
+      faceConfigured: root.faceConfigured || previewFaceDriver.driven
+      faceState: previewFaceDriver.driven ? previewFaceDriver.faceState : "scanning"
+      facePlaybackEpoch: previewFaceDriver.facePlaybackEpoch
+      faceScanning: root.previewVisible && (previewFaceDriver.driven
+        ? previewFaceDriver.faceAuthenticating || previewFaceDriver.faceHolding
+        : root.faceConfigured)
+      faceCardActive: !previewFaceDriver.driven || previewFaceDriver.faceCardActive
+      faceOnRequest: previewFaceDriver.driven
+      unlocking: previewFaceDriver.faceUnlocking
+      onFaceResultPlayed: previewFaceDriver.resultPlayed()
+      onFaceScanShown: previewFaceDriver.scanShown()
       authenticatingPassword: false
       failureMessage: ""
       failedAttempts: 0
-      inputEnabled: false
+      // The face button and its hint only show beside a live field. The
+      // window takes no keyboard focus while driven, so nothing typed lands.
+      inputEnabled: previewFaceDriver.driven
       loadBackground: root.previewVisible
       displaysBlank: root.displaysBlank
       passwordText: ""
@@ -1569,6 +1590,7 @@ Item {
     }
 
     function preview(): string {
+      previewFaceDriver.stop()
       root.refreshBackground()
       root.refreshFingerprintStatus()
       root.refreshFaceStatus()
@@ -1576,8 +1598,20 @@ Item {
       return "ok"
     }
 
+    // Display only: plays match, miss, match-slow or idle on the preview
+    // window, with timers for PAM, and ends at idle. scanMs is the pretend
+    // time to the verdict; "" keeps the scenario's own.
+    function previewFace(scenario: string, scanMs: string): string {
+      var answer = previewFaceDriver.run(scenario, scanMs)
+      if (answer !== "ok") return answer
+      root.refreshBackground()
+      root.previewVisible = true
+      return "ok"
+    }
+
     function hidePreview(): string {
       root.previewVisible = false
+      previewFaceDriver.stop()
       return "ok"
     }
   }
