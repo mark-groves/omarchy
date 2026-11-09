@@ -274,7 +274,8 @@ assert(
   'the lock card keeps the scan hint and the password fallback'
 )
 assert(
-  /id: faceIcon[\s\S]*?visible:[\s\S]{0,200}?\(root\.faceRequestAvailable \|\| \(root\.faceCardActive && !root\.faceCardPainting\)\)/.test(viewQml),
+  /readonly property bool faceGlyphShown: faceConfigured && !fingerprintConfigured\s*&& \(faceRequestAvailable \|\| \(faceCardActive && !faceCardPainting\)\)/.test(viewQml) &&
+    /id: faceIcon[\s\S]*?opacity: root\.faceGlyphShown \? 1 : 0/.test(viewQml),
   'the glyph is the face button while face can be asked for, and yields to the card once it paints'
 )
 
@@ -329,7 +330,7 @@ assert(
   'a hint under the field says how to start face unlock'
 )
 assert(
-  /opacity: root\.faceCardRevealed \? 1 : 0/.test(viewQml) &&
+  /onFaceCardRevealedChanged: if \(faceCardRevealed\) faceCardEnter\.restart\(\)/.test(viewQml) &&
     /onCyclePresentedChanged: if \(cyclePresented && glassLit\) root\.faceCardRevealed = true/.test(viewQml),
   'the card fades in on its first presented frame, so a stuck frame is never shown'
 )

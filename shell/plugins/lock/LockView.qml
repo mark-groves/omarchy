@@ -42,17 +42,24 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: (fingerprintConfigured || faceIcon.visible) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
+  readonly property real fingerprintReserve: (fingerprintConfigured || faceGlyphShown) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
   // The card sits above the field so the mesh scan is large enough to read.
   // Without chrome the in-field glyph keeps the old 381×67 geometry.
   readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready && faceCardActive
   // The face button: shown while face can be asked for and is not running.
   readonly property bool faceRequestAvailable: faceOnRequest && faceConfigured && !fingerprintConfigured
     && !faceCardActive && inputEnabled && !authenticatingPassword
+  // The in-field glyph: the face button while face can be asked for, and a
+  // stand-in for a running scan when there is no card to paint.
+  readonly property bool faceGlyphShown: faceConfigured && !fingerprintConfigured
+    && (faceRequestAvailable || (faceCardActive && !faceCardPainting))
   // Latched by the first frame the card puts on screen, so a card whose
   // surface is not presenting yet never shows a stuck frame.
   property bool faceCardRevealed: false
-  onFaceCardPaintingChanged: if (!faceCardPainting) faceCardRevealed = false
+  // A card that was on screen fades out when it is taken away (a miss, Esc,
+  // typing, a blank) and resets once the fade is done, instead of cutting out.
+  property bool faceCardLeaving: false
+  readonly property bool faceCardShown: faceCardPainting || faceCardLeaving
   // The captions under the card, one line each, in slots of fixed height.
   readonly property int faceCaptionGap: Style.space(10)
 
@@ -78,6 +85,41 @@ Item {
   signal faceRequested()
   signal faceCancelRequested()
   signal faceScanShown()
+
+  // Both fades run on the render thread: while the card animates, its frames
+  // keep the GUI thread too busy for a smooth NumberAnimation.
+  onFaceCardRevealedChanged: if (faceCardRevealed) faceCardEnter.restart()
+  onFaceCardPaintingChanged: {
+    if (faceCardPainting) {
+      if (!faceCardLeaving) return
+      // Asked for again while it was fading out: it comes back from there.
+      faceCardLeaving = false
+      faceCardExit.stop()
+      faceCardEnter.restart()
+    } else if (faceCardRevealed) {
+      faceCardLeaving = true
+      faceCardEnter.stop()
+      faceCardExit.restart()
+    } else {
+      // Never on screen: nothing to fade.
+      resetFaceCard()
+    }
+  }
+
+  function finishFaceCardExit() {
+    // A stopped animator reports finished as well; a card that was asked
+    // for again is not done.
+    if (!faceCardLeaving) return
+    faceCardLeaving = false
+    resetFaceCard()
+  }
+
+  function resetFaceCard() {
+    faceCardEnter.stop()
+    faceCardExit.stop()
+    faceCard.opacity = 0
+    faceCardRevealed = false
+  }
 
   function forcePasswordFocus() {
     passwordInput.forceActiveFocus()
@@ -270,10 +312,10 @@ Item {
     Item {
       id: faceCard
       objectName: "faceCard"
-      visible: root.faceCardPainting
+      visible: root.faceCardShown
       enabled: false
-      opacity: root.faceCardRevealed ? 1 : 0
-      Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
+      // faceCardEnter and faceCardExit fade it.
+      opacity: 0
       width: faceIndicator.width
       height: faceIndicator.height + root.faceCaptionGap + faceStatus.height + root.faceCaptionGap + faceHint.height
       anchors.horizontalCenter: parent.horizontalCenter
@@ -332,6 +374,23 @@ Item {
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
+    }
+
+    OpacityAnimator {
+      id: faceCardEnter
+      target: faceCard
+      to: 1
+      duration: Style.duration(180)
+      easing.type: Easing.OutCubic
+    }
+
+    OpacityAnimator {
+      id: faceCardExit
+      target: faceCard
+      to: 0
+      duration: Style.duration(120)
+      easing.type: Easing.OutCubic
+      onFinished: root.finishFaceCardExit()
     }
 
     BorderSurface {
@@ -454,8 +513,16 @@ Item {
         anchors.rightMargin: inputField.borderRight + 18
         anchors.verticalCenter: parent.verticalCenter
         // Without a card to paint, the glyph also stands in for a running scan.
+        // It fades as the card takes over from it and as it hands back.
         visible: root.faceConfigured && !root.fingerprintConfigured
-          && (root.faceRequestAvailable || (root.faceCardActive && !root.faceCardPainting))
+        opacity: root.faceGlyphShown ? 1 : 0
+        Behavior on opacity {
+          id: faceIconFade
+          OpacityAnimator {
+            duration: Style.duration(faceIconFade.targetValue > 0 ? 180 : 120)
+            easing.type: Easing.OutCubic
+          }
+        }
         // md-face_recognition: a face in corner brackets, the face-ID mark.
         text: String.fromCodePoint(0xF0C7B)
         color: faceButton.containsMouse ? Commons.Color.lock.borderActive : Commons.Color.lock.placeholder
@@ -486,10 +553,17 @@ Item {
       anchors.top: inputField.bottom
       anchors.topMargin: 18
       anchors.horizontalCenter: inputField.horizontalCenter
-      visible: root.faceRequestAvailable && passwordInput.text.length === 0 && !root.errorState
+      visible: root.faceOnRequest && root.faceConfigured && !root.fingerprintConfigured
+      opacity: root.faceRequestAvailable && passwordInput.text.length === 0 && !root.errorState ? 0.44 : 0
+      Behavior on opacity {
+        id: faceRequestHintFade
+        OpacityAnimator {
+          duration: Style.duration(faceRequestHintFade.targetValue > 0 ? 180 : 120)
+          easing.type: Easing.OutCubic
+        }
+      }
       text: Commons.I18n.t("face.requestHint")
       color: Commons.Color.lock.text
-      opacity: 0.44
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       horizontalAlignment: Text.AlignHCenter
