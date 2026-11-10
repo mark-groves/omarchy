@@ -420,7 +420,8 @@ Item {
           accent: root.accent
           foreground: root.foreground
           errorColor: Commons.Color.polkit.textError
-          surface: root.background
+          backdrop: root.background
+          surface: root.preview ? "polkit-preview" : "polkit"
         }
       }
 
