@@ -400,10 +400,11 @@ function faceLaneAcceptsEmpty(lane) {
     && lane.outcome === "" && lane.trigger !== "auto"
 }
 
-// Whether the card should hold the keyboard. Once PAM has approved or the
-// card is leaving, what remains is display only.
+// Whether the card should hold the keyboard. Before the lane opens (the lid
+// check, with the card still invisible) and once PAM has approved or the card
+// is leaving, what remains is display only.
 function faceLaneWantsKeyboard(lane) {
-  return !!lane && lane.outcome === "" && lane.phase !== "closing"
+  return !!lane && lane.outcome === "" && lane.phase === "open"
 }
 
 function faceLaneStep(lane, event, env) {

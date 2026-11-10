@@ -307,6 +307,7 @@ for (const matchMs of [500, 1100, 2100]) {
   assert(missed.wrong === 0, 'a face miss is not a wrong password')
   assertEqual(missed.reason, 'Face verification timed out', 'the lane keeps Howdy\'s reason')
   assert(polkit.faceLaneWantsKeyboard(missed), 'the request keeps the keyboard through a miss')
+  assert(!polkit.faceLaneWantsKeyboard({ phase: 'closed', outcome: '' }), 'the invisible card of the lid check takes no keyboard')
   const reprompted = run.after('prompt', 1)
   assert(reprompted.faceState === 'notRecognized' && reprompted.epoch === missed.epoch, 'the next session\'s prompt is not another miss')
   const back = run.after('resultPlayed')
