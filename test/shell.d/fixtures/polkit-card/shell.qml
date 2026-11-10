@@ -325,6 +325,13 @@ ShellRoot {
         var field = top.find(top.previewCard, "polkitPasswordInput")
         top.check(!field.activeFocus && field.readOnly && !field.enabled, "the preview's field takes no focus or text")
         top.check(!top.controller.wantsKeyboard && !top.controller.realShown, "the preview never holds the keyboard")
+        // The last real flow is cancelled but still asks for an answer.
+        var realField = top.find(top.realCard, "polkitPasswordInput")
+        var sent = top.flow.submissions.length
+        realField.text = "hunter2"
+        top.controller.submitResponse(false)
+        top.check(top.flow.submissions.length === sent, "a real answer never reaches a flow while the preview plays")
+        realField.text = ""
       }
     },
     {
@@ -340,16 +347,34 @@ ShellRoot {
       run: function() {
         top.sameRectEverywhere("preview", ["idle", "scanning", "recognized"])
         top.check(top.rects["preview:idle"][0] === top.rects["real:idle"][0], "the preview card sits where the real one does")
+        top.check(top.controller.startPreview("miss:4000") === "ok", "a second preview starts")
+      }
+    },
+    {
+      name: "a real request ends a preview, and the preview's script cannot act on it",
+      until: function() { return top.controller.previewing && top.controller.lane.phase === "open" },
+      run: function() {
         top.newRequest()
+        top.check(!top.controller.previewing && !top.previewCard.current && top.realCard.current, "a real request takes the card from the preview")
+        top.check(!top.controller.previewShown, "the preview window goes away")
+      }
+    },
+    {
+      until: function() { return top.controller.lane.phase === "open" },
+      run: function() {
+        top.flow.prompt()
+        top.controller.previewUserAction("submitEmpty")
+        top.controller.previewUserAction("cancel")
+        var lane = top.controller.lane
+        top.check(lane.phase === "open" && lane.pending === "" && lane.outcome === "", "the preview's scripted user changes nothing on a real request")
       }
     },
     {
       // Quickshell starts a queued request as the one before completes,
       // while that card is still on screen.
       name: "a queued request takes over the window without unmapping it",
-      until: function() { return top.controller.lane.phase === "open" },
+      until: function() { return top.controller.lane.prompt && top.realCard.fieldFocused },
       run: function() {
-        top.flow.prompt()
         var field = top.find(top.realCard, "polkitPasswordInput")
         field.text = "hunter2"
         top.controller.submitResponse(false)

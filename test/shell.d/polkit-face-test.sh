@@ -482,11 +482,6 @@ assert(/"omarchy-polkit-preview"/.test(previewWindow) && /keyboardFocus:\s*WlrKe
   'the preview window never takes the keyboard or the pointer')
 assert(/preview:\s*true/.test(previewWindow), 'the preview window draws the preview card')
 assert(/function submit\(\) \{/.test(fakeQml) && !/TextInput|function submit\(\w/.test(fakeQml), 'the fake flow takes no answer')
-assert(/readOnly:\s*!root\.interactive/.test(cardQml) && /activeFocusOnPress:\s*root\.interactive/.test(cardQml), 'the preview card\'s field takes no text')
-assert(/function submitResponse\(isAutoRepeat\) \{\s*if \(root\.previewing/.test(controllerQml) && /function previewUserAction\(kind\) \{\s*if \(!root\.previewing \|\| root\.flow !== fakeFlow\) return/.test(controllerQml),
-  'a preview never answers a real flow, and a real answer never reaches the preview')
-assert(/if \(root\.realBusy\) return "busy"/.test(controllerQml) && /function beginRealFlow\(flow\) \{\s*if \(root\.previewing\) root\.stopPreview\(\)/.test(controllerQml),
-  'a real request ends a preview, and a preview waits for a real request')
 
 const painter = fs.readFileSync(path.join(root, 'shell/Commons/FaceCardPainter.js'), 'utf8')
 assert(
