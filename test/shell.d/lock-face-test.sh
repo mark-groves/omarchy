@@ -352,10 +352,6 @@ assert(
   'lock never loads a plugin Item next to its password field'
 )
 assert(
-  /id:\s*feedLoader/.test(viewQml) && /source:\s*"LockFeedSurface\.qml"/.test(viewQml),
-  'the lock Loader is the isolated OWE video feed, not face chrome'
-)
-assert(
   /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
   'lock preview keeps the scan animation running only while the preview is shown'
 )

@@ -28,6 +28,7 @@ cat >"$test_tmp/reset" <<'SH'
 set -euo pipefail
 source "$1/functions"
 TOP_MNT="$2"
+ESP_MNT="$2/esp-mount"
 NEXT_NAME=@omarchy-reset-next
 PROVISIONING_DIR=/var/lib/omarchy/provisioning
 LOG_FILE="$TOP_MNT/reset.log"
