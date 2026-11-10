@@ -391,7 +391,13 @@ Item {
     if (root.previewing || !root.realCard) return
     var flow = root.trackedFlow
     if (!flow || !flow.isResponseRequired) return
-    if (root.starting) root.lidSettled()
+    // An empty Enter during the lid check is the launching terminal's key,
+    // which the arm below exists to drop; it must not settle the layout from
+    // a stale lid reading. lidSettled() arms empty Enter once the card opens.
+    if (root.starting) {
+      if (root.realCard.fieldEmpty) return
+      root.lidSettled()
+    }
     // Approved, cancelled or leaving: a key that beat the keyboard's release
     // answers nothing.
     if (root.lane.phase !== "open" || root.lane.outcome !== "") return
