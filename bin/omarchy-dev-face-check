@@ -43,6 +43,7 @@ import pty
 import re
 import select
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -236,7 +237,8 @@ class Check:
   def swap_shell(self):
     if not os.path.isfile(os.path.join(self.worktree, "shell", "shell.qml")):
       raise Abort(f"{self.worktree} has no shell/shell.qml")
-    if '"' in self.worktree or "\\" in self.worktree:
+    # The path goes into a Lua string that Hyprland hands to a shell.
+    if any(c in self.worktree for c in "\"'\\"):
       raise Abort("the worktree path cannot hold quotes or backslashes")
     notify("Face check", f"Swapping in the shell from {self.worktree} for a recording. Yours comes back right after.")
     sleep(3)
@@ -245,7 +247,7 @@ class Check:
     for _ in range(20):
       if run(["timeout", "30", "quickshell", "kill", "-p", f"{session}/shell", "--any-display"]).returncode != 0:
         break
-    launch = f'hl.dsp.exec_cmd("env OMARCHY_PATH={self.worktree} omarchy-launch-shell")'
+    launch = f'hl.dsp.exec_cmd("env OMARCHY_PATH={shlex.quote(self.worktree)} omarchy-launch-shell")'
     result = run(["hyprctl", "dispatch", launch])
     if result.returncode != 0:
       raise Abort(f"could not launch the worktree's shell: {(result.stdout + result.stderr).strip()}")
@@ -271,19 +273,21 @@ class Check:
   # --------------------------------------------------------------- recording
 
   def start_recording(self):
+    # Clean-up is armed before the start: a start that times out may still
+    # have left the recorder unit running.
+    self.recording_started = True
+    self.cleanup.append(self.stop_recording)
     result = run([RECORD, "start", "--out", self.recording, "--fps", str(self.fps)], env=self.env, timeout=30)
     if result.returncode != 0:
       raise Abort(result.stderr.strip() or "the recorder did not start")
-    self.recording_started = True
-    self.cleanup.append(self.stop_recording)
 
   def stop_recording(self):
     if not self.recording_started:
       return
-    self.recording_started = False
     result = run([RECORD, "stop"], env=self.env, timeout=60)
     if result.returncode != 0:
       raise Abort(result.stderr.strip() or "the recorder did not stop cleanly")
+    self.recording_started = False
     # The moments go into the recording's sidecar only now: nothing spawns
     # while the card is being measured.
     path = f"{self.recording}.json"
@@ -503,10 +507,16 @@ class Check:
     self.mark("pkexec")
     if not self.wait_layer(self.window, 8):
       raise Abort("the polkit card never mapped")
-    self.mark("card up")
+    card_up = self.mark("card up")
     sleep(1.0)
-    self.trigger = self.mark("enter")
-    run(["wtype", "-k", "Return"])
+    if has_probe_events(card_up - 0.5, time.time(), self.probe_surface, state="scanning"):
+      # An Automatic stack scans as the card maps; the map is the trigger and
+      # an empty Enter would answer nothing.
+      self.trigger = card_up
+      self.notes.append("the stack scans without Enter; timed from the card mapping")
+    else:
+      self.trigger = self.mark("enter")
+      run(["wtype", "-k", "Return"])
     try:
       self.notes.append(f"pkexec exited {process.wait(timeout=20)}")
     except subprocess.TimeoutExpired:
@@ -728,16 +738,17 @@ def current_layers():
   except ValueError:
     return None
   found = []
-  for monitor in monitors.values():
+  for name, monitor in monitors.items():
     for level in monitor.get("levels", {}).values():
-      found += [{key: layer.get(key) for key in ("namespace", "x", "y", "w", "h")} for layer in level]
+      found += [dict({key: layer.get(key) for key in ("namespace", "x", "y", "w", "h")}, monitor=name) for layer in level]
   return found
 
 
 def pam_verdict(since, until, service):
-  """The realtime of the first face verdict PAM logged for SERVICE."""
+  """The realtime of the first face verdict PAM logged for SERVICE (pam_howdy logs
+  only "Face verification succeeded|timed out|failed" lines; the filter keeps it so)."""
   result = run(["journalctl", "-o", "json", "--no-pager", "-q", "--since", f"@{since:.3f}", "--until",
-                f"@{until:.3f}", "-g", rf"pam_howdy\({re.escape(service)}:auth\)"], timeout=30)
+                f"@{until:.3f}", "-g", rf"pam_howdy\({re.escape(service)}:auth\): Face verification"], timeout=30)
   for line in result.stdout.splitlines():
     try:
       entry = json.loads(line)
@@ -747,10 +758,11 @@ def pam_verdict(since, until, service):
   return None
 
 
-def has_probe_events(since, until, surface):
+def has_probe_events(since, until, surface, state=None):
   result = run(["journalctl", "-o", "cat", "--no-pager", "-q", "--since", f"@{since:.3f}", "--until",
                 f"@{until:.3f}", "-g", "face-probe-event"], timeout=30)
-  return any(f'"surface":"{surface}"' in line.replace(" ", "") for line in result.stdout.splitlines())
+  wanted = [f'"surface":"{surface}"'] + ([f'"state":"{state}"'] if state else [])
+  return any(all(w in line.replace(" ", "") for w in wanted) for line in result.stdout.splitlines())
 
 
 def read_first_frame(recording):
@@ -822,7 +834,8 @@ def sudo_pty(delay, limit):
 
   pid, fd = pty.fork()
   if pid == 0:
-    os.execvp("sudo", ["sudo", "-k", "/usr/bin/true"])
+    # A fixed prompt: sudo translates its own, which the match below would miss.
+    os.execvpe("sudo", ["sudo", "-k", "-p", "[sudo] password for %p: ", "/usr/bin/true"], dict(os.environ, LC_ALL="C"))
   log("spawn", f"pid={pid}")
   buffer = b""
   sent = False
@@ -986,6 +999,10 @@ def main():
   except KeyboardInterrupt:
     error = "interrupted"
   finally:
+    # A second Ctrl+C or kill must not cut the clean-up short and leave the
+    # recorder or a swapped shell behind.
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+      signal.signal(sig, signal.SIG_IGN)
     for step in reversed(check.cleanup):
       try:
         step()

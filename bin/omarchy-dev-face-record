@@ -532,9 +532,11 @@ def parse_object(text):
 
 def layer_rect(side, namespace, live_ok):
   monitor = (side or {}).get("monitor")
+  name = (monitor or {}).get("name")
   for mark in reversed((side or {}).get("marks", [])):
     for layer in mark.get("layers", []):
-      if layer.get("namespace") == namespace:
+      # A snapshot covers every monitor; take the recorded one's layer.
+      if layer.get("namespace") == namespace and layer.get("monitor", name) == name:
         return monitor, layer, f"layer snapshot at mark '{mark.get('label')}'"
   if live_ok:
     for live_monitor in hyprctl_json("monitors") or []:
@@ -545,6 +547,8 @@ def layer_rect(side, namespace, live_ok):
 
 
 def to_device(monitor, x, y, w, h):
+  if monitor.get("transform"):
+    fail(f"monitor {monitor.get('name')} is rotated or flipped; the card region is mapped for unrotated monitors only")
   scale = float(monitor.get("scale") or 1)
   ox, oy = float(monitor.get("x") or 0), float(monitor.get("y") or 0)
   return {"x": round((x - ox) * scale), "y": round((y - oy) * scale), "w": round(w * scale), "h": round(h * scale)}
