@@ -101,4 +101,9 @@ QtObject {
     blockAllReads: true
     onFileChanged: reload()
   }
+
+  // en.json, the base language, and the selected language share this directory.
+  property ParentDirReload englishDir: ParentDirReload { file: englishFile }
+  property ParentDirReload baseDir: ParentDirReload { file: baseFile }
+  property ParentDirReload languageDir: ParentDirReload { file: languageFile }
 }
