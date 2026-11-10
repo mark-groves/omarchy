@@ -77,3 +77,26 @@ verification when a UI returns a selected value or changes a symlink/config.
 If a launched UI would otherwise remain open, keep track of its PID and stop it
 after the screenshot or recording; avoid broad process kills unless checking
 with `ps` first.
+
+## Face auth surfaces
+
+The lock, polkit and sudo face cards have a harness of their own. `omarchy-dev-face-check` drives one scenario, records the monitor, measures the card frame by frame, and prints PASS, FAIL or SKIP per target, then the run's directory.
+
+```bash
+omarchy-dev-face-check sudo match                       # lock: match|miss|match-slow|idle, polkit: match|miss|typed|cancel, sudo: match|miss|match-slow|demo
+omarchy-dev-face-check lock miss --fps 120              # 120 oversamples the 60 Hz panel
+omarchy-dev-face-check polkit match --shell "$WT"       # the worktree's shell for the run, then the session's again
+omarchy-dev-face-check lock match --real                # the owner's face, only when they agreed and sit at the camera
+```
+
+Previews call the shell's display-only drivers (`lock previewFace`, `polkit preview`, `face-card replay`): no PAM, no camera, no keyboard. When the running shell lacks one, the check says so and falls back where it can (the sudo card to `face-card show`, the lock to its scanning-only `lock preview`, which takes the keyboard while it shows).
+
+The targets: smooth, at least 57 presented frames a second and no frame held over 2 refreshes in every animating phase; still, every `face-probe-event` of the surface carries the same rect; prompt, the first state after the trigger is scanning within 50 ms and the card moves within 100 ms (sudo: the card is up before the verdict); brief, 0.6–1.3 s from the verdict to the card gone; cuts, no appearance or disappearance happens in one frame. RESULT is INCOMPLETE when a target could not be measured, usually because the shell logs no probe lines.
+
+A frame counts as presented only when the card's region changed for real. The encoder refines a still picture over the frames after each change and re-codes it at key frames; counting any difference takes that residue for frames and roughly doubles the rate, so the summary prints both columns, presented and any-change.
+
+gpu-screen-recorder, sudo and pkexec start under `systemd-run --user`: an agent's shell can carry no_new_privs, which ignores file capabilities and setuid, so gsr-kms-server records black frames ("drmfb handle is NULL") and sudo cannot start. `--real` notifies the owner first, sends one empty Enter and never a password, presses Ctrl+C if sudo asks again, warns when `sudo -n -l /usr/bin/true` shows a passwordless grant that would skip the face prompt, and refuses to lock a session that is already locked.
+
+Runs land in `~/.cache/omarchy/face-check/<stamp>-<surface>-<scenario>/` (newest 10 kept): `check.txt`, `analysis/summary.txt` with `summary.json` and `motion.tsv`, `analysis/sheets/` and `clip.mp4`; `--keep` keeps the full recording. `omarchy-dev-face-record start|mark|stop|analyze` is the recorder underneath, for anything the scenarios do not cover: `analyze rec.mp4 --region 440x440+1380+354 --phase scan=12.5-17` takes device pixels or a layer namespace, and seconds from the first frame or `@EPOCH`.
+
+Read the sheets to see what the numbers mean. `coarse.png` tiles the whole showing at up to 10 frames a second, to find the moment. Each `t<seconds>-<moment>.png` tiles every captured frame from 6 before to 18 after a first or last change, a phase, a probe event or a verdict, labelled with the frame number and seconds from the first frame; `held` marks a frame where the card did not change and `key` an encoder key frame. Look for where motion starts and settles, a card that shifts between states, stale content from the previous showing, and runs of `held` frames.

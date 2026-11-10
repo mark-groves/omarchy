@@ -1,0 +1,1164 @@
+#!/usr/bin/python3 -I
+# omarchy:summary=Record the screen and measure face card motion frame by frame
+# omarchy:args=<start|mark|stop|analyze> [options]
+# omarchy:examples=omarchy dev face record start --fps 120 | omarchy dev face record mark card-up | omarchy dev face record stop | omarchy dev face record analyze rec.mp4 --region 440x440+1380+354 --phase scanning=12.5-17
+# omarchy:hidden=true
+"""Record a monitor at full rate and measure how a face card presents frames.
+
+  start [--out FILE] [--fps 60|120] [--monitor NAME]
+      Record the monitor with gpu-screen-recorder and return once the first frame
+      is on disk. The recorder runs under the user manager: an agent's shell can
+      carry no_new_privs, which strips gsr-kms-server's file capability and
+      leaves black frames ("drmfb handle is NULL").
+  mark LABEL [--at EPOCH]
+      Note a moment in the running recording (now, or at EPOCH seconds), with a
+      snapshot of the layers.
+  stop
+      Stop the recording and print its path.
+  analyze RECORDING [--region SPEC] [--surface NAME] [--phase NAME=START-END]...
+                    [--window START-END] [--out DIR] [--refresh HZ] [--no-sheets]
+      Write summary.json, summary.txt, motion.tsv and labelled frame sheets.
+      SPEC is WxH+X+Y in device pixels, a layer namespace, or "lock" for the
+      whole monitor. A namespace or "lock" is narrowed to the card by the probe
+      rects of its window, or else by where the picture moves. Without --phase,
+      the probe states of --surface are the phases. --window keeps the analysis
+      to that span. START and END are seconds from the first frame, or @EPOCH.
+
+A frame counts as presented when the region changed: at least 48 pixels (or
+0.02% of the region) moved by 24 levels or more, or the mean change is at least
+0.5 and a quarter of the previous frame's. The encoder refines a still picture
+over the frames after every change, and re-codes it at each key frame, and both
+leave small, spread-out differences that are not new frames; the mean test is
+for low-contrast change such as a fade or a glow, and does not apply to key
+frames.
+"""
+import json
+import math
+import os
+import re
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import time
+
+UNIT = "omarchy-face-record"
+STATE_NAME = "omarchy-face-record.json"
+
+PIXEL_DELTA = 24
+MIN_PIXELS = 48
+MIN_PIXEL_SHARE = 0.0002
+MEAN_FLOOR = 0.5
+MEAN_RATIO = 0.25
+# What a plain "did anything change" count uses; kept for comparison only.
+ANY_CHANGE_MEAN = 0.05
+
+# The encoder's first frames settle a picture that has not changed.
+WARMUP_S = 0.1
+ENTRANCE_S = 0.25
+EXIT_S = 0.25
+QUIET_S = 0.2
+CUT_SHARE = 0.5
+
+JOURNAL_GREP = (r"face-probe|pam_warn\(|pam_howdy\(|quickshell\.service\.pam\.subprocess"
+                r"|omarchy lock |face card |face hold ")
+
+
+def fail(message, code=1):
+  print(f"omarchy-dev-face-record: {message}", file=sys.stderr)
+  sys.exit(code)
+
+
+def run(argv, check=True, **kwargs):
+  result = subprocess.run(argv, capture_output=True, text=True, **kwargs)
+  if check and result.returncode != 0:
+    fail(f"{argv[0]} failed: {(result.stderr or result.stdout).strip()[-600:]}")
+  return result
+
+
+def runtime_dir():
+  return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+
+
+def cache_dir():
+  base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+  return os.path.join(base, "omarchy")
+
+
+def state_path():
+  return os.path.join(runtime_dir(), STATE_NAME)
+
+
+def read_json(path, default=None):
+  try:
+    with open(path) as f:
+      return json.load(f)
+  except (OSError, ValueError):
+    return default
+
+
+def write_json(path, data):
+  tmp = f"{path}.tmp"
+  with open(tmp, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+  os.replace(tmp, path)
+
+
+def sidecar_path(recording):
+  return f"{recording}.json"
+
+
+def unit_active():
+  return subprocess.run(["systemctl", "--user", "is-active", "-q", UNIT]).returncode == 0
+
+
+def hyprctl_json(what):
+  result = subprocess.run(["hyprctl", what, "-j"], capture_output=True, text=True)
+  if result.returncode != 0:
+    return None
+  try:
+    return json.loads(result.stdout)
+  except ValueError:
+    return None
+
+
+def pick_monitor(name):
+  monitors = hyprctl_json("monitors") or []
+  for monitor in monitors:
+    if (name and monitor.get("name") == name) or (not name and monitor.get("focused")):
+      return monitor
+  if name:
+    fail(f"no monitor named {name}")
+  if monitors:
+    return monitors[0]
+  fail("hyprctl lists no monitors; export HYPRLAND_INSTANCE_SIGNATURE and WAYLAND_DISPLAY")
+
+
+def monitor_info(monitor):
+  keys = ("name", "x", "y", "width", "height", "scale", "refreshRate", "transform")
+  return {key: monitor.get(key) for key in keys}
+
+
+def layers_for(monitor_name):
+  layers = hyprctl_json("layers") or {}
+  found = []
+  for level in (layers.get(monitor_name) or {}).get("levels", {}).values():
+    for layer in level:
+      found.append({key: layer.get(key) for key in ("namespace", "x", "y", "w", "h")})
+  return found
+
+
+def sleep(seconds):
+  time.sleep(max(0.0, seconds))
+
+
+# ---------------------------------------------------------------- recording
+
+def cmd_start(args):
+  out = None
+  fps = 60
+  monitor_name = None
+  while args:
+    arg = args.pop(0)
+    if arg == "--out" and args:
+      out = args.pop(0)
+    elif arg == "--fps" and args:
+      fps = int(args.pop(0))
+    elif arg == "--monitor" and args:
+      monitor_name = args.pop(0)
+    else:
+      fail(f"unknown start option: {arg}", 2)
+  if fps not in (60, 120):
+    fail("--fps takes 60 or 120", 2)
+  if unit_active():
+    state = read_json(state_path(), {})
+    fail(f"a recording is already running ({state.get('out', UNIT)}); stop it first")
+
+  monitor = pick_monitor(monitor_name)
+  if not out:
+    out = os.path.join(cache_dir(), "face-record", time.strftime("%Y%m%d-%H%M%S") + ".mp4")
+  out = os.path.abspath(out)
+  os.makedirs(os.path.dirname(out), exist_ok=True)
+  log = f"{out}.log"
+  for path in (out, f"{out}.ts", log, sidecar_path(out)):
+    if os.path.exists(path):
+      os.remove(path)
+  subprocess.run(["systemctl", "--user", "reset-failed", UNIT], capture_output=True)
+
+  # Under the user manager, not as a child: see the header.
+  env = [f"--setenv={key}={os.environ[key]}" for key in ("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+         if os.environ.get(key)]
+  command = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={UNIT}",
+             "-p", f"StandardOutput=truncate:{log}", "-p", "StandardError=inherit", *env,
+             "gpu-screen-recorder", "-w", monitor["name"], "-f", str(fps), "-fm", "cfr",
+             "-k", "h264", "-q", "ultra", "-keyint", "10", "-cursor", "no",
+             "-write-first-frame-ts", "yes", "-o", out]
+  run(command)
+
+  first = None
+  deadline = time.monotonic() + 10
+  while time.monotonic() < deadline:
+    first = read_first_frame(out)
+    if first or not unit_active():
+      break
+    sleep(0.05)
+  log_text = read_text(log)
+  if "drmfb handle is NULL" in log_text:
+    stop_unit()
+    fail("the recorder could not read the screen (drmfb handle is NULL): gsr-kms-server ran without its "
+         f"capability; see {log}")
+  if not first:
+    stop_unit()
+    fail(f"the recorder did not start; see {log}")
+
+  write_json(sidecar_path(out), {
+    "version": 1,
+    "recording": out,
+    "fps": fps,
+    "monitor": monitor_info(monitor),
+    "startedAt": time.time(),
+    "firstFrame": first,
+    "marks": [],
+  })
+  write_json(state_path(), {"out": out, "unit": UNIT})
+  # Let the encoder settle so whatever the caller triggers next is well inside.
+  sleep(0.2)
+  print(out)
+
+
+def read_text(path):
+  try:
+    with open(path, errors="replace") as f:
+      return f.read()
+  except OSError:
+    return ""
+
+
+def read_first_frame(recording):
+  # "monotonic_microsec\trealtime_microsec\n<mono>\t<real>"
+  lines = read_text(f"{recording}.ts").split()
+  if len(lines) >= 4:
+    try:
+      return {"monotonicUs": int(lines[2]), "realtimeUs": int(lines[3])}
+    except ValueError:
+      return None
+  return None
+
+
+def stop_unit():
+  subprocess.run(["systemctl", "--user", "kill", "-s", "INT", UNIT], capture_output=True)
+  deadline = time.monotonic() + 15
+  while unit_active() and time.monotonic() < deadline:
+    sleep(0.05)
+  if unit_active():
+    subprocess.run(["systemctl", "--user", "stop", UNIT], capture_output=True)
+
+
+def cmd_mark(args):
+  at = None
+  words = []
+  while args:
+    arg = args.pop(0)
+    if arg == "--at" and args:
+      at = float(args.pop(0))
+    else:
+      words.append(arg)
+  if not words:
+    fail("mark needs a label", 2)
+  label = " ".join(words)
+  state = read_json(state_path())
+  if not state or not unit_active():
+    fail("no recording is running")
+  now = at if at is not None else time.time()
+  side = read_json(sidecar_path(state["out"]), {})
+  monitor = (side.get("monitor") or {}).get("name")
+  side.setdefault("marks", []).append({"label": label, "t": now, "layers": layers_for(monitor) if monitor else []})
+  write_json(sidecar_path(state["out"]), side)
+  print(f"{now:.3f}")
+
+
+def cmd_stop(args):
+  if args:
+    fail(f"unknown stop option: {args[0]}", 2)
+  state = read_json(state_path())
+  if not state:
+    if unit_active():
+      stop_unit()
+      fail("stopped a recording this command did not start; its file is unknown")
+    fail("no recording is running")
+  out = state["out"]
+  if unit_active():
+    stop_unit()
+  os.remove(state_path())
+  side = read_json(sidecar_path(out), {})
+  side["stoppedAt"] = time.time()
+  write_json(sidecar_path(out), side)
+  if not os.path.exists(out) or os.path.getsize(out) == 0:
+    fail(f"the recording is empty; see {out}.log")
+  if run(["ffprobe", "-v", "error", out], check=False).returncode != 0:
+    fail(f"the recording is unreadable; see {out}.log")
+  print(out)
+
+
+# ---------------------------------------------------------------- analysis
+
+class Frame:
+  __slots__ = ("index", "pts", "t", "key", "mean", "strong", "changed", "any")
+
+  def __init__(self, index, pts, key):
+    self.index = index
+    self.pts = pts
+    self.t = 0.0
+    self.key = key
+    self.mean = None
+    self.strong = None
+    self.changed = False
+    self.any = False
+
+
+def probe_packets(recording):
+  result = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "packet=pts_time,flags", "-of", "csv=p=0", recording])
+  packets = []
+  for line in result.stdout.splitlines():
+    fields = line.strip().split(",")
+    try:
+      pts = float(fields[0])
+    except (ValueError, IndexError):
+      continue
+    packets.append((pts, "K" in "".join(fields[1:])))
+  packets.sort()
+  if not packets:
+    fail(f"no video frames in {recording}")
+  return packets
+
+
+def probe_size(recording):
+  result = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=width,height", "-of", "json", recording])
+  stream = json.loads(result.stdout)["streams"][0]
+  return int(stream["width"]), int(stream["height"])
+
+
+def parse_region(spec):
+  match = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", spec or "")
+  if not match:
+    return None
+  w, h, x, y = (int(value) for value in match.groups())
+  return {"w": w, "h": h, "x": x, "y": y}
+
+
+def clip_region(region, width, height):
+  x = max(0, min(region["x"], width - 2))
+  y = max(0, min(region["y"], height - 2))
+  w = max(2, min(region["w"], width - x))
+  h = max(2, min(region["h"], height - y))
+  # Even sizes keep every pixel format happy.
+  return {"w": w - w % 2, "h": h - h % 2, "x": x, "y": y}
+
+
+def region_spec(region):
+  return f"{region['w']}x{region['h']}+{region['x']}+{region['y']}"
+
+
+def crop_filter(region):
+  return f"crop={region['w']}:{region['h']}:{region['x']}:{region['y']}"
+
+
+def ffmpeg_window(start_abs, end_abs):
+  # Seek a little early so the first frame of the window has a predecessor.
+  seek = max(0.0, start_abs - 1.0)
+  return ["-ss", f"{seek:.6f}", "-copyts"], f"trim=start={start_abs:.6f}:end={end_abs:.6f}"
+
+
+def measure(recording, frames, region, start_abs, end_abs, workdir):
+  """Mean change and strongly changed pixel count per frame inside the region."""
+  seek, trim = ffmpeg_window(start_abs, end_abs)
+  graph = (f"[0:v]{trim},{crop_filter(region)},format=gray,tblend=all_mode=difference,split[a][b];"
+           "[a]signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=mean.txt,nullsink;"
+           f"[b]lutyuv=y='if(gte(val\\,{PIXEL_DELTA})\\,255\\,0)',signalstats,"
+           "metadata=print:key=lavfi.signalstats.YAVG:file=strong.txt[out]")
+  run(["ffmpeg", "-v", "error", "-nostdin", *seek, "-i", recording, "-filter_complex", graph,
+       "-map", "[out]", "-f", "null", "-"], cwd=workdir)
+  area = region["w"] * region["h"]
+  means = read_metadata(os.path.join(workdir, "mean.txt"))
+  strongs = read_metadata(os.path.join(workdir, "strong.txt"))
+  by_pts = {round(frame.pts, 4): frame for frame in frames}
+  for pts, value in means:
+    frame = by_pts.get(round(pts, 4)) or nearest(frames, pts)
+    if frame:
+      frame.mean = value
+  for pts, value in strongs:
+    frame = by_pts.get(round(pts, 4)) or nearest(frames, pts)
+    if frame:
+      frame.strong = round(value * area / 255)
+  for name in ("mean.txt", "strong.txt"):
+    os.remove(os.path.join(workdir, name))
+
+
+def read_metadata(path):
+  values = []
+  pts = None
+  for line in read_text(path).splitlines():
+    if line.startswith("frame:"):
+      match = re.search(r"pts_time:(-?[\d.]+)", line)
+      pts = float(match.group(1)) if match else None
+    elif "=" in line and pts is not None:
+      try:
+        values.append((pts, float(line.split("=", 1)[1])))
+      except ValueError:
+        pass
+  return values
+
+
+def nearest(frames, pts):
+  lo, hi = 0, len(frames) - 1
+  while lo < hi:
+    mid = (lo + hi) // 2
+    if frames[mid].pts < pts:
+      lo = mid + 1
+    else:
+      hi = mid
+  candidates = [frames[i] for i in (lo - 1, lo) if 0 <= i < len(frames)]
+  best = min(candidates, key=lambda frame: abs(frame.pts - pts), default=None)
+  if best and abs(best.pts - pts) < 0.002:
+    return best
+  return None
+
+
+def classify(frames, area):
+  min_pixels = max(MIN_PIXELS, round(area * MIN_PIXEL_SHARE))
+  previous = 0.0
+  for frame in frames:
+    if frame.mean is None:
+      previous = 0.0
+      continue
+    strong = frame.strong or 0
+    pixel_test = strong >= min_pixels
+    mean_test = frame.mean >= MEAN_FLOOR and frame.mean >= MEAN_RATIO * previous
+    frame.changed = pixel_test or (mean_test and not frame.key)
+    frame.any = frame.mean > ANY_CHANGE_MEAN
+    previous = frame.mean
+  return min_pixels
+
+
+# ------------------------------------------------------------------ journal
+
+def read_journal(since, until):
+  command = ["journalctl", "-o", "json", "--no-pager", "-q", "--since", f"@{since:.3f}",
+             "--until", f"@{until:.3f}", "-g", JOURNAL_GREP,
+             "--output-fields=MESSAGE,SYSLOG_IDENTIFIER,_PID,_COMM"]
+  result = subprocess.run(command, capture_output=True, text=True)
+  entries = []
+  for line in result.stdout.splitlines():
+    try:
+      entry = json.loads(line)
+    except ValueError:
+      continue
+    message = entry.get("MESSAGE")
+    if isinstance(message, list):
+      message = bytes(message).decode(errors="replace")
+    if not isinstance(message, str):
+      continue
+    try:
+      realtime = int(entry["__REALTIME_TIMESTAMP"]) / 1e6
+    except (KeyError, ValueError):
+      continue
+    source = entry.get("SYSLOG_IDENTIFIER") or entry.get("_COMM") or "?"
+    entries.append((realtime, f"{source}[{entry.get('_PID', '?')}]", message.strip()))
+  entries.sort()
+  return entries, (result.stderr.strip() if result.returncode not in (0, 1) else "")
+
+
+PROBE_EVENT = re.compile(r"face-probe-event\s+(\{.*\})\s*$")
+PROBE = re.compile(r"face-probe\s+(\{.*\})\s*$")
+PAM = re.compile(r"\b(pam_warn|pam_howdy)\(([^:)]+):([^)]+)\):\s*(.*)$")
+LOCK_PAM = re.compile(r"quickshell\.service\.pam\.subprocess:\s*(.*)$")
+LOCK = re.compile(r"omarchy lock \S+ (.*)$")
+HOST = re.compile(r"(face card shown.*|face hold played.*|face card paint.*)$")
+
+
+def journal_events(entries, origin):
+  events = []
+  for realtime, source, message in entries:
+    event = None
+    match = PROBE_EVENT.search(message)
+    if match:
+      data = parse_object(match.group(1))
+      if data is not None:
+        when = data.get("t")
+        stamp = when / 1000 if isinstance(when, (int, float)) and when > 1e12 else realtime
+        event = {"kind": "probe-event", "text": f"{data.get('surface')} {data.get('state')}", "data": data,
+                 "realtime": stamp}
+    elif PROBE.search(message):
+      data = parse_object(PROBE.search(message).group(1))
+      if data is not None:
+        event = {"kind": "probe", "text": f"{data.get('surface')} summary", "data": data}
+    elif PAM.search(message):
+      module, service, stage, rest = PAM.search(message).groups()
+      if stage == "auth":
+        verdict = None
+        if module == "pam_howdy":
+          verdict = "match" if "succeeded" in rest else ("miss" if "timed out" in rest or "fail" in rest.lower() else None)
+        event = {"kind": "pam", "text": f"{module}({service}:{stage}) {rest[:90]}",
+                 "data": {"module": module, "service": service, "verdict": verdict,
+                          "scanStart": module == "pam_warn"}}
+    elif LOCK_PAM.search(message):
+      event = {"kind": "lock-pam", "text": LOCK_PAM.search(message).group(1)[:120]}
+    elif LOCK.search(message):
+      event = {"kind": "lock", "text": LOCK.search(message).group(1)[:120]}
+    elif HOST.search(message):
+      event = {"kind": "host", "text": HOST.search(message).group(1)[:120]}
+    if event is None:
+      continue
+    event.setdefault("realtime", realtime)
+    event["t"] = round(event["realtime"] - origin, 4)
+    event["source"] = source
+    events.append(event)
+  return events
+
+
+def parse_object(text):
+  try:
+    value = json.loads(text)
+  except ValueError:
+    return None
+  return value if isinstance(value, dict) else None
+
+
+# ------------------------------------------------------------------- region
+
+def layer_rect(side, namespace, live_ok):
+  monitor = (side or {}).get("monitor")
+  name = (monitor or {}).get("name")
+  for mark in reversed((side or {}).get("marks", [])):
+    for layer in mark.get("layers", []):
+      # A snapshot covers every monitor; take the recorded one's layer.
+      if layer.get("namespace") == namespace and layer.get("monitor", name) == name:
+        return monitor, layer, f"layer snapshot at mark '{mark.get('label')}'"
+  if live_ok:
+    for live_monitor in hyprctl_json("monitors") or []:
+      for layer in layers_for(live_monitor.get("name")):
+        if layer.get("namespace") == namespace:
+          return monitor_info(live_monitor), layer, "live hyprctl layers"
+  return monitor, None, None
+
+
+def to_device(monitor, x, y, w, h):
+  if monitor.get("transform"):
+    fail(f"monitor {monitor.get('name')} is rotated or flipped; the card region is mapped for unrotated monitors only")
+  scale = float(monitor.get("scale") or 1)
+  ox, oy = float(monitor.get("x") or 0), float(monitor.get("y") or 0)
+  return {"x": round((x - ox) * scale), "y": round((y - oy) * scale), "w": round(w * scale), "h": round(h * scale)}
+
+
+def probe_rect(events, window, surface):
+  """The face art's rect from the probe lines: a surface that also logs its
+  card's rect (part "card") gives the art's own rect only as a fallback."""
+  card = (None, None)
+  for event in events:
+    if event["kind"] != "probe-event":
+      continue
+    data = event["data"]
+    if surface and data.get("surface") != surface:
+      continue
+    if window and data.get("window") != window:
+      continue
+    rect = data.get("rect")
+    if not (isinstance(rect, dict) and all(isinstance(rect.get(key), (int, float)) for key in "xywh")) or rect["w"] <= 0:
+      continue
+    if data.get("part") == "card":
+      if card[0] is None:
+        card = (rect, data.get("window"))
+      continue
+    return rect, data.get("window")
+  return card
+
+
+def auto_region(recording, area, start_abs, end_abs, workdir):
+  """Bounding box of the biggest patch that keeps moving inside AREA.
+
+  Every block's share of changed pixels is averaged over the whole span, so a
+  clock tick or a notification sliding past weighs little, and of what is left
+  only the largest connected patch counts.
+  """
+  seek, trim = ffmpeg_window(start_abs, end_abs)
+  scale = max(4, math.ceil(math.sqrt(area["w"] * area["h"] / 60000)))
+  frames = max(2, min(512, round((end_abs - start_abs) * 120)))
+  graph = (f"{trim},{crop_filter(area)},format=gray,tblend=all_mode=difference,"
+           f"lutyuv=y='if(gte(val\\,{PIXEL_DELTA})\\,255\\,0)',"
+           f"scale=iw/{scale}:ih/{scale}:flags=area,tmix=frames={frames}")
+  out = os.path.join(workdir, "motion-extent.pgm")
+  run(["ffmpeg", "-v", "error", "-nostdin", "-y", *seek, "-i", recording, "-vf", graph,
+       "-update", "1", "-f", "image2", out])
+  with open(out, "rb") as f:
+    data = f.read()
+  os.remove(out)
+  header = re.match(rb"P5\s+(\d+)\s+(\d+)\s+(\d+)\s", data)
+  if not header:
+    return None
+  width, height = int(header.group(1)), int(header.group(2))
+  pixels = data[header.end():]
+  # A block counts when about 2% of it changed per frame, on average.
+  moving = {i for i, value in enumerate(pixels[:width * height]) if value >= 5}
+  best, best_weight = None, 0
+  seen = set()
+  for seed in moving:
+    if seed in seen:
+      continue
+    # Neighbours up to two blocks apart join one patch.
+    patch, todo = [], [seed]
+    seen.add(seed)
+    while todo:
+      cell = todo.pop()
+      patch.append(cell)
+      y, x = divmod(cell, width)
+      for dy in range(-2, 3):
+        for dx in range(-2, 3):
+          ny, nx = y + dy, x + dx
+          if 0 <= ny < height and 0 <= nx < width:
+            other = ny * width + nx
+            if other in moving and other not in seen:
+              seen.add(other)
+              todo.append(other)
+    weight = sum(pixels[cell] for cell in patch)
+    if weight > best_weight:
+      best, best_weight = patch, weight
+  if not best:
+    return None
+  ys = [cell // width for cell in best]
+  xs = [cell % width for cell in best]
+  return {"x": area["x"] + min(xs) * scale, "y": area["y"] + min(ys) * scale,
+          "w": (max(xs) - min(xs) + 1) * scale, "h": (max(ys) - min(ys) + 1) * scale}
+
+
+# ------------------------------------------------------------------- phases
+
+def parse_span(text, origin, what):
+  match = re.fullmatch(r"(@?[\d.]+)-(@?[\d.]+)", text)
+  if not match:
+    fail(f"{what} takes START-END, not {text}", 2)
+
+  def seconds(value):
+    if value.startswith("@"):
+      return float(value[1:]) - origin
+    return float(value)
+
+  start, end = (seconds(value) for value in match.groups())
+  if end <= start:
+    fail(f"{what} {text} ends before it starts", 2)
+  return start, end
+
+
+def parse_phase(spec, origin):
+  name, _, span = spec.partition("=")
+  if not name or not span:
+    fail(f"--phase takes NAME=START-END, not {spec}", 2)
+  start, end = parse_span(span, origin, f"phase {name}")
+  return {"name": name, "start": round(start, 4), "end": round(end, 4), "source": "argument"}
+
+
+def probe_phases(events, surface, active_end):
+  mine = [event for event in events if event["kind"] == "probe-event"
+          and (not surface or event["data"].get("surface") == surface)]
+  # A surface whose card logs its own states as well (part "card") has its
+  # face art's states logged by the canvas; phases follow the art.
+  art = [event for event in mine if event["data"].get("part") != "card"]
+  if art:
+    mine = art
+  phases = []
+  for i, event in enumerate(mine):
+    end = mine[i + 1]["t"] if i + 1 < len(mine) else active_end
+    if end is None or end <= event["t"]:
+      continue
+    phases.append({"name": str(event["data"].get("state")), "start": event["t"], "end": end,
+                   "source": "probe", "state": event["data"].get("state")})
+  return phases
+
+
+def phase_stats(phase, frames, intervals, gaps, refresh, active):
+  # Rates count from when the card is on screen: before the region's first
+  # change and after its last, nothing there was meant to move.
+  start, end = phase["start"], phase["end"]
+  if active:
+    start, end = max(start, active["start"]), min(end, active["end"] + 1e-3)
+  if end <= start:
+    start, end = phase["start"], phase["end"]
+  # A phase is rated from its first presented change: the wait before it is
+  # the time to the first frame, which the prompt check judges.
+  first = next((frame.t for frame in frames if start <= frame.t < end and frame.mean is not None and frame.changed), None)
+  if first is not None and first > start:
+    start = first
+  inside = [frame for frame in frames if start <= frame.t < end and frame.mean is not None]
+  duration = end - start
+  changed = sum(1 for frame in inside if frame.changed)
+  anything = sum(1 for frame in inside if frame.any)
+  overlapping = [(max(a, start), min(b, end)) for a, b in intervals if a < end and b > start]
+  holds = [(round((b - a) * refresh), a, b) for a, b in overlapping if b > a]
+  longest = max(holds, default=(0, None, None))
+  first_change = next((frame.t for frame in inside if frame.changed), None)
+  phase.update({
+    "measuredFrom": round(start, 4),
+    "measuredTo": round(end, 4),
+    "duration": round(duration, 4),
+    "frames": len(inside),
+    "changed": changed,
+    "presentedFps": round(changed / duration, 1) if duration > 0 else None,
+    "anyChangeFps": round(anything / duration, 1) if duration > 0 else None,
+    "longestHoldRefreshes": longest[0],
+    "longestHoldAt": round(longest[1], 4) if longest[1] is not None else None,
+    "holdsOver2": sum(1 for hold in holds if hold[0] > 2),
+    "firstChange": round(first_change, 4) if first_change is not None else None,
+    "captureGaps": sum(1 for gap in gaps if phase["start"] <= gap["t"] < phase["end"]),
+  })
+  if duration >= 2:
+    seconds = []
+    for k in range(int(duration)):
+      lo, hi = start + k, start + k + 1
+      second = [frame for frame in inside if lo <= frame.t < hi]
+      seconds.append({"start": round(lo, 3), "presented": sum(1 for frame in second if frame.changed),
+                      "anyChange": sum(1 for frame in second if frame.any)})
+    phase["perSecond"] = seconds
+  return phase
+
+
+# ------------------------------------------------------------------- sheets
+
+def sheet(recording, frames, origin_pts, region, start, end, out, label_flags, columns, tile_width,
+          rate=None):
+  """Tile the region (with a margin) from START to END seconds into one image."""
+  seek, trim = ffmpeg_window(origin_pts + start, origin_pts + end)
+  chosen = [frame for frame in frames if start <= frame.t < end]
+  if rate:
+    chain = [trim, f"fps={rate}"]
+    count = max(1, math.ceil((end - start) * rate))
+  else:
+    chain = [trim]
+    count = len(chosen)
+  if count == 0:
+    return False
+  rows = max(1, math.ceil(count / columns))
+  chain += [crop_filter(region), f"scale={tile_width}:-2"]
+  size = max(12, tile_width // 14)
+  text = f"%{{pts\\:flt\\:{-origin_pts:.6f}}}"
+  if label_flags and not rate:
+    first_index = chosen[0].index
+    text = f"#%{{eif\\:n+{first_index}\\:d}} {text}"
+  chain.append(f"drawtext=text='{text}':x=4:y=4:fontsize={size}:fontcolor=yellow:box=1:boxcolor=black@0.7")
+  if label_flags and not rate:
+    held = [i for i, frame in enumerate(chosen) if not frame.changed]
+    keys = [i for i, frame in enumerate(chosen) if frame.key]
+    for word, color, indices in (("held", "red", held), ("key", "cyan", keys)):
+      if indices:
+        enable = "+".join(f"eq(n\\,{i})" for i in indices)
+        y = "h-th-4" if word == "held" else "h-2*th-10"
+        chain.append(f"drawtext=text='{word}':enable='{enable}':x=4:y={y}:fontsize={size}:"
+                     f"fontcolor={color}:box=1:boxcolor=black@0.7")
+  chain.append(f"tile={columns}x{rows}:padding=3:color=0x404040")
+  run(["ffmpeg", "-v", "error", "-nostdin", "-y", *seek, "-i", recording, "-vf", ",".join(chain),
+       "-frames:v", "1", "-update", "1", out])
+  return True
+
+
+def frame_span(frames, when, before, after):
+  """Times halfway between frames, so a trim takes exactly the frames around WHEN."""
+  at = min(range(len(frames)), key=lambda i: abs(frames[i].t - when))
+  first = max(0, at - before)
+  last = min(len(frames) - 1, at + after - 1)
+  start = (frames[first - 1].t + frames[first].t) / 2 if first > 0 else 0.0
+  end = (frames[last].t + frames[last + 1].t) / 2 if last + 1 < len(frames) else frames[last].t + 0.01
+  return start, end
+
+
+def sheet_region(region, width, height):
+  pad = max(16, round(max(region["w"], region["h"]) * 0.12))
+  return clip_region({"x": region["x"] - pad, "y": region["y"] - pad,
+                      "w": region["w"] + 2 * pad, "h": region["h"] + 2 * pad}, width, height)
+
+
+# -------------------------------------------------------------------- cuts
+
+def gray_frame(recording, pts, region):
+  result = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{max(0.0, pts - 1.0):.6f}", "-copyts",
+                           "-i", recording, "-vf", f"trim=start={pts - 0.0005:.6f},{crop_filter(region)},format=gray",
+                           "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True)
+  return result.stdout if result.returncode == 0 else b""
+
+
+def mean_difference(a, b):
+  if not a or len(a) != len(b):
+    return None
+  return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+
+def cut_check(recording, frames, region, kind, edge, origin_pts):
+  """How much of an appearance or disappearance happens in its largest single frame."""
+  if kind == "appear":
+    window = [frame for frame in frames if edge <= frame.t < edge + 0.3 and frame.mean is not None]
+    before = max((frame for frame in frames if frame.t < edge), key=lambda frame: frame.t, default=None)
+    after = min((frame for frame in frames if frame.t >= edge + 0.4), key=lambda frame: frame.t, default=None)
+  else:
+    window = [frame for frame in frames if edge - 0.3 < frame.t <= edge and frame.mean is not None]
+    before = max((frame for frame in frames if frame.t <= edge - 0.4), key=lambda frame: frame.t, default=None)
+    after = min((frame for frame in frames if frame.t > edge), key=lambda frame: frame.t, default=None)
+  if not window or not before or not after:
+    return None
+  total = mean_difference(gray_frame(recording, before.pts, region), gray_frame(recording, after.pts, region))
+  if not total:
+    return None
+  biggest = max(window, key=lambda frame: frame.mean)
+  share = min(1.0, biggest.mean / total)
+  return {"kind": kind, "t": round(biggest.t, 4), "share": round(share, 2), "frameMean": round(biggest.mean, 2),
+          "totalMean": round(total, 2), "cut": share > CUT_SHARE}
+
+
+# ------------------------------------------------------------------ analyze
+
+def cmd_analyze(args):
+  recording = None
+  region_arg = None
+  surface = None
+  phase_args = []
+  window_arg = None
+  out_dir = None
+  refresh = None
+  sheets_on = True
+  while args:
+    arg = args.pop(0)
+    if arg == "--region" and args:
+      region_arg = args.pop(0)
+    elif arg == "--surface" and args:
+      surface = args.pop(0)
+    elif arg == "--phase" and args:
+      phase_args.append(args.pop(0))
+    elif arg == "--window" and args:
+      window_arg = args.pop(0)
+    elif arg == "--out" and args:
+      out_dir = args.pop(0)
+    elif arg == "--refresh" and args:
+      refresh = float(args.pop(0))
+    elif arg == "--no-sheets":
+      sheets_on = False
+    elif arg.startswith("-"):
+      fail(f"unknown analyze option: {arg}", 2)
+    elif recording is None:
+      recording = arg
+    else:
+      fail(f"unexpected argument: {arg}", 2)
+  if not recording:
+    fail("analyze needs a recording", 2)
+  recording = os.path.abspath(recording)
+  if not os.path.isfile(recording):
+    fail(f"no such recording: {recording}")
+  out_dir = os.path.abspath(out_dir or os.path.splitext(recording)[0] + "-analysis")
+  os.makedirs(out_dir, exist_ok=True)
+  sheet_dir = os.path.join(out_dir, "sheets")
+  if os.path.isdir(sheet_dir):
+    shutil.rmtree(sheet_dir)
+
+  side = read_json(sidecar_path(recording), {})
+  monitor = side.get("monitor") or {}
+  refresh = refresh or float(monitor.get("refreshRate") or 60)
+  width, height = probe_size(recording)
+  packets = probe_packets(recording)
+  origin_pts = packets[0][0]
+  frames = [Frame(i, pts, key) for i, (pts, key) in enumerate(packets)]
+  for frame in frames:
+    frame.t = round(frame.pts - origin_pts, 6)
+  duration = frames[-1].t
+  first = side.get("firstFrame") or read_first_frame(recording)
+  origin = first["realtimeUs"] / 1e6 if first else None
+  notes = []
+  if origin is None:
+    notes.append("no first-frame timestamp (.ts): the journal is not joined")
+
+  # Journal and marks, on the recording's own clock.
+  events = []
+  journal_error = ""
+  if origin is not None:
+    entries, journal_error = read_journal(origin - 2, origin + duration + 2)
+    events = journal_events(entries, origin)
+    if journal_error:
+      notes.append(f"journalctl: {journal_error[:200]}")
+    for mark in side.get("marks", []):
+      events.append({"kind": "mark", "text": mark.get("label"), "realtime": mark["t"],
+                     "t": round(mark["t"] - origin, 4), "source": "face-record"})
+    events.sort(key=lambda event: event["t"])
+  probes = [event["data"] for event in events if event["kind"] == "probe"
+            and (not surface or event["data"].get("surface") == surface)]
+
+  if (phase_args or window_arg) and origin is None and any("@" in text for text in phase_args + [window_arg or ""]):
+    fail("@EPOCH times need the recording's .ts first-frame stamp", 2)
+  phases = [parse_phase(spec, origin or 0) for spec in phase_args]
+  # Bounds: where the card's own motion is looked for. The decoded window adds
+  # a margin so the first frames of the bounds have predecessors.
+  if window_arg:
+    bounds = parse_span(window_arg, origin or 0, "--window")
+  elif phases:
+    bounds = (min(phase["start"] for phase in phases), max(phase["end"] for phase in phases))
+  else:
+    bounds = (0.0, duration + 0.1)
+  bounds = (max(0.0, bounds[0]), min(duration + 0.1, bounds[1]))
+  window_start = max(0.0, bounds[0] - 0.6)
+  window_end = min(duration + 0.1, bounds[1] + 0.6)
+
+  # Region.
+  region = None
+  region_source = None
+  explicit = parse_region(region_arg)
+  if explicit:
+    region, region_source = explicit, "argument"
+  else:
+    window = region_arg
+    rect, rect_window = probe_rect(events, None if window in (None, "") else window, surface)
+    if not window and rect_window:
+      window = rect_window
+    if not window:
+      fail("give --region WxH+X+Y, a layer namespace, or lock", 2)
+    if not monitor:
+      live = pick_monitor(None)
+      monitor = monitor_info(live)
+      notes.append("no recording sidecar: the monitor geometry is today's")
+    if window == "lock":
+      area = {"x": 0, "y": 0, "w": width, "h": height}
+      origin_x = origin_y = 0
+      area_source = "the whole monitor (lock surface)"
+    else:
+      monitor_found, layer, area_source = layer_rect(side, window, live_ok=True)
+      if not layer:
+        fail(f"no layer {window} in the recording's marks or on screen now; pass --region WxH+X+Y")
+      area = to_device(monitor_found or monitor, layer["x"], layer["y"], layer["w"], layer["h"])
+      origin_x, origin_y = area["x"], area["y"]
+    scale = float(monitor.get("scale") or 1)
+    if rect:
+      region = {"x": origin_x + round(rect["x"] * scale), "y": origin_y + round(rect["y"] * scale),
+                "w": round(rect["w"] * scale), "h": round(rect["h"] * scale)}
+      region_source = f"probe rect in {window} ({area_source})"
+    else:
+      area = clip_region(area, width, height)
+      # Skip the first second and the last moments, where a whole layer fades
+      # in and out.
+      settle = (bounds[0] + 1.0, bounds[1] - 0.3) if bounds[1] - bounds[0] > 2.0 else bounds
+      found = auto_region(recording, area, origin_pts + settle[0], origin_pts + settle[1], out_dir)
+      if found:
+        region = found
+        region_source = f"where {window} keeps moving ({area_source})"
+      else:
+        region = area
+        region_source = f"all of {window}: nothing moved inside it ({area_source})"
+  region = clip_region(region, width, height)
+  area = region["w"] * region["h"]
+
+  measure(recording, frames, region, origin_pts + window_start, origin_pts + window_end, out_dir)
+  for frame in frames:
+    if frame.t < WARMUP_S:
+      frame.mean = None
+  min_pixels = classify(frames, area)
+  measured = [frame for frame in frames if frame.mean is not None]
+
+  # Capture gaps: the recorder itself missed a frame.
+  intervals_all = [b.t - a.t for a, b in zip(frames, frames[1:])]
+  nominal = statistics.median(intervals_all) if intervals_all else 1 / 60
+  gaps = [{"t": round(b.t, 4), "ms": round((b.t - a.t) * 1000, 1)}
+          for a, b in zip(frames, frames[1:])
+          if b.t - a.t > 1.5 * nominal and max(window_start, WARMUP_S) <= b.t <= window_end]
+
+  # Where the card is on screen and moving.
+  changed_times = [frame.t for frame in measured if frame.changed and bounds[0] - 0.3 <= frame.t <= bounds[1]]
+  active = None
+  if changed_times:
+    active = {"start": changed_times[0], "end": changed_times[-1]}
+    quiet_before = not any(frame.changed for frame in measured if active["start"] - QUIET_S <= frame.t < active["start"])
+    has_before = any(frame.t < active["start"] - QUIET_S for frame in measured)
+    quiet_after = not any(frame.changed for frame in measured if active["end"] < frame.t <= active["end"] + QUIET_S)
+    has_after = any(active["end"] + QUIET_S < frame.t <= bounds[1] + QUIET_S for frame in measured)
+    active["appears"] = quiet_before and has_before
+    active["disappears"] = quiet_after and has_after
+  intervals = list(zip(changed_times, changed_times[1:]))
+
+  if not phases and events:
+    phases = [phase for phase in probe_phases(events, surface, active["end"] if active else bounds[1])
+              if phase["end"] > bounds[0] and phase["start"] < bounds[1]]
+  auto = []
+  if active and active["appears"]:
+    auto.append({"name": "entrance", "start": active["start"], "end": active["start"] + ENTRANCE_S, "source": "motion"})
+  if active and active["disappears"]:
+    auto.append({"name": "exit", "start": max(active["start"], active["end"] - EXIT_S), "end": active["end"] + 1e-3,
+                 "source": "motion"})
+  if not phases and active:
+    phases = [{"name": "active", "start": active["start"], "end": active["end"] + 1e-3, "source": "motion"}]
+  phases = [phase_stats(phase, measured, intervals, gaps, refresh, active) for phase in phases + auto]
+
+  cuts = []
+  if active and active["appears"]:
+    cuts.append(cut_check(recording, frames, region, "appear", active["start"], origin_pts))
+  if active and active["disappears"]:
+    cuts.append(cut_check(recording, frames, region, "disappear", active["end"], origin_pts))
+  cuts = [cut for cut in cuts if cut]
+
+  # Motion trace.
+  with open(os.path.join(out_dir, "motion.tsv"), "w") as f:
+    f.write("frame\tt\tkey\tmean\tstrongPixels\tpresented\tanyChange\n")
+    for frame in measured:
+      f.write(f"{frame.index}\t{frame.t:.4f}\t{int(frame.key)}\t{frame.mean:.3f}\t{frame.strong or 0}\t"
+              f"{int(frame.changed)}\t{int(frame.any)}\n")
+
+  sheets = []
+  if sheets_on and measured:
+    os.makedirs(sheet_dir, exist_ok=True)
+    shown = sheet_region(region, width, height)
+    span_start = (active["start"] if active else window_start) - 0.3
+    span_end = (active["end"] if active else window_end) + 0.3
+    span_start, span_end = max(0.0, span_start), min(duration + 0.01, span_end)
+    rate = round(min(10.0, 48 / max(0.1, span_end - span_start)), 3)
+    path = os.path.join(sheet_dir, "coarse.png")
+    if sheet(recording, frames, origin_pts, shown, span_start, span_end, path, False, 8, 240, rate=rate):
+      sheets.append({"label": f"coarse, {rate:g} per second", "path": path, "start": round(span_start, 3),
+                     "end": round(span_end, 3)})
+    for when, label in transitions(phases, events, active, surface, bounds[0] - 0.3, bounds[1])[:10]:
+      start, end = frame_span(frames, when, 6, 18)
+      path = os.path.join(sheet_dir, f"t{when:07.3f}-{slug(label)}.png")
+      if sheet(recording, frames, origin_pts, shown, start, end, path, True, 6, 300):
+        sheets.append({"label": label, "path": path, "start": round(start, 3), "end": round(end, 3), "at": round(when, 3)})
+
+  summary = {
+    "version": 1,
+    "recording": {
+      "path": recording, "width": width, "height": height, "frames": len(frames),
+      "duration": round(duration, 3), "captureFps": round(1 / nominal, 1) if nominal else None,
+      "firstFrameRealtime": origin, "monitor": monitor or None,
+    },
+    "refreshHz": refresh,
+    "region": dict(region, spec=region_spec(region), source=region_source),
+    "classifier": {"pixelDelta": PIXEL_DELTA, "minPixels": min_pixels, "meanFloor": MEAN_FLOOR,
+                   "meanRatio": MEAN_RATIO, "keyFramesNeedPixels": True, "anyChangeMean": ANY_CHANGE_MEAN},
+    "window": {"start": round(bounds[0], 3), "end": round(bounds[1], 3)},
+    "active": active,
+    "phases": phases,
+    "captureGaps": gaps,
+    "cuts": cuts,
+    "events": events,
+    "probes": probes,
+    "sheets": sheets,
+    "notes": notes,
+    "files": {"motion": os.path.join(out_dir, "motion.tsv"), "summary": os.path.join(out_dir, "summary.txt")},
+  }
+  write_json(os.path.join(out_dir, "summary.json"), summary)
+  text = summary_text(summary)
+  with open(os.path.join(out_dir, "summary.txt"), "w") as f:
+    f.write(text)
+  print(text, end="")
+  print(f"\nsummary: {os.path.join(out_dir, 'summary.json')}")
+
+
+def slug(text):
+  return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")[:40] or "moment"
+
+
+def transitions(phases, events, active, surface, window_start, window_end):
+  moments = []
+  if active:
+    moments.append((active["start"], "first change", 0))
+    moments.append((active["end"], "last change", 0))
+  for phase in phases:
+    if phase.get("source") in ("argument", "probe"):
+      moments.append((phase["start"], f"{phase['name']} starts", 1))
+  for event in events:
+    if event["kind"] == "probe-event" and (not surface or event["data"].get("surface") == surface):
+      moments.append((event["t"], event["text"], 1))
+    elif event["kind"] == "pam" and event["data"].get("module") == "pam_howdy":
+      moments.append((event["t"], f"verdict {event['data'].get('verdict') or ''}", 2))
+    elif event["kind"] == "mark":
+      moments.append((event["t"], event["text"], 3))
+  moments.sort(key=lambda moment: (moment[2], moment[0]))
+  chosen = []
+  for when, label, _ in moments:
+    if when is None or not window_start <= when <= window_end:
+      continue
+    if any(abs(when - other) < 0.15 for other, _ in chosen):
+      continue
+    chosen.append((when, label))
+  return sorted(chosen)
+
+
+def summary_text(summary):
+  rec = summary["recording"]
+  lines = []
+  stamp = ""
+  if rec["firstFrameRealtime"]:
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(rec["firstFrameRealtime"]))
+    stamp += f".{int(rec['firstFrameRealtime'] * 1000) % 1000:03d}"
+  lines.append(f"Recording   {rec['path']}")
+  lines.append(f"            {rec['width']}x{rec['height']}, {rec['frames']} frames, {rec['duration']:.2f} s, "
+               f"capture {rec['captureFps']} fps, first frame {stamp or 'unknown'} (t=0)")
+  region = summary["region"]
+  lines.append(f"Region      {region['spec']} device px, {region['source']}")
+  c = summary["classifier"]
+  lines.append(f"Presented   a frame counts when >= {c['minPixels']} px moved >= {c['pixelDelta']} levels, or the mean "
+               f"change is >= {c['meanFloor']} and >= {c['meanRatio']:g} x the previous frame's (not on key frames); "
+               f"refresh {summary['refreshHz']:g} Hz")
+  active = summary["active"]
+  if active:
+    edges = ", ".join(word for word, on in (("appears", active["appears"]), ("disappears", active["disappears"])) if on)
+    lines.append(f"Moving      {active['start']:.3f} - {active['end']:.3f} s" + (f" (card {edges})" if edges else ""))
+  else:
+    lines.append("Moving      nothing changed in the region")
+  lines.append("")
+  lines.append(f"{'phase':<16}{'start':>8}{'end':>8}{'presented':>11}{'any-change':>12}{'longest hold':>20}{'gaps':>6}")
+  for phase in summary["phases"]:
+    hold = f"{phase['longestHoldRefreshes']} @ {phase['longestHoldAt']:.3f}" if phase["longestHoldAt"] is not None else "-"
+    fps = f"{phase['presentedFps']:.1f}" if phase["presentedFps"] is not None else "-"
+    anyf = f"{phase['anyChangeFps']:.1f}" if phase["anyChangeFps"] is not None else "-"
+    lines.append(f"{phase['name'][:15]:<16}{phase['start']:>8.3f}{phase['end']:>8.3f}{fps:>11}{anyf:>12}{hold:>20}"
+                 f"{phase['captureGaps']:>6}")
+    if phase.get("perSecond"):
+      per = " ".join(f"{second['presented']}/{second['anyChange']}" for second in phase["perSecond"])
+      lines.append(f"{'':<16}each second, presented/any-change: {per}")
+  lines.append("            presented and any-change are frames per second; holds are in refreshes")
+  gaps = summary["captureGaps"]
+  lines.append("")
+  if gaps:
+    listed = ", ".join(f"{gap['ms']:.0f} ms @ {gap['t']:.3f}" for gap in gaps[:8])
+    lines.append(f"Capture gaps {len(gaps)}: {listed}" + (" ..." if len(gaps) > 8 else ""))
+  else:
+    lines.append("Capture gaps none")
+  for cut in summary["cuts"]:
+    verdict = "hard cut" if cut["cut"] else "eased"
+    lines.append(f"{cut['kind'].capitalize():<12}{verdict}: {cut['share'] * 100:.0f}% of the change in one frame at "
+                 f"{cut['t']:.3f} s")
+  if summary["events"]:
+    lines.append("")
+    lines.append("Events      t (s from the first frame)")
+    for event in summary["events"]:
+      if event["kind"] == "probe":
+        continue
+      lines.append(f"  {event['t']:>9.3f}  {event['kind']:<12}{event['text']}")
+  for probe in summary["probes"]:
+    lines.append(f"Probe       {json.dumps(probe, separators=(',', ':'))[:300]}")
+  if summary["sheets"]:
+    lines.append("")
+    lines.append("Sheets")
+    for item in summary["sheets"]:
+      lines.append(f"  {item['label'][:34]:<36}{item['path']}")
+  for note in summary["notes"]:
+    lines.append(f"Note        {note}")
+  return "\n".join(lines) + "\n"
+
+
+def main():
+  argv = sys.argv[1:]
+  if not argv or argv[0] in ("-h", "--help", "help"):
+    print(__doc__.strip())
+    return
+  command, args = argv[0], argv[1:]
+  commands = {"start": cmd_start, "mark": cmd_mark, "stop": cmd_stop, "analyze": cmd_analyze}
+  if command not in commands:
+    fail(f"unknown command: {command} (start, mark, stop, analyze)", 2)
+  signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+  commands[command](args)
+
+
+if __name__ == "__main__":
+  main()

@@ -1,0 +1,1024 @@
+#!/usr/bin/python3 -I
+# omarchy:summary=Record one face card scenario and check it against the face UX targets
+# omarchy:args=<lock|polkit|sudo> <scenario> [--real] [--shell WORKTREE] [--fps 60|120] [--out DIR] [--keep] [--scan-ms MS]
+# omarchy:examples=omarchy dev face check sudo match | omarchy dev face check lock miss --fps 120 | omarchy dev face check polkit match --real | omarchy dev face check lock match --shell ~/src/omarchy-branch
+# omarchy:hidden=true
+"""Record one face card scenario, analyze it, and print PASS or FAIL per target.
+
+  omarchy-dev-face-check <lock|polkit|sudo> <scenario> [options]
+
+Preview scenarios (default) use the shell's display-only drivers: no PAM, no
+camera, no keyboard input.
+  lock    match | miss | match-slow | idle     (omarchy-shell lock previewFace)
+  polkit  match | miss | typed | cancel        (omarchy-shell polkit preview)
+  sudo    match | miss | match-slow | demo     (omarchy-shell face-card replay)
+When the running shell lacks a driver it says so and falls back where it can:
+the sudo card to face-card show, the lock to its scanning-only preview.
+
+--real drives the real prompt with the owner's face (scenarios match | miss):
+sudo -k /usr/bin/true on a pty with one empty Enter (Ctrl+C on a second
+prompt), pkexec /usr/bin/true with an empty Enter, or the lock with an empty
+Enter. It never types a password.
+
+Options
+  --shell WORKTREE  run against WORKTREE's shell, then put the session's own
+                    shell back with omarchy-restart-shell
+  --fps 60|120      capture rate (default 60; 120 oversamples the 60 Hz panel)
+  --scan-ms MS      scan length for a preview scenario
+  --out DIR         where the run goes (default: a new directory under
+                    ~/.cache/omarchy/face-check, keeping the newest 10 runs)
+  --keep            keep the full-screen recording (otherwise only a clip of
+                    the card is kept)
+
+Targets (plans/face-ux.md): smooth = at least 57 presented fps and no frame held
+over 2 refreshes in every animating phase; still = the probe rects never
+change; prompt = the scan shows on the first frames after the trigger (sudo:
+the card is up before the verdict); brief = verdict to card gone within
+0.6-1.3 s; cuts = no appearance or disappearance happens in one frame.
+"""
+import json
+import math
+import os
+import pty
+import re
+import select
+import shutil
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+# The recorder that ships beside this command, whichever checkout that is.
+RECORD = os.path.join(os.path.dirname(os.path.realpath(__file__)), "omarchy-dev-face-record")
+PKEXEC_UNIT = "omarchy-face-check-pkexec"
+KEEP_RUNS = 10
+
+MIN_FPS = 57
+MAX_HOLD = 2
+MIN_PHASE_S = 0.15
+PROMPT_EVENT_MS = 50
+PROMPT_FRAME_MS = 100
+BEAT_MIN_S = 0.6
+BEAT_MAX_S = 1.3
+STILL_STATES = {"idle", "hidden", "closed", "none"}
+RESULT_STATES = {"recognized", "notRecognized"}
+
+# Scan lengths close to the real ones (plans/face-ux.md): time to verdict on a
+# match, a slow match, and howdy's timeout on a miss.
+SCAN_MS = {"lock": 900, "polkit": 500, "sudo": 620}
+SLOW_SCAN_MS = 2300
+MISS_SCAN_MS = 4200
+
+PREVIEW = {
+  "lock": ("match", "miss", "match-slow", "idle"),
+  "polkit": ("match", "miss", "typed", "cancel"),
+  "sudo": ("match", "miss", "match-slow", "demo"),
+}
+REAL = ("match", "miss")
+# The window each surface draws in: a layer namespace, or the session lock.
+WINDOWS = {
+  ("lock", False): "omarchy-lock-preview",
+  ("lock", True): "lock",
+  ("polkit", False): "omarchy-polkit-preview",
+  ("polkit", True): "omarchy-polkit",
+  ("sudo", False): "markgroves-face-card",
+  ("sudo", True): "markgroves-face-card",
+}
+SURFACES = {
+  ("lock", False): "lock-preview",
+  ("lock", True): "lock",
+  ("polkit", False): "polkit-preview",
+  ("polkit", True): "polkit",
+  ("sudo", False): "sudo",
+  ("sudo", True): "sudo",
+}
+PAM_SERVICES = {"sudo": "sudo", "polkit": "polkit-1", "lock": "omarchy-lock-face"}
+
+
+class Abort(Exception):
+  pass
+
+
+def say(text=""):
+  print(text, flush=True)
+
+
+def fail(message, code=2):
+  print(f"omarchy-dev-face-check: {message}", file=sys.stderr)
+  sys.exit(code)
+
+
+def sleep(seconds):
+  time.sleep(max(0.0, seconds))
+
+
+def run(argv, env=None, timeout=None):
+  try:
+    return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=timeout, stdin=subprocess.DEVNULL)
+  except subprocess.TimeoutExpired:
+    return subprocess.CompletedProcess(argv, 124, "", "timed out")
+
+
+def notify(headline, body):
+  run(["omarchy-notification-send", headline, body])
+
+
+def interrupt(signum, frame):
+  raise KeyboardInterrupt
+
+
+def cleaning_up(signum, frame):
+  # A handler, not SIG_IGN: an ignored signal stays ignored in every command
+  # the clean-up runs, while a handler resets to the default across exec.
+  os.write(2, b"still cleaning up: the recorder stops and the session's shell comes back first\n")
+
+
+class Check:
+  def __init__(self, surface, scenario, options, out):
+    self.surface = surface
+    self.scenario = scenario
+    self.real = options["real"]
+    self.worktree = options["worktree"]
+    self.fps = options["fps"]
+    self.scan_ms = options["scan_ms"]
+    self.out = out
+    self.window = WINDOWS[(surface, self.real)]
+    self.probe_surface = SURFACES[(surface, self.real)]
+    self.env = dict(os.environ)
+    if self.worktree:
+      self.env["OMARCHY_PATH"] = self.worktree
+    self.recording = os.path.join(out, "rec.mp4")
+    self.recording_started = False
+    self.functions = {}
+    self.plan = None
+    self.marks = []
+    self.layers = []
+    self.notes = []
+    self.driver = ""
+    self.trigger = None
+    self.verdict = None
+    self.end_at = None
+    self.cleanup = []
+
+  # ---------------------------------------------------------------- helpers
+
+  def ipc(self, *args):
+    """Call the shell. Returns (ok, output)."""
+    result = run(["omarchy-shell", *args], env=self.env, timeout=10)
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+  def read_functions(self):
+    """Each IPC target's functions and their argument counts, without calling any."""
+    shell = os.path.join(self.env.get("OMARCHY_PATH", ""), "shell")
+    result = run(["qs", "ipc", "-n", "-p", shell, "show"], env=self.env, timeout=10)
+    functions = {}
+    target = None
+    for line in result.stdout.splitlines():
+      match = re.match(r"target (\S+)", line)
+      if match:
+        target = match.group(1)
+        functions[target] = {}
+        continue
+      match = re.match(r"\s+function (\w+)\((.*)\)", line)
+      if match and target:
+        arguments = [part for part in match.group(2).split(",") if part.strip()]
+        functions[target][match.group(1)] = len(arguments)
+    self.functions = functions
+
+  def has(self, target, function):
+    return function in self.functions.get(target, {})
+
+  def mark(self, label, at=None):
+    at = time.time() if at is None else at
+    self.marks.append({"label": label, "t": at})
+    return at
+
+  def wait_layer(self, namespace, timeout):
+    """Wait for a layer to map, and keep the layers as they were then."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+      found = current_layers()
+      if any(layer["namespace"] == namespace for layer in found or []):
+        self.layers = found
+        return True
+      sleep(0.03)
+    return False
+
+  def wait_layer_gone(self, namespace, timeout):
+    """Wait for a layer to unmap. The compositor answers, so the shell is left alone while it is measured."""
+    def gone():
+      found = current_layers()
+      return found is not None and all(layer["namespace"] != namespace for layer in found)
+
+    return self.wait_until(gone, timeout, step=0.2)
+
+  def wait_until(self, predicate, timeout, step=0.25):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+      if predicate():
+        return True
+      sleep(step)
+    return False
+
+  def scan_seconds(self):
+    if self.scan_ms:
+      return self.scan_ms / 1000
+    if self.scenario == "miss":
+      return MISS_SCAN_MS / 1000
+    if self.scenario == "match-slow":
+      return SLOW_SCAN_MS / 1000
+    return SCAN_MS[self.surface] / 1000
+
+  def preview_call(self, target, function, scenario):
+    """The argument list for a preview driver, with its optional scan length if it takes one."""
+    count = self.functions[target][function]
+    args = [target, function, scenario]
+    if count >= 2:
+      args.append(str(round(self.scan_seconds() * 1000)))
+    return args
+
+  # ------------------------------------------------------------------ shell
+
+  def swap_shell(self):
+    if not os.path.isfile(os.path.join(self.worktree, "shell", "shell.qml")):
+      raise Abort(f"{self.worktree} has no shell/shell.qml")
+    # The path goes into a Lua string that Hyprland hands to a shell.
+    if any(c in self.worktree for c in "\"'\\"):
+      raise Abort("the worktree path cannot hold quotes or backslashes")
+    notify("Face check", f"Swapping in the shell from {self.worktree} for a recording. Yours comes back right after.")
+    sleep(3)
+    session = session_omarchy_path()
+    self.cleanup.append(self.restore_shell)
+    for _ in range(20):
+      if run(["timeout", "30", "quickshell", "kill", "-p", f"{session}/shell", "--any-display"]).returncode != 0:
+        break
+    launch = f'hl.dsp.exec_cmd("env OMARCHY_PATH={shlex.quote(self.worktree)} omarchy-launch-shell")'
+    result = run(["hyprctl", "dispatch", launch])
+    if result.returncode != 0:
+      raise Abort(f"could not launch the worktree's shell: {(result.stdout + result.stderr).strip()}")
+    # A starting shell answers one ping and then drops calls while plugins load.
+    answers = 0
+    deadline = time.monotonic() + 40
+    while answers < 4 and time.monotonic() < deadline:
+      ok, _ = self.ipc("shell", "ping")
+      answers = answers + 1 if ok else 0
+      sleep(1)
+    if answers < 4:
+      raise Abort("the worktree's shell did not come up")
+    self.notes.append(f"ran against the shell from {self.worktree}")
+
+  def restore_shell(self):
+    result = run(["omarchy-restart-shell"], timeout=120)
+    if result.returncode != 0:
+      say(f"!! omarchy-restart-shell failed: {(result.stdout + result.stderr).strip()}")
+      say("!! run omarchy-restart-shell to bring the session's own shell back")
+    else:
+      say("restored the session's shell")
+
+  # --------------------------------------------------------------- recording
+
+  def start_recording(self):
+    # Clean-up is armed before the start: a start that times out may still
+    # have left the recorder unit running.
+    self.recording_started = True
+    self.cleanup.append(self.stop_recording)
+    result = run([RECORD, "start", "--out", self.recording, "--fps", str(self.fps)], env=self.env, timeout=30)
+    if result.returncode != 0:
+      raise Abort(result.stderr.strip() or "the recorder did not start")
+
+  def stop_recording(self):
+    if not self.recording_started:
+      return
+    result = run([RECORD, "stop"], env=self.env, timeout=60)
+    if result.returncode != 0:
+      raise Abort(result.stderr.strip() or "the recorder did not stop cleanly")
+    self.recording_started = False
+    # The moments go into the recording's sidecar only now: nothing spawns
+    # while the card is being measured.
+    path = f"{self.recording}.json"
+    try:
+      with open(path) as f:
+        side = json.load(f)
+    except (OSError, ValueError):
+      side = {}
+    for mark in self.marks:
+      side.setdefault("marks", []).append(dict(mark, layers=self.layers if mark["label"] == "card up" else []))
+    with open(path, "w") as f:
+      json.dump(side, f, indent=2)
+
+  # ---------------------------------------------------------------- preview
+
+  def prepare(self):
+    """Pick the driver before recording, and warn the owner when needed."""
+    self.read_functions()
+    if not self.functions:
+      raise Abort("could not list the shell's IPC targets (qs ipc show)")
+    if self.real:
+      self.prepare_real()
+      return
+    if self.surface == "sudo":
+      if self.scenario == "demo":
+        self.plan = "demo"
+      elif self.has("face-card", "replay"):
+        self.plan = "replay"
+      elif self.has("face-card", "show"):
+        self.plan = "show"
+        self.notes.append("the running face-card has no replay (plugin 3.0): driven with face-card show")
+      else:
+        raise Abort("the running shell has no face-card target (is the face plugin loaded?)")
+    elif self.surface == "lock":
+      if self.has("lock", "previewFace"):
+        self.plan = "previewFace"
+      elif self.has("lock", "preview"):
+        if self.scenario != "match":
+          raise Abort("the running lock has no previewFace; only its scanning loop can be shown (scenario match)")
+        self.plan = "preview"
+        self.notes.append("the running lock has no previewFace: only its scanning loop was checked")
+        notify("Face check", "A lock screen preview shows for a few seconds and takes the keyboard until it hides.")
+        sleep(2)
+      else:
+        raise Abort("the running shell has no lock preview")
+    elif self.surface == "polkit":
+      if not self.has("polkit", "preview"):
+        raise Abort("the running shell has no polkit preview (omarchy-shell polkit preview); "
+                    "use --shell with a worktree that has it, or --real")
+      self.plan = "preview"
+
+  def drive_sudo_preview(self):
+    scan = self.scan_seconds()
+    result = "notRecognized" if self.scenario == "miss" else "recognized"
+    if self.plan == "demo":
+      self.trigger = self.mark("trigger")
+      ok, output = self.ipc("face-card", "demo")
+      self.driver = "omarchy-shell face-card demo (scan, then recognized after 2.4 s)"
+      self.verdict = self.trigger + 2.4
+    elif self.plan == "replay":
+      spec = f"scanning:0,{result}:{round(scan * 1000)}"
+      self.trigger = self.mark("trigger")
+      ok, output = self.ipc("face-card", "replay", spec)
+      self.driver = f'omarchy-shell face-card replay "{spec}"'
+      self.verdict = self.trigger + scan
+    else:
+      self.trigger = self.mark("trigger")
+      ok, output = self.ipc("face-card", "show", "scanning")
+      self.driver = f"omarchy-shell face-card show scanning, then show {result} {scan:g} s later"
+    if not ok:
+      raise Abort(f"{self.driver} failed: {output}")
+    if not self.wait_layer(self.window, 3):
+      self.notes.append(f"the {self.window} layer never mapped")
+    self.mark("card up")
+    if self.plan == "show":
+      sleep(self.trigger + scan - time.time())
+      self.verdict = self.mark("verdict")
+      self.ipc("face-card", "show", result)
+    else:
+      self.mark("verdict", self.verdict)
+    if not self.wait_layer_gone(self.window, scan + 9):
+      self.notes.append("the card was still open when the run ended")
+    sleep(0.8)
+    self.end_at = time.time()
+
+  def drive_lock_preview(self):
+    scan = self.scan_seconds()
+    if self.plan == "previewFace":
+      args = self.preview_call("lock", "previewFace", self.scenario)
+      self.driver = "omarchy-shell " + " ".join(args)
+    else:
+      args = ["lock", "preview"]
+      self.driver = "omarchy-shell lock preview (scanning loop only: the running shell has no previewFace)"
+    self.cleanup.append(lambda: self.ipc("lock", "hidePreview"))
+    self.trigger = self.mark("trigger")
+    ok, output = self.ipc(*args)
+    if not ok:
+      raise Abort(f"{self.driver} failed: {output}")
+    if self.wait_layer(self.window, 3):
+      self.mark("card up")
+    if self.plan == "preview":
+      sleep(self.trigger + 3.5 - time.time())
+    elif self.scenario == "idle":
+      sleep(self.trigger + 2.5 - time.time())
+    else:
+      # The run leads in idle, waits out the art's boot and its beat, then
+      # goes back to idle: wait for that rather than guess it.
+      self.wait_preview_done("lock", lambda status: status.get("previewFace") == "", scan + 8)
+      sleep(0.6)
+    self.end_at = self.mark("hide")
+    self.ipc("lock", "hidePreview")
+    sleep(0.5)
+
+  def wait_preview_done(self, target, done, timeout):
+    """Poll a preview's status until done() says the run is over; it must first be seen running."""
+    seen = {"running": False}
+
+    def finished():
+      ok, output = self.ipc(target, "status")
+      if not ok:
+        return False
+      try:
+        status = json.loads(output)
+      except ValueError:
+        return False
+      if not done(status):
+        seen["running"] = True
+        return False
+      return seen["running"]
+
+    if not self.wait_until(finished, timeout):
+      self.notes.append(f"the {target} preview was still running after {timeout:.0f} s")
+
+  def drive_polkit_preview(self):
+    scan = self.scan_seconds()
+    args = self.preview_call("polkit", "preview", self.scenario)
+    self.driver = "omarchy-shell " + " ".join(args)
+    self.cleanup.append(lambda: self.ipc("polkit", "hidePreview"))
+    self.trigger = self.mark("trigger")
+    ok, output = self.ipc(*args)
+    if not ok:
+      raise Abort(f"{self.driver} failed: {output}")
+    if self.wait_layer(self.window, 3):
+      self.mark("card up")
+    self.wait_preview_done("polkit", lambda status: not status.get("previewing") or status.get("phase") == "closed",
+                           scan + 8)
+    sleep(0.6)
+    self.end_at = self.mark("hide")
+    self.ipc("polkit", "hidePreview")
+    sleep(0.5)
+
+  # ------------------------------------------------------------------- real
+
+  def prepare_real(self):
+    if self.surface == "sudo":
+      # sudo is setuid: it runs under the user manager, outside any no_new_privs.
+      listing = run(["systemd-run", "--user", "--collect", "--quiet", "--pipe", "--wait",
+                     "sudo", "-n", "-l", "/usr/bin/true"], timeout=20)
+      if listing.returncode == 0:
+        self.notes.append("sudo -n -l /usr/bin/true answers without a password: a passwordless grant may skip the "
+                          "face prompt unless a stricter rule asks for one on /usr/bin/true")
+        say("warning: sudo lists /usr/bin/true without a password, so the face prompt may be skipped")
+    elif self.surface == "lock":
+      ok, locked = self.ipc("lock", "isLocked")
+      if not ok:
+        raise Abort(f"the lock does not answer: {locked}")
+      if locked != "false":
+        raise Abort("the session is already locked; a second lock means an imminent suspend")
+    look = "Look at the camera" if self.scenario == "match" else "Look away from the camera"
+    notify("Face check", f"{look}: a real {self.surface} prompt starts in 3 s. Nothing is typed for you.")
+    sleep(3)
+
+  def drive_sudo_real(self):
+    me = os.path.realpath(__file__)
+    self.driver = "sudo -k /usr/bin/true on a pty under the user manager, one empty Enter"
+    process = subprocess.Popen(["systemd-run", "--user", "--collect", "--quiet", "--pipe", "--wait", me,
+                                "--sudo-pty", "0.8", "12"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    # The card's layer only exists while it shows, so catch it while sudo runs:
+    # its place comes from that snapshot.
+    if self.wait_layer(self.window, 8):
+      self.mark("card up")
+    try:
+      stdout, _ = process.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+      process.kill()
+      stdout, _ = process.communicate()
+    moments = {}
+    lines = (stdout or "").splitlines()
+    for line in lines:
+      parts = line.split(" ", 2)
+      try:
+        moments.setdefault(parts[1], float(parts[0]))
+      except (ValueError, IndexError):
+        continue
+    if "prompt" not in moments:
+      raise Abort("sudo never asked for authentication, so there was no face prompt (a passwordless grant or "
+                  "cached credentials): " + " | ".join(lines[-3:]))
+    for name in ("prompt", "enter", "reprompt", "exit"):
+      if name in moments:
+        self.mark(name, moments[name])
+    self.trigger = moments.get("enter", moments["prompt"])
+    exit_line = next((line for line in lines if " exit " in line), "")
+    self.notes.append("sudo " + (exit_line.split(" exit ", 1)[1] if exit_line else "did not report its exit"))
+    # The card can stay a while after sudo has returned.
+    if not self.wait_layer_gone(self.window, 10):
+      self.notes.append("the card was still open when the run ended")
+    sleep(0.8)
+    self.end_at = time.time()
+
+  def drive_polkit_real(self):
+    self.driver = "pkexec /usr/bin/true under the user manager, an empty Enter 1 s after the card maps"
+    process = subprocess.Popen(["systemd-run", "--user", "--collect", "--quiet", "--wait", f"--unit={PKEXEC_UNIT}",
+                                "-p", "StandardOutput=null", "-p", "StandardError=null", "pkexec", "/usr/bin/true"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    self.cleanup.append(lambda: run(["systemctl", "--user", "stop", PKEXEC_UNIT]))
+    self.mark("pkexec")
+    if not self.wait_layer(self.window, 8):
+      raise Abort("the polkit card never mapped")
+    card_up = self.mark("card up")
+    sleep(1.0)
+    if has_probe_events(card_up - 0.5, time.time(), self.probe_surface, state="scanning"):
+      # An Automatic stack scans as the card maps; the map is the trigger and
+      # an empty Enter would answer nothing.
+      self.trigger = card_up
+      self.notes.append("the stack scans without Enter; timed from the card mapping")
+    else:
+      self.trigger = self.mark("enter")
+      run(["wtype", "-k", "Return"])
+    try:
+      self.notes.append(f"pkexec exited {process.wait(timeout=20)}")
+    except subprocess.TimeoutExpired:
+      run(["systemctl", "--user", "stop", PKEXEC_UNIT])
+      self.notes.append("pkexec was still waiting after 20 s and was cancelled")
+    self.mark("done")
+    if not self.wait_layer_gone(self.window, 5):
+      self.notes.append("the polkit card was still up when the run ended")
+    sleep(0.8)
+    self.end_at = time.time()
+
+  def drive_lock_real(self):
+    self.driver = "omarchy-shell lock lock, then an empty Enter 1 s after it is secure"
+    ok, output = self.ipc("lock", "lock")
+    if not ok or output != "ok":
+      raise Abort(f"lock lock answered {output}")
+    self.mark("lock")
+
+    def secure():
+      ok, status = self.ipc("lock", "status")
+      try:
+        return ok and json.loads(status).get("secure") is True
+      except ValueError:
+        return False
+
+    if not self.wait_until(secure, 8, step=0.1):
+      self.notes.append("the lock never reported secure")
+    sleep(1.0)
+    self.trigger = self.mark("enter")
+    run(["wtype", "-k", "Return"])
+    # Ask the compositor, not the shell, while the card is being measured.
+    unlocked = self.wait_until(lambda: run(["omarchy-hyprland-session-locked"]).returncode == 1, 60, step=0.1)
+    if unlocked:
+      self.mark("unlocked")
+    else:
+      self.notes.append("still locked after 60 s: unlock it yourself")
+    sleep(1.0)
+    self.end_at = time.time()
+
+  def drive(self):
+    drivers = {
+      (False, "sudo"): self.drive_sudo_preview, (False, "lock"): self.drive_lock_preview,
+      (False, "polkit"): self.drive_polkit_preview, (True, "sudo"): self.drive_sudo_real,
+      (True, "lock"): self.drive_lock_real, (True, "polkit"): self.drive_polkit_real,
+    }
+    drivers[(self.real, self.surface)]()
+
+  # --------------------------------------------------------------- analysis
+
+  def analyze(self):
+    origin = read_first_frame(self.recording)
+    if origin is None or self.trigger is None:
+      raise Abort("the recording has no first-frame stamp, or the scenario never started")
+    end_at = self.end_at or time.time()
+    if self.real and self.verdict is None:
+      self.verdict = pam_verdict(self.trigger - 0.05, end_at + 1, PAM_SERVICES[self.surface])
+    start = max(0.0, self.trigger - origin - 0.4)
+    end = end_at - origin
+    args = [RECORD, "analyze", self.recording, "--out", os.path.join(self.out, "analysis"),
+            "--region", self.window, "--surface", self.probe_surface, "--window", f"{start:.3f}-{end:.3f}"]
+    if not has_probe_events(self.trigger - 1, end_at + 1, self.probe_surface):
+      # No probe states to cut phases from: use the driver's own moments.
+      trigger = self.trigger - origin
+      if self.verdict and self.verdict - origin > trigger:
+        verdict = self.verdict - origin
+        args += ["--phase", f"scanning={trigger:.3f}-{verdict:.3f}", "--phase", f"result={verdict:.3f}-{end:.3f}"]
+      else:
+        name = "idle" if self.scenario == "idle" else "scanning"
+        args += ["--phase", f"{name}={trigger:.3f}-{end:.3f}"]
+    result = run(args, env=self.env, timeout=900)
+    if result.returncode != 0:
+      raise Abort(f"analysis failed: {result.stderr.strip()}")
+    with open(os.path.join(self.out, "analysis", "summary.json")) as f:
+      return json.load(f)
+
+  # ------------------------------------------------------------- evaluation
+
+  def evaluate(self, summary):
+    checks = []
+    refresh = summary["refreshHz"]
+    origin = summary["recording"]["firstFrameRealtime"]
+    events = summary["events"]
+    mine = [event for event in events if event["kind"] == "probe-event"
+            and event["data"].get("surface") == self.probe_surface]
+    probes = summary["probes"]
+    trigger = self.trigger - origin
+    verdict = self.verdict_time(mine, trigger, origin)
+    motion = read_motion(summary["files"]["motion"])
+    active = summary.get("active")
+
+    # Smooth: every animating phase.
+    parts = []
+    status = "PASS"
+    measured = 0
+    for phase in summary["phases"]:
+      state = phase.get("state") or phase["name"]
+      if state in STILL_STATES:
+        continue
+      if phase["duration"] < MIN_PHASE_S:
+        parts.append(f"{phase['name']} too short to rate ({phase['duration'] * 1000:.0f} ms)")
+        continue
+      measured += 1
+      refreshes = max(1, round(phase["duration"] * refresh))
+      need = math.floor(MIN_FPS / refresh * refreshes)
+      if phase["changed"] < need or phase["longestHoldRefreshes"] > MAX_HOLD:
+        status = "FAIL"
+      parts.append(f"{phase['name']} {phase['presentedFps']:.1f} fps ({phase['changed']}/{refreshes}) "
+                   f"hold {phase['longestHoldRefreshes']}")
+    if not measured:
+      status = "SKIP"
+      parts.append("no animating phase long enough to rate")
+    checks.append(("smooth", status, "; ".join(parts)))
+
+    # Still: one rect per part (the face art, and the card around it where
+    # the surface logs that too) for every probe event of the surface.
+    rects = {}
+    for event in mine:
+      rect = event["data"].get("rect") or {}
+      if not rect.get("w"):
+        continue
+      part = event["data"].get("part") or "face"
+      key = tuple(rect.get(name) for name in ("x", "y", "w", "h"))
+      seen = rects.setdefault(part, [])
+      if key not in [k for k, _ in seen]:
+        seen.append((key, event["data"].get("state")))
+    moved = [probe for probe in probes if probe.get("moved")]
+    if not mine and not probes:
+      checks.append(("still", "SKIP", "the shell logged no face-probe events"))
+    elif any(len(seen) > 1 for seen in rects.values()) or moved:
+      listed = "; ".join(part + " " + " -> ".join(f"{state} {key[0]},{key[1]} {key[2]}x{key[3]}" for key, state in seen)
+                         for part, seen in rects.items() if len(seen) > 1)
+      checks.append(("still", "FAIL", listed + ("; the probe reports moved" if moved else "")))
+    else:
+      where = ", ".join(f"{part} " + "{},{} {}x{}".format(*seen[0][0]) for part, seen in rects.items()) or "no rect"
+      checks.append(("still", "PASS", f"one rect per part over {len(mine)} events ({where})"))
+
+    # Prompt: the scan shows straight after the trigger.
+    first_change = next((t for t, presented in motion if presented and t >= trigger - 0.005), None)
+    latency = (first_change - trigger) * 1000 if first_change is not None else None
+    seen = f"first card frame +{latency:.0f} ms" if latency is not None else "the card never moved"
+    if self.surface == "sudo":
+      if verdict is None:
+        checks.append(("prompt", "SKIP", f"{seen}; no verdict to compare with"))
+      elif first_change is not None and first_change < verdict:
+        checks.append(("prompt", "PASS", f"{seen}, {(verdict - first_change) * 1000:.0f} ms before the verdict"))
+      else:
+        checks.append(("prompt", "FAIL", f"{seen}; the verdict came at +{(verdict - trigger) * 1000:.0f} ms"))
+    elif self.scenario == "idle":
+      checks.append(("prompt", "N/A", "no scan in this scenario"))
+    elif not mine:
+      checks.append(("prompt", "SKIP", f"{seen}; no probe events to read the state from"))
+    elif not self.real:
+      # A preview presses Enter inside the shell: the scan's start is its own
+      # first scanning event, and the card must show on the next frames.
+      scan = next((event["t"] for event in mine if event["t"] >= trigger - 0.02
+                   and event["data"].get("state") == "scanning"), None)
+      if scan is None:
+        checks.append(("prompt", "FAIL", "no scanning event after the trigger"))
+      else:
+        shown = next((t for t, presented in motion if presented and t >= scan - 0.005), None)
+        wait = (shown - scan) * 1000 if shown is not None else None
+        ok = wait is not None and wait <= PROMPT_FRAME_MS
+        text = f"first card frame +{wait:.0f} ms after the scan started" if wait is not None else "the card never moved"
+        checks.append(("prompt", "PASS" if ok else "FAIL", f"{text} (limit {PROMPT_FRAME_MS} ms)"))
+    else:
+      after = [event for event in mine if event["t"] >= trigger - 0.02]
+      if not after:
+        checks.append(("prompt", "FAIL", f"{seen}; no probe event after the trigger"))
+      else:
+        delay = (after[0]["t"] - trigger) * 1000
+        state = after[0]["data"].get("state")
+        ok = state == "scanning" and delay <= PROMPT_EVENT_MS and latency is not None and latency <= PROMPT_FRAME_MS
+        checks.append(("prompt", "PASS" if ok else "FAIL",
+                       f"first state {state} +{delay:.0f} ms; {seen} (limits {PROMPT_EVENT_MS}, {PROMPT_FRAME_MS} ms)"))
+
+    # Brief: one short beat between the verdict and the card leaving.
+    gone = None
+    for probe in probes:
+      hidden = probe.get("hiddenAt")
+      if not isinstance(hidden, (int, float)) or hidden <= 1e12 or not probe.get("swaps"):
+        continue
+      at = hidden / 1000 - origin
+      if verdict is not None and at > verdict and gone is None:
+        gone = at
+    if gone is None and active and active.get("disappears"):
+      gone = active["end"]
+    if self.scenario in ("idle", "typed", "cancel") or self.plan == "preview" and self.surface == "lock":
+      checks.append(("brief", "N/A", "no verdict in this scenario"))
+    elif verdict is None or gone is None:
+      checks.append(("brief", "SKIP", "the verdict or the card leaving was not seen"))
+    else:
+      beat = gone - verdict
+      ok = BEAT_MIN_S <= beat <= BEAT_MAX_S
+      checks.append(("brief", "PASS" if ok else "FAIL",
+                     f"verdict to card gone {beat:.2f} s (target {BEAT_MIN_S}-{BEAT_MAX_S} s)"))
+
+    # Cuts: nothing appears or disappears in one frame.
+    cuts = summary.get("cuts") or []
+    if not cuts:
+      checks.append(("cuts", "SKIP", "the card did not both start and end inside the recording"))
+    else:
+      text = "; ".join(f"{cut['kind']} {cut['share'] * 100:.0f}% in one frame at {cut['t']:.3f} s" for cut in cuts)
+      checks.append(("cuts", "FAIL" if any(cut["cut"] for cut in cuts) else "PASS", text))
+    return checks
+
+  def verdict_time(self, mine, trigger, origin):
+    """When the verdict landed: the probe's result state, else PAM or the driver's own moment."""
+    for event in mine:
+      if event["t"] >= trigger - 0.02 and event["data"].get("state") in RESULT_STATES:
+        return event["t"]
+    return self.verdict - origin if self.verdict else None
+
+
+def current_layers():
+  """Every mapped layer, or None when Hyprland does not answer."""
+  result = run(["hyprctl", "layers", "-j"])
+  try:
+    monitors = json.loads(result.stdout)
+  except ValueError:
+    return None
+  found = []
+  for name, monitor in monitors.items():
+    for level in monitor.get("levels", {}).values():
+      found += [dict({key: layer.get(key) for key in ("namespace", "x", "y", "w", "h")}, monitor=name) for layer in level]
+  return found
+
+
+def pam_verdict(since, until, service):
+  """The realtime of the first face verdict PAM logged for SERVICE (pam_howdy logs
+  only "Face verification succeeded|timed out|failed" lines; the filter keeps it so)."""
+  result = run(["journalctl", "-o", "json", "--no-pager", "-q", "--since", f"@{since:.3f}", "--until",
+                f"@{until:.3f}", "-g", rf"pam_howdy\({re.escape(service)}:auth\): Face verification"], timeout=30)
+  for line in result.stdout.splitlines():
+    try:
+      entry = json.loads(line)
+      return int(entry["__REALTIME_TIMESTAMP"]) / 1e6
+    except (ValueError, KeyError):
+      continue
+  return None
+
+
+def has_probe_events(since, until, surface, state=None):
+  result = run(["journalctl", "-o", "cat", "--no-pager", "-q", "--since", f"@{since:.3f}", "--until",
+                f"@{until:.3f}", "-g", "face-probe-event"], timeout=30)
+  wanted = [f'"surface":"{surface}"'] + ([f'"state":"{state}"'] if state else [])
+  return any(all(w in line.replace(" ", "") for w in wanted) for line in result.stdout.splitlines())
+
+
+def read_first_frame(recording):
+  try:
+    with open(f"{recording}.ts") as f:
+      return int(f.read().split()[3]) / 1e6
+  except (OSError, IndexError, ValueError):
+    return None
+
+
+def read_motion(path):
+  rows = []
+  try:
+    with open(path) as f:
+      next(f)
+      for line in f:
+        fields = line.rstrip("\n").split("\t")
+        rows.append((float(fields[1]), fields[5] == "1"))
+  except (OSError, StopIteration, IndexError, ValueError):
+    pass
+  return rows
+
+
+def session_omarchy_path():
+  result = run(["systemctl", "--user", "show-environment"])
+  for line in result.stdout.splitlines():
+    if line.startswith("OMARCHY_PATH="):
+      return line.split("=", 1)[1]
+  return os.environ.get("OMARCHY_PATH", "")
+
+
+def cache_root():
+  base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+  return os.path.join(base, "omarchy", "face-check")
+
+
+RUN_NAME = re.compile(r"^\d{8}-\d{6}-(lock|polkit|sudo)-[a-z-]+$")
+
+
+def prune(root):
+  runs = sorted((name for name in os.listdir(root) if RUN_NAME.match(name)), reverse=True)
+  for name in runs[KEEP_RUNS:]:
+    shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+
+
+def clip(recording, summary, out):
+  """A short clip of the card and its margin, to watch the run back."""
+  span = summary.get("active") or summary["window"]
+  region = summary["region"]
+  pad = max(16, round(max(region["w"], region["h"]) * 0.12))
+  width, height = summary["recording"]["width"], summary["recording"]["height"]
+  x, y = max(0, region["x"] - pad), max(0, region["y"] - pad)
+  w, h = min(width - x, region["w"] + 2 * pad), min(height - y, region["h"] + 2 * pad)
+  start = max(0.0, span["start"] - 0.5)
+  result = run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", f"{start:.3f}", "-i", recording,
+                "-t", f"{span['end'] - span['start'] + 1.0:.3f}", "-vf", f"crop={w - w % 2}:{h - h % 2}:{x}:{y}",
+                "-c:v", "libx264", "-crf", "12", "-preset", "veryfast", "-an", out], timeout=300)
+  return result.returncode == 0
+
+
+def sudo_pty(delay, limit):
+  """Run sudo -k /usr/bin/true on a fresh pty and press Enter once on the empty prompt.
+
+  Prints CLOCK_REALTIME moments. Never types a password: one empty line, then
+  Ctrl+C if sudo asks again.
+  """
+  def log(event, extra=""):
+    print(f"{time.clock_gettime(time.CLOCK_REALTIME):.6f} {event} {extra}".rstrip(), flush=True)
+
+  pid, fd = pty.fork()
+  if pid == 0:
+    # A fixed prompt: sudo translates its own, which the match below would miss.
+    os.execvpe("sudo", ["sudo", "-k", "-p", "[sudo] password for %p: ", "/usr/bin/true"], dict(os.environ, LC_ALL="C"))
+  log("spawn", f"pid={pid}")
+  buffer = b""
+  sent = False
+  status = None
+  start = time.monotonic()
+  while time.monotonic() - start < limit:
+    ready, _, _ = select.select([fd], [], [], 0.05)
+    if ready:
+      try:
+        chunk = os.read(fd, 4096)
+      except OSError:
+        break
+      if not chunk:
+        break
+      buffer += chunk
+      if not sent and b"password for" in buffer:
+        log("prompt")
+        time.sleep(delay)
+        os.write(fd, b"\n")
+        log("enter")
+        sent = True
+        buffer = b""
+      elif sent and b"password for" in buffer:
+        log("reprompt")
+        os.write(fd, b"\x03")
+        buffer = b""
+    done, wait_status = os.waitpid(pid, os.WNOHANG)
+    if done:
+      status = os.waitstatus_to_exitcode(wait_status)
+      break
+  if status is None:
+    try:
+      os.kill(pid, signal.SIGINT)
+      time.sleep(0.3)
+      _, wait_status = os.waitpid(pid, 0)
+      status = os.waitstatus_to_exitcode(wait_status)
+    except (ChildProcessError, ProcessLookupError):
+      pass
+  log("exit", f"status={status}")
+
+
+def parse_args(argv):
+  options = {"real": False, "worktree": None, "fps": 60, "out": None, "keep": False, "scan_ms": None}
+  positional = []
+  while argv:
+    arg = argv.pop(0)
+    if arg == "--real":
+      options["real"] = True
+    elif arg == "--shell" and argv:
+      options["worktree"] = os.path.abspath(os.path.expanduser(argv.pop(0)))
+    elif arg == "--fps" and argv:
+      options["fps"] = int(argv.pop(0))
+    elif arg == "--out" and argv:
+      options["out"] = os.path.abspath(argv.pop(0))
+    elif arg == "--keep":
+      options["keep"] = True
+    elif arg == "--scan-ms" and argv:
+      options["scan_ms"] = int(argv.pop(0))
+    elif arg in ("-h", "--help"):
+      print(__doc__.strip())
+      sys.exit(0)
+    elif arg.startswith("-"):
+      fail(f"unknown option: {arg}")
+    else:
+      positional.append(arg)
+  if len(positional) != 2:
+    fail("usage: omarchy-dev-face-check <lock|polkit|sudo> <scenario> [--real] [--shell WORKTREE] "
+         "[--fps 60|120] [--out DIR] [--keep] [--scan-ms MS]")
+  surface, scenario = positional
+  if surface not in PREVIEW:
+    fail(f"unknown surface {surface} (lock, polkit, sudo)")
+  allowed = REAL if options["real"] else PREVIEW[surface]
+  if scenario not in allowed:
+    fail(f"{surface}{' --real' if options['real'] else ''} scenarios: {', '.join(allowed)}")
+  if options["fps"] not in (60, 120):
+    fail("--fps takes 60 or 120")
+  return surface, scenario, options
+
+
+def report(check, summary, error, options):
+  data = {"surface": check.surface, "scenario": check.scenario, "real": check.real, "driver": check.driver,
+          "notes": check.notes, "out": check.out}
+  lines = [f"face check: {check.surface} {check.scenario} ({'real' if check.real else 'preview'})"]
+  if check.driver:
+    lines.append(f"  driver   {check.driver}")
+  if error:
+    data.update(result="ERROR", error=error)
+    lines.append(f"  ERROR    {error}")
+    status = 2
+  else:
+    checks = check.evaluate(summary)
+    states = [state for _, state, _ in checks]
+    result = "FAIL" if "FAIL" in states else ("INCOMPLETE" if "SKIP" in states else "PASS")
+    data["checks"] = [{"name": name, "status": state, "detail": detail} for name, state, detail in checks]
+    data["result"] = result
+    for name, state, detail in checks:
+      lines.append(f"  {state:<5}    {name:<7} {detail}")
+    lines.append(f"  RESULT   {result}")
+    status = 0 if result == "PASS" else 1
+    analysis = os.path.join(check.out, "analysis")
+    data["summary"] = os.path.join(analysis, "summary.txt")
+    lines.append(f"  region   {summary['region']['spec']} ({summary['region']['source']})")
+    lines.append(f"  summary  {data['summary']}")
+    lines.append(f"  sheets   {os.path.join(analysis, 'sheets')}")
+    clip_path = os.path.join(check.out, "clip.mp4")
+    if clip(check.recording, summary, clip_path):
+      data["clip"] = clip_path
+      lines.append(f"  clip     {clip_path}")
+    if options["keep"]:
+      lines.append(f"  video    {check.recording}")
+    elif os.path.exists(check.recording):
+      os.remove(check.recording)
+  for note in check.notes:
+    lines.append(f"  note     {note}")
+  with open(os.path.join(check.out, "check.json"), "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+  with open(os.path.join(check.out, "check.txt"), "w") as f:
+    f.write("\n".join(lines) + "\n")
+  say("\n".join(lines))
+  return status
+
+
+def main():
+  argv = sys.argv[1:]
+  if argv[:1] == ["--sudo-pty"]:
+    sudo_pty(float(argv[1]), float(argv[2]))
+    return
+  if not argv:
+    print(__doc__.strip())
+    sys.exit(2)
+  surface, scenario, options = parse_args(argv)
+
+  root = cache_root()
+  out = options["out"] or os.path.join(root, f"{time.strftime('%Y%m%d-%H%M%S')}-{surface}-{scenario}")
+  os.makedirs(out, exist_ok=True)
+  check = Check(surface, scenario, options, out)
+  # A kill or a closed terminal still runs the clean-up: the recorder stops,
+  # previews hide, and a swapped shell goes back.
+  signal.signal(signal.SIGTERM, interrupt)
+  signal.signal(signal.SIGHUP, interrupt)
+
+  say(f"face check: {surface} {scenario} ({'real' if check.real else 'preview'}) -> {out}")
+  summary = None
+  error = None
+  try:
+    if subprocess.run(["systemctl", "--user", "is-active", "-q", "omarchy-face-record"]).returncode == 0:
+      raise Abort("another face recording is running")
+    if check.worktree:
+      check.swap_shell()
+    ok, output = check.ipc("shell", "ping")
+    if not ok:
+      raise Abort(f"the shell does not answer: {output}")
+    check.prepare()
+    check.start_recording()
+    check.drive()
+    check.stop_recording()
+    summary = check.analyze()
+  except Abort as problem:
+    error = str(problem)
+  except KeyboardInterrupt:
+    error = "interrupted"
+  finally:
+    # A second Ctrl+C or kill must not cut the clean-up short and leave the
+    # recorder or a swapped shell behind.
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+      signal.signal(sig, cleaning_up)
+    for step in reversed(check.cleanup):
+      try:
+        step()
+      except Exception as problem:  # noqa: BLE001 - every clean-up step has to run
+        say(f"!! clean-up: {problem}")
+  status = report(check, summary, error, options)
+  if not options["out"]:
+    prune(root)
+  sys.exit(status)
+
+
+if __name__ == "__main__":
+  main()
