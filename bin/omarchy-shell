@@ -59,6 +59,12 @@ if [[ $1 == "shell" && ( $2 == "summon" || $2 == "toggle" ) ]] && (( $# == 3 ));
   set -- "$1" "$2" "$3" "{}"
 fi
 
+# The lock preview's face run takes an optional pretend scan time; the shell
+# declares it, so an omitted one goes as "".
+if [[ $1 == "lock" && $2 == "previewFace" ]] && (( $# == 3 )); then
+  set -- "$1" "$2" "$3" ""
+fi
+
 # The shell answers on its own socket first: socat starts in ~5ms where a qs
 # ipc client takes ~45ms. Fields are split by unit separators and the request
 # ends with a record separator, so an argument holding either goes through qs

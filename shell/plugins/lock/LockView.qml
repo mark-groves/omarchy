@@ -13,6 +13,8 @@ Item {
   property bool fingerprintConfigured: false
   property bool fingerprintUnavailable: false
   property bool faceConfigured: false
+  // Names this view in the face card's probe lines: "lock" or "lock-preview".
+  property string faceSurface: "lock"
   // "scanning" | "recognized" | "notRecognized", driven by the lock service.
   property string faceState: "scanning"
   property int facePlaybackEpoch: 0
@@ -22,6 +24,9 @@ Item {
   // it stays hidden until the user asks.
   property bool faceCardActive: true
   property bool faceOnRequest: false
+  // Set by the lock service once a face match has played: everything over
+  // the wallpaper fades out before the session lock is released.
+  property bool unlocking: false
   property bool authenticatingPassword: false
   property string failureMessage: ""
   property int failedAttempts: 0
@@ -42,17 +47,27 @@ Item {
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for the fingerprint icon
   // (icon width plus a gap) so the centered dots never run under it.
-  readonly property real fingerprintReserve: (fingerprintConfigured || faceIcon.visible) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
+  readonly property real fingerprintReserve: (fingerprintConfigured || faceGlyphShown) ? Math.round(Math.max(fingerprintIcon.implicitWidth, faceIcon.implicitWidth) + 12) : 0
   // The card sits above the field so the mesh scan is large enough to read.
   // Without chrome the in-field glyph keeps the old 381×67 geometry.
   readonly property bool faceCardPainting: faceConfigured && !fingerprintConfigured && FaceChrome.ready && faceCardActive
   // The face button: shown while face can be asked for and is not running.
   readonly property bool faceRequestAvailable: faceOnRequest && faceConfigured && !fingerprintConfigured
     && !faceCardActive && inputEnabled && !authenticatingPassword
+  // The in-field glyph: the face button while face can be asked for, and a
+  // stand-in for a running scan when there is no card to paint.
+  readonly property bool faceGlyphShown: faceConfigured && !fingerprintConfigured
+    && (faceRequestAvailable || (faceCardActive && !faceCardPainting))
   // Latched by the first frame the card puts on screen, so a card whose
   // surface is not presenting yet never shows a stuck frame.
   property bool faceCardRevealed: false
-  onFaceCardPaintingChanged: if (!faceCardPainting) faceCardRevealed = false
+  // A card that was on screen fades out when it is taken away (a miss, Esc,
+  // typing, a blank) and resets once the fade is done, instead of cutting out.
+  property bool faceCardLeaving: false
+  readonly property bool faceCardShown: faceCardPainting || faceCardLeaving
+  // The captions under the card, one line each, in slots of fixed height.
+  readonly property int faceCaptionGap: Style.space(10)
+
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -75,6 +90,41 @@ Item {
   signal faceRequested()
   signal faceCancelRequested()
   signal faceScanShown()
+
+  // Both fades run on the render thread: while the card animates, its frames
+  // keep the GUI thread too busy for a smooth NumberAnimation.
+  onFaceCardRevealedChanged: if (faceCardRevealed) faceCardEnter.restart()
+  onFaceCardPaintingChanged: {
+    if (faceCardPainting) {
+      if (!faceCardLeaving) return
+      // Asked for again while it was fading out: it comes back from there.
+      faceCardLeaving = false
+      faceCardExit.stop()
+      faceCardEnter.restart()
+    } else if (faceCardRevealed && !unlocking) {
+      faceCardLeaving = true
+      faceCardEnter.stop()
+      faceCardExit.restart()
+    } else {
+      // Never on screen, or under content that has already faded out.
+      resetFaceCard()
+    }
+  }
+
+  function finishFaceCardExit() {
+    // A stopped animator reports finished as well; a card that was asked
+    // for again is not done.
+    if (!faceCardLeaving) return
+    faceCardLeaving = false
+    resetFaceCard()
+  }
+
+  function resetFaceCard() {
+    faceCardEnter.stop()
+    faceCardExit.stop()
+    faceCard.opacity = 0
+    faceCardRevealed = false
+  }
 
   function forcePasswordFocus() {
     passwordInput.forceActiveFocus()
@@ -132,6 +182,94 @@ Item {
     text: "●".repeat(passwordInput.text.length)
   }
 
+  // One caption line under the face card. Its slot is one line of its font
+  // high whatever it says, so no change of words can move the card. New
+  // words fade in over the old, which leave in half the time so the two
+  // never read at once (motion.md).
+  component FaceCaption: Item {
+    id: caption
+
+    property string text: ""
+    property color color: "white"
+    property font font
+    property real lineOpacity: 1
+    // Off while the card is not on screen, so a new showing starts on its
+    // own words instead of fading in from the last ones.
+    property bool animate: true
+
+    // Two lines take turns; the front one shows the current words.
+    property bool frontIsA: true
+    property string textA: ""
+    property string textB: ""
+    property color colorA: "white"
+    property color colorB: "white"
+
+    function settle() {
+      var shownText = frontIsA ? textA : textB
+      var shownColor = frontIsA ? colorA : colorB
+      if (shownText === text && Qt.colorEqual(shownColor, color)) return
+      if (frontIsA) {
+        textB = text
+        colorB = color
+      } else {
+        textA = text
+        colorA = color
+      }
+      frontIsA = !frontIsA
+    }
+
+    height: Math.ceil(lineMetrics.height)
+
+    // A state changes the words and their colour together: one swap for both.
+    onTextChanged: Qt.callLater(caption.settle)
+    onColorChanged: Qt.callLater(caption.settle)
+    Component.onCompleted: {
+      textA = text
+      colorA = color
+    }
+
+    FontMetrics {
+      id: lineMetrics
+      font: caption.font
+    }
+
+    Text {
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: caption.textA
+      color: caption.colorA
+      font: caption.font
+      opacity: caption.frontIsA ? caption.lineOpacity : 0
+      Behavior on opacity {
+        id: fadeA
+        enabled: caption.animate
+        OpacityAnimator {
+          duration: Style.duration(fadeA.targetValue > 0 ? 180 : 90)
+          easing.type: Easing.OutCubic
+        }
+      }
+    }
+
+    Text {
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: caption.textB
+      color: caption.colorB
+      font: caption.font
+      opacity: caption.frontIsA ? 0 : caption.lineOpacity
+      Behavior on opacity {
+        id: fadeB
+        enabled: caption.animate
+        OpacityAnimator {
+          duration: Style.duration(fadeB.targetValue > 0 ? 180 : 90)
+          easing.type: Easing.OutCubic
+        }
+      }
+    }
+  }
+
   Rectangle {
     anchors.fill: parent
     color: Commons.Color.background
@@ -168,18 +306,40 @@ Item {
       onClicked: { root.wakeRequested(); root.forcePasswordFocus() }
       onPositionChanged: root.wakeRequested()
     }
+  }
+
+  // Everything drawn over the wallpaper. Once a face match has played, the
+  // lock service fades this out before it releases the session lock; the
+  // lock surface keeps every input until then.
+  Item {
+    id: foreground
+    objectName: "lockForeground"
+    anchors.fill: parent
+    opacity: root.unlocking ? 0 : 1
+    Behavior on opacity {
+      id: foregroundFade
+      OpacityAnimator {
+        duration: Style.duration(foregroundFade.targetValue > 0 ? 180 : 150)
+        easing.type: Easing.OutCubic
+      }
+    }
 
     // Host-owned. The chrome plugin supplies numbers and never sees this
     // item or the field it sits above. The same large card as polkit, so
     // the instrument has room for its detail and its bloom.
-    Column {
+    //
+    // It hangs from the field by fixed slots: the card, then one line per
+    // caption whatever the caption says, so it never moves between idle,
+    // scanning, recognized and not recognized.
+    Item {
       id: faceCard
       objectName: "faceCard"
-      visible: root.faceCardPainting
+      visible: root.faceCardShown
       enabled: false
-      opacity: root.faceCardRevealed ? 1 : 0
-      Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-      spacing: Style.space(10)
+      // faceCardEnter and faceCardExit fade it.
+      opacity: 0
+      width: faceIndicator.width
+      height: faceIndicator.height + root.faceCaptionGap + faceStatus.height + root.faceCaptionGap + faceHint.height
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: inputField.top
       anchors.bottomMargin: Style.space(18)
@@ -187,6 +347,7 @@ Item {
       FaceChromeCanvas {
         id: faceIndicator
         objectName: "faceCardIndicator"
+        anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         width: Style.space(FaceChrome.cardSide)
         height: width
@@ -203,30 +364,56 @@ Item {
         foreground: Commons.Color.lock.text
         errorColor: Commons.Color.lock.textError
         backdrop: Commons.Color.lock.background
+        surface: root.faceSurface
       }
 
-      Text {
-        textFormat: Text.PlainText
-        anchors.horizontalCenter: parent.horizontalCenter
+      FaceCaption {
+        id: faceStatus
+        objectName: "faceStatusCaption"
+        anchors.top: faceIndicator.bottom
+        anchors.topMargin: root.faceCaptionGap
+        width: parent.width
         text: root.faceState === "notRecognized" ? Commons.I18n.t("face.notRecognized")
           : (root.faceState === "recognized" ? Commons.I18n.t("face.recognized") : Commons.I18n.t("face.lookAtTheCamera"))
         color: root.faceState === "notRecognized" ? Commons.Color.lock.textError : Commons.Color.lock.text
-        opacity: 0.86
+        lineOpacity: 0.86
+        animate: root.faceCardRevealed
         font.family: Style.font.family
         font.pixelSize: Style.font.body
       }
 
-      Text {
-        textFormat: Text.PlainText
-        anchors.horizontalCenter: parent.horizontalCenter
+      // A recognized face needs no second line; its slot stays, empty.
+      FaceCaption {
+        id: faceHint
+        objectName: "faceHintCaption"
+        anchors.top: faceStatus.bottom
+        anchors.topMargin: root.faceCaptionGap
+        width: parent.width
         text: root.faceState === "notRecognized" ? Commons.I18n.t("face.typeYourPassword")
           : (root.faceState === "scanning" ? Commons.I18n.t("face.orTypeYourPassword") : "")
-        visible: text !== ""
         color: Commons.Color.lock.text
-        opacity: 0.44
+        lineOpacity: 0.44
+        animate: root.faceCardRevealed
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
       }
+    }
+
+    OpacityAnimator {
+      id: faceCardEnter
+      target: faceCard
+      to: 1
+      duration: Style.duration(180)
+      easing.type: Easing.OutCubic
+    }
+
+    OpacityAnimator {
+      id: faceCardExit
+      target: faceCard
+      to: 0
+      duration: Style.duration(120)
+      easing.type: Easing.OutCubic
+      onFinished: root.finishFaceCardExit()
     }
 
     BorderSurface {
@@ -349,8 +536,16 @@ Item {
         anchors.rightMargin: inputField.borderRight + 18
         anchors.verticalCenter: parent.verticalCenter
         // Without a card to paint, the glyph also stands in for a running scan.
+        // It fades as the card takes over from it and as it hands back.
         visible: root.faceConfigured && !root.fingerprintConfigured
-          && (root.faceRequestAvailable || (root.faceCardActive && !root.faceCardPainting))
+        opacity: root.faceGlyphShown ? 1 : 0
+        Behavior on opacity {
+          id: faceIconFade
+          OpacityAnimator {
+            duration: Style.duration(faceIconFade.targetValue > 0 ? 180 : 120)
+            easing.type: Easing.OutCubic
+          }
+        }
         // md-face_recognition: a face in corner brackets, the face-ID mark.
         text: String.fromCodePoint(0xF0C7B)
         color: faceButton.containsMouse ? Commons.Color.lock.borderActive : Commons.Color.lock.placeholder
@@ -381,10 +576,17 @@ Item {
       anchors.top: inputField.bottom
       anchors.topMargin: 18
       anchors.horizontalCenter: inputField.horizontalCenter
-      visible: root.faceRequestAvailable && passwordInput.text.length === 0 && !root.errorState
+      visible: root.faceOnRequest && root.faceConfigured && !root.fingerprintConfigured
+      opacity: root.faceRequestAvailable && passwordInput.text.length === 0 && !root.errorState ? 0.44 : 0
+      Behavior on opacity {
+        id: faceRequestHintFade
+        OpacityAnimator {
+          duration: Style.duration(faceRequestHintFade.targetValue > 0 ? 180 : 120)
+          easing.type: Easing.OutCubic
+        }
+      }
       text: Commons.I18n.t("face.requestHint")
       color: Commons.Color.lock.text
-      opacity: 0.44
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall
       horizontalAlignment: Text.AlignHCenter

@@ -8,6 +8,7 @@ run_node_test <<'JS'
 const fs = require('fs')
 const serviceQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/Service.qml'), 'utf8')
 const viewQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/LockView.qml'), 'utf8')
+const previewDriverQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/PreviewFaceDriver.qml'), 'utf8')
 const applyLock = fs.readFileSync(path.join(root, 'bin/omarchy-apply-lock'), 'utf8')
 
 assert(
@@ -135,8 +136,8 @@ assert(
   'an announced suspend drops the in-flight scan and holds new ones'
 )
 assert(
-  /function holdFaceForSleep\(\) \{[\s\S]*?if \(faceHolding \|\| facePendingMatch\) \{[\s\S]*?faceHolding = false\s*facePendingMatch = false\s*faceUnlockCeiling\.stop\(\)\s*faceMatchWaitTimer\.stop\(\)[\s\S]*?\}\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
-  'a suspend drops a held or waiting result before resetting the card, so no hold is stranded across the resume'
+  /function holdFaceForSleep\(\) \{[\s\S]*?if \(faceHolding \|\| facePendingMatch\) \{[\s\S]*?faceHolding = false\s*facePendingMatch = false\s*faceUnlockCeiling\.stop\(\)\s*faceMatchWaitTimer\.stop\(\)\s*faceUnlocking = false\s*faceUnlockFade\.stop\(\)[\s\S]*?\}\s*cancelFaceRequest\("sleep"\)/.test(serviceQml),
+  'a suspend drops a held or waiting result, or a match already fading out, so nothing is stranded across the resume and the lock stays'
 )
 assert(
   /function noteSleepRequested\(\) \{\s*if \(!lockRequested\) return\s*holdFaceForSleep\(\)/.test(serviceQml),
@@ -230,9 +231,12 @@ assert(
   /if \(root\.holdFaceResult\("recognized"\)\) return\s*\n\s*finishUnlock\(\)/.test(playMatch[0]),
   'with no card to play a match still unlocks immediately'
 )
+const completePlayback = serviceQml.match(/function completeFacePlayback\(\) \{[\s\S]*?\n  \}/)
+const unlockFade = serviceQml.match(/id:\s*faceUnlockFade[\s\S]*?onTriggered:\s*\{[\s\S]*?\n    \}/)
 assert(
-  /function completeFacePlayback\(\)[\s\S]*?finishUnlock\(\)/.test(serviceQml),
-  'a played-out match ends in an unlock'
+  completePlayback && /if \(faceState === "recognized" && lockRequested\) \{\s*fadeOutForUnlock\(\)/.test(completePlayback[0]) &&
+    unlockFade && /if \(!root\.faceUnlocking\) return\s*root\.finishUnlock\(\)/.test(unlockFade[0]),
+  'a played-out match fades the lock out, then unlocks only while that unlock is still owed'
 )
 assert(
   /releaseUnmatchedFace\(\)/.test(faceFinished[0]) && /holdFaceResult\("notRecognized"\)/.test(serviceQml),
@@ -257,8 +261,9 @@ assert(
 
 const teardown = serviceQml.match(/function resetAuthenticationState\(\) \{[\s\S]*?\n  \}/)
 assert(
-  teardown && /faceHolding = false/.test(teardown[0]) && /faceRetryTimer\.stop\(\)/.test(teardown[0]),
-  'tearing the lock down clears a display hold so it cannot unlock later'
+  teardown && /faceHolding = false/.test(teardown[0]) && /faceRetryTimer\.stop\(\)/.test(teardown[0]) &&
+    /faceUnlocking = false\s*faceUnlockFade\.stop\(\)/.test(teardown[0]),
+  'tearing the lock down clears a display hold and an unlock fade so neither can unlock later'
 )
 
 assert(
@@ -274,7 +279,8 @@ assert(
   'the lock card keeps the scan hint and the password fallback'
 )
 assert(
-  /id: faceIcon[\s\S]*?visible:[\s\S]{0,200}?\(root\.faceRequestAvailable \|\| \(root\.faceCardActive && !root\.faceCardPainting\)\)/.test(viewQml),
+  /readonly property bool faceGlyphShown: faceConfigured && !fingerprintConfigured\s*&& \(faceRequestAvailable \|\| \(faceCardActive && !faceCardPainting\)\)/.test(viewQml) &&
+    /id: faceIcon[\s\S]*?opacity: root\.faceGlyphShown \? 1 : 0/.test(viewQml),
   'the glyph is the face button while face can be asked for, and yields to the card once it paints'
 )
 
@@ -329,7 +335,7 @@ assert(
   'a hint under the field says how to start face unlock'
 )
 assert(
-  /opacity: root\.faceCardRevealed \? 1 : 0/.test(viewQml) &&
+  /onFaceCardRevealedChanged: if \(faceCardRevealed\) faceCardEnter\.restart\(\)/.test(viewQml) &&
     /onCyclePresentedChanged: if \(cyclePresented && glassLit\) root\.faceCardRevealed = true/.test(viewQml),
   'the card fades in on its first presented frame, so a stuck frame is never shown'
 )
@@ -352,7 +358,23 @@ assert(
   'lock never loads a plugin Item next to its password field'
 )
 assert(
-  /faceScanning:\s*root\.previewVisible\s*&&\s*root\.faceConfigured/.test(serviceQml),
+  /faceScanning:\s*root\.previewVisible\s*&&/.test(serviceQml),
   'lock preview keeps the scan animation running only while the preview is shown'
 )
+assert(
+  !/PamContext|finishUnlock|sessionLock|completeFacePlayback/.test(previewDriverQml) &&
+    /onFaceResultPlayed:\s*previewFaceDriver\.resultPlayed\(\)/.test(serviceQml) &&
+    /keyboardFocus:\s*root\.previewVisible && !previewFaceDriver\.driven \? WlrKeyboardFocus\.Exclusive : WlrKeyboardFocus\.None/.test(serviceQml),
+  'a face run on the lock preview is display only: no PAM, no unlock and no keyboard'
+)
 JS
+
+# The card is laid out in a window, as on screen, since positioners settle on
+# the window's polish. Offscreen, so it needs no compositor.
+if ! command -v quickshell >/dev/null 2>&1; then
+  skip "quickshell not installed; skipping the lock face card layout"
+  exit 0
+fi
+require_command jq
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software run_qml_fixture lock-face-card \
+  "the lock face card and its captions stay put from idle through scanning, recognized and not recognized" Ui Commons
