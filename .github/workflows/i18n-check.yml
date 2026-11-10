@@ -2,7 +2,10 @@ name: Check translation structure
 
 # The pull-request gate for i18n: individual PRs only add the English side
 # (code plus English catalog entries), so this validates structure, not
-# completeness. Missing translations are pending work for the sync workflow.
+# completeness. Missing translations for a string upstream also has arrive
+# with the upstream syncs; a string added only on this fork stays pending
+# until someone runs `python3 scripts/i18n-sync.py translate --locale`
+# locally.
 # It runs only for pull requests that touch what it checks. A required status
 # check must not be path-filtered, since a PR that skips it waits on it
 # forever, so this needs a job-level condition instead if it is ever made one.
