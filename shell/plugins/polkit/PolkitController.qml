@@ -216,19 +216,45 @@ Item {
     var state = PolkitModel.faceLaneProbeState(root.lane)
     if (state === root.probeState && !force) return
     root.probeState = state
-    var card = root.activeCard()
-    var line = {
-      surface: root.surfaceName,
-      state: state,
-      t: Date.now(),
-      rect: root.rectJson(card ? card.cardRect() : Qt.rect(0, 0, 0, 0)),
-      window: root.windowName,
-      part: "card"
-    }
+    var now = Date.now()
     var log = root.probeLog.slice(-15)
-    log.push({ state: state, t: line.t })
+    log.push({ state: state, t: now })
     root.probeLog = log
-    console.log("face-probe-event " + JSON.stringify(line))
+    var pending = root.probePending.slice()
+    pending.push({ state: state, t: now, surface: root.surfaceName, window: root.windowName })
+    root.probePending = pending
+    root.probeWaits = 0
+    root.flushProbe()
+  }
+
+  // A card in a window the compositor has not sized yet has no place in it,
+  // so its lines wait (a few frames at most) for the window's width. The
+  // time is still the change's.
+  property var probePending: []
+  property int probeWaits: 0
+
+  function flushProbe() {
+    if (!root.probePending.length) return
+    var card = root.activeCard()
+    if (card && card.width <= 0 && root.probeWaits < 30) {
+      root.probeWaits++
+      probeRetry.restart()
+      return
+    }
+    var rect = root.rectJson(card ? card.cardRect() : Qt.rect(0, 0, 0, 0))
+    var pending = root.probePending
+    root.probePending = []
+    for (var i = 0; i < pending.length; i++) {
+      var line = { surface: pending[i].surface, state: pending[i].state, t: pending[i].t, rect: rect,
+        window: pending[i].window, part: "card" }
+      console.log("face-probe-event " + JSON.stringify(line))
+    }
+  }
+
+  Timer {
+    id: probeRetry
+    interval: 16
+    onTriggered: root.flushProbe()
   }
 
   // ---- Flow mirror ------------------------------------------------------------
