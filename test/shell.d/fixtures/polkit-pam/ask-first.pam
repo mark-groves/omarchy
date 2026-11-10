@@ -1,0 +1,11 @@
+#%PAM-1.0
+
+auth   [default=ignore]                         pam_exec.so quiet quiet_log stdout /usr/local/lib/omarchy-face/ask-hint
+auth   [success=ignore conv_err=die default=3]  pam_exec.so quiet quiet_log expose_authtok /usr/local/lib/omarchy-face/authtok-empty
+auth   [default=ignore]                         pam_warn.so
+auth   [default=ignore]                         pam_exec.so quiet quiet_log /usr/local/lib/omarchy-face/omarchy-hw-ir-emitter
+-auth  [success=done default=die]               pam_howdy.so
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+session    include      system-auth

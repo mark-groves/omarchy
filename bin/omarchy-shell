@@ -59,9 +59,9 @@ if [[ $1 == "shell" && ( $2 == "summon" || $2 == "toggle" ) ]] && (( $# == 3 ));
   set -- "$1" "$2" "$3" "{}"
 fi
 
-# The lock preview's face run takes an optional pretend scan time; the shell
+# The lock and polkit previews take an optional pretend scan time; the shell
 # declares it, so an omitted one goes as "".
-if [[ $1 == "lock" && $2 == "previewFace" ]] && (( $# == 3 )); then
+if [[ ($1 == "lock" && $2 == "previewFace") || ($1 == "polkit" && $2 == "preview") ]] && (( $# == 3 )); then
   set -- "$1" "$2" "$3" ""
 fi
 
