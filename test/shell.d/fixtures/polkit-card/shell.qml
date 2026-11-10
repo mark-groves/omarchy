@@ -20,6 +20,9 @@ ShellRoot {
   property var flow: null
   // Card rects seen in each face state, per card.
   property var rects: ({})
+  // Each time the real card's window went away. A request's window must not
+  // unmap and map again on its way to the card.
+  property int realHides: 0
 
   function fail(message) {
     failures.push(String(message))
@@ -181,6 +184,9 @@ ShellRoot {
           top.sample(top.realCard, "real")
           top.sample(top.previewCard, "preview")
         })
+        top.controller.realShownChanged.connect(function() {
+          if (!top.controller.realShown) top.realHides += 1
+        })
         top.check(top.controller.realCard === top.realCard && top.controller.previewCard === top.previewCard, "each card registers with the controller")
         win.requestActivate()
       }
@@ -200,6 +206,7 @@ ShellRoot {
         top.check(lane.trigger === "ask", "the live Ask first stack is an ask lane, got " + lane.trigger)
         top.check(lane.faceState === "idle", "the card opens on the idle face area, not a scan")
         top.check(top.controller.wantsKeyboard, "a live request holds the keyboard")
+        top.check(top.realHides === 0, "the window stays mapped from the request's start to its card")
         top.flow.prompt()
       }
     },
@@ -333,7 +340,33 @@ ShellRoot {
       run: function() {
         top.sameRectEverywhere("preview", ["idle", "scanning", "recognized"])
         top.check(top.rects["preview:idle"][0] === top.rects["real:idle"][0], "the preview card sits where the real one does")
+        top.newRequest()
       }
+    },
+    {
+      // Quickshell starts a queued request as the one before completes,
+      // while that card is still on screen.
+      name: "a queued request takes over the window without unmapping it",
+      until: function() { return top.controller.lane.phase === "open" },
+      run: function() {
+        top.flow.prompt()
+        var field = top.find(top.realCard, "polkitPasswordInput")
+        field.text = "hunter2"
+        top.controller.submitResponse(false)
+        top.flow.succeed()
+        top.check(top.controller.lane.phase === "closing", "a typed password closes the card")
+        var hides = top.realHides
+        top.newRequest()
+        top.check(top.realHides === hides && top.controller.realShown, "the next request keeps the window mapped")
+      }
+    },
+    {
+      until: function() { return top.controller.lane.phase === "open" },
+      run: function() { top.controller.cancelRequest() }
+    },
+    {
+      until: function() { return top.controller.lane.phase === "closed" && !top.controller.realShown },
+      run: function() {}
     }
   ]
 

@@ -287,10 +287,13 @@ Item {
   function beginRealFlow(flow) {
     if (root.previewing) root.stopPreview()
     root.requestSerial += 1
+    // Starting before the reset, so a card still up from the request before
+    // (Quickshell starts a queued one as the last completes) keeps its window
+    // mapped: dialogVisible never reads false in between.
+    root.starting = true
     root.resetLane()
     root.trackedFlow = flow
     root.resolvedUnderLock = false
-    root.starting = true
     root.probeLog = []
     root.syncFromFlow()
     root.refreshLidState()
@@ -306,13 +309,19 @@ Item {
   function lidSettled() {
     lidWait.stop()
     if (!root.starting) return
+    // The lane opens before starting clears. The other way round,
+    // dialogVisible reads false for a moment and the window unmaps and maps
+    // again, taking the keyboard with it, just as the card fades in.
+    var opening = root.flowLive && !root.previewing
+    if (opening) {
+      root.dispatch({
+        type: "open",
+        trigger: PolkitModel.faceLaneTriggerFor(root.pamSteps, root.laptopClosed),
+        prompt: root.responseRequired
+      })
+    }
     root.starting = false
-    if (!root.flowLive || root.previewing) return
-    root.dispatch({
-      type: "open",
-      trigger: PolkitModel.faceLaneTriggerFor(root.pamSteps, root.laptopClosed),
-      prompt: root.responseRequired
-    })
+    if (!opening) return
     root.rearmEmptySubmit()
     Qt.callLater(root.refocus)
   }
