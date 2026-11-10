@@ -94,10 +94,11 @@ Item {
   ShellIpc {
     target: "polkit"
 
-    // "match", "miss", "typed" or "cancel", optionally ":scanMs" (the time
-    // from the scan's start to PAM's answer, or to the Esc).
-    function preview(scenario: string): string {
-      return polkitController.startPreview(scenario)
+    // "match", "miss", "typed" or "cancel". scanMs is the time from the
+    // scan's start to PAM's answer, or to the Esc; "" keeps the scenario's
+    // own, as the lock's previewFace does. Quickshell wants every argument.
+    function preview(scenario: string, scanMs: string): string {
+      return polkitController.startPreview(scanMs === "" ? scenario : scenario + ":" + scanMs)
     }
 
     function hidePreview(): string {

@@ -74,12 +74,12 @@ The card and scrim fade and grow in over 200 ms and fade out over 130 ms, on ren
 A display-only preview plays the Ask first card from a scripted `FakeFlow` on this host's journal timings, so the card can be recorded in every state with no polkitd, PAM or camera:
 
 ```bash
-omarchy-shell polkit preview match        # also miss, typed, cancel
-omarchy-shell polkit preview miss:2500    # ms from the scan's start to PAM's answer (or to the Esc)
+omarchy-shell polkit preview match ""     # also miss, typed, cancel; "" keeps the scenario's scan time
+omarchy-shell polkit preview miss 2500    # ms from the scan's start to PAM's answer (or to the Esc)
 omarchy-shell polkit status               # JSON: phase, faceState, the card rect and recent states
 omarchy-shell polkit hidePreview
 ```
 
-The scan time defaults to 510 ms for a match, 4300 ms for a miss, 250 ms for a typed password and 1200 ms before a cancel. The preview runs through the same controller and card as a real request, in its own `omarchy-polkit-preview` window that never takes the keyboard, has no input region, and draws a field that takes no text; `FakeFlow.submit()` takes no answer. It is refused while a real request owns the card, and a real request ends it.
+Quickshell's IPC wants every argument, so the scan time is always given, as with the lock's `previewFace`. It defaults to 510 ms for a match, 4300 ms for a miss, 250 ms for a typed password and 1200 ms before a cancel. The preview runs through the same controller and card as a real request, in its own `omarchy-polkit-preview` window that never takes the keyboard, has no input region, and draws a field that takes no text; `FakeFlow.submit()` takes no answer. It is refused while a real request owns the card, and a real request ends it.
 
 Each change of what the card shows logs one line on the shell's journal tag, `face-probe-event {"surface":"polkit" | "polkit-preview", "state":…, "t":<epoch ms>, "rect":{"x":…,"y":…,"w":…,"h":…}, "window":"omarchy-polkit" | "omarchy-polkit-preview"}`, where the state is `idle`, `scanning`, `recognized`, `notRecognized`, `password` (a card with no face lane), `closing` or `hidden`, and the rect is the card's, in its window.

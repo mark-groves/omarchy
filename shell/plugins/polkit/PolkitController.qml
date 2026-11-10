@@ -427,7 +427,7 @@ Item {
 
   function startPreview(spec) {
     var parsed = PolkitModel.parsePreviewSpec(spec)
-    if (!parsed) return "unknown scenario: use match, miss, typed or cancel, optionally with :scanMs"
+    if (!parsed) return "unknown scenario: use match, miss, typed or cancel, then a scan time in ms or \"\""
     // A real request owns the card, and the lock covers everything.
     if (root.realBusy) return "busy"
     if (root.sessionLocked) return "locked"
