@@ -459,10 +459,20 @@ class Check:
   def drive_sudo_real(self):
     me = os.path.realpath(__file__)
     self.driver = "sudo -k /usr/bin/true on a pty under the user manager, one empty Enter"
-    result = run(["systemd-run", "--user", "--collect", "--quiet", "--pipe", "--wait", me, "--sudo-pty", "0.8", "12"],
-                 timeout=40)
+    process = subprocess.Popen(["systemd-run", "--user", "--collect", "--quiet", "--pipe", "--wait", me,
+                                "--sudo-pty", "0.8", "12"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    # The card's layer only exists while it shows, so catch it while sudo runs:
+    # its place comes from that snapshot.
+    if self.wait_layer(self.window, 8):
+      self.mark("card up")
+    try:
+      stdout, _ = process.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+      process.kill()
+      stdout, _ = process.communicate()
     moments = {}
-    lines = result.stdout.splitlines()
+    lines = (stdout or "").splitlines()
     for line in lines:
       parts = line.split(" ", 2)
       try:
@@ -479,7 +489,7 @@ class Check:
     exit_line = next((line for line in lines if " exit " in line), "")
     self.notes.append("sudo " + (exit_line.split(" exit ", 1)[1] if exit_line else "did not report its exit"))
     # The card can stay a while after sudo has returned.
-    if self.wait_layer(self.window, 2) and not self.wait_layer_gone(self.window, 10):
+    if not self.wait_layer_gone(self.window, 10):
       self.notes.append("the card was still open when the run ended")
     sleep(0.8)
     self.end_at = time.time()
