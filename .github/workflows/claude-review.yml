@@ -45,6 +45,7 @@ jobs:
         with:
           # The job token can only comment; the Claude app token could also push
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
           anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
           anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
