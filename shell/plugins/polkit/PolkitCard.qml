@@ -467,7 +467,7 @@ Item {
         enabled: visible
 
         Behavior on opacity {
-          NumberAnimation { duration: Style.duration(160) }
+          NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic }
         }
 
         OpticalGlyph {
