@@ -32,7 +32,9 @@ Item {
   // The fingerprint card keeps its own glyph-and-hint face while PAM waits.
   readonly property bool showDefaultChrome: !root.faceLayout && root.cardKind !== "password"
   readonly property bool showField: !root.showDefaultChrome
-  readonly property bool submitted: lane.pending !== ""
+  // An answer PAM is judging, or one it approved while the card finishes the
+  // face lane: the field stays "Checking..." and read-only until the card goes.
+  readonly property bool submitted: lane.pending !== "" || lane.pendingMatch || lane.outcome === "succeeded"
   readonly property bool errorFlash: current && controller.errorFlash
   readonly property var captions: PolkitModel.faceLaneCaptions(lane)
 
