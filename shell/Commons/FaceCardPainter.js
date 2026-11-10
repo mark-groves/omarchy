@@ -29,6 +29,15 @@
 // as faint halos instead, much as a level-1 frame fakes its glow.
 // A level-1 host ignores the trailing value and the unknown op, and paints
 // roles above 2 in the accent, so a level-2 frame still draws there.
+//
+// The replay runs on the shell's GUI thread for every frame of the card: a
+// thousand ops and five thousand path commands. Its loop is written out
+// inline so a typical command costs a few comparisons. A value that is a
+// number already in range passes one test and goes to the context as it is;
+// anything else takes the slow path through coord(), alpha() and the rest,
+// which convert it once and clamp or drop it. Style strings come from a
+// cache, and the context is only told about a style, width or cap that
+// changed since the last op.
 
 var OP_PATH = 0   // [OP_PATH, role, alpha, lineWidth, cmds, glow?]
 var OP_RECT = 1   // [OP_RECT, role, alpha, x, y, w, h, glow?]
@@ -52,6 +61,8 @@ var FALLBACK_HALO = 0.18
 var ROUND_CAP_WIDTH = 2
 // Below one 8-bit step an op changes no pixel, and still costs a raster.
 var MIN_ALPHA = 1 / 255
+// Alpha reaches the context in thousandths, as it always has.
+var ALPHA_STEPS = 1000
 
 function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v) }
 
@@ -104,117 +115,69 @@ function resolveRoles(palette) {
   return out
 }
 
-function rgba(role, a, rgb) {
+function roleIndex(role) {
   var r = Number(role)
-  var c = r >= 1 && r < ROLE_COUNT && Math.floor(r) === r ? rgb[r] : rgb[0]
+  return r >= 1 && r < ROLE_COUNT && Math.floor(r) === r ? r : 0
+}
+
+function rgba(role, a, rgb) {
+  var c = rgb[roleIndex(role)]
   if (!c) return "rgba(0,0,0,0)"
   return "rgba(" + c + "," + alpha(a).toFixed(3) + ")"
 }
 
-function replayPath(ctx, size, cmds) {
-  var n = Math.min(cmds.length, MAX_CMDS)
-  var drew = false
-  for (var i = 0; i < n; i++) {
-    var c = cmds[i]
-    if (!c || !c.length) continue
-    var a = coord(c[1], size)
-    var b = coord(c[2], size)
-    if (a === null || b === null) continue
+// Style strings by role and alpha step, kept until the theme changes. A
+// frame asks for a few dozen distinct ones a thousand times. The replay
+// looks a string up inline and only calls styleMiss() to build a new one.
+var styleCacheKey = ""
+var styleCache = []
 
-    if (c[0] === 0) {
-      ctx.moveTo(a, b)
-      drew = true
-    } else if (c[0] === 1) {
-      ctx.lineTo(a, b)
-      drew = true
-    } else if (c[0] === 2) {
-      var x = coord(c[3], size)
-      var y = coord(c[4], size)
-      if (x === null || y === null) continue
-      ctx.quadraticCurveTo(a, b, x, y)
-      drew = true
-    } else if (c[0] === 3) {
-      var r = coord(c[3], size)
-      var a0 = Number(c[4])
-      var a1 = Number(c[5])
-      if (r === null || r < 0 || !isFinite(a0) || !isFinite(a1)) continue
-      // A sweep beyond a full turn costs the rasteriser nothing extra to clamp
-      // and is never something this card legitimately asks for.
-      if (Math.abs(a1 - a0) > Math.PI * 2) a1 = a0 + Math.PI * 2
-      ctx.arc(a, b, r, a0, a1)
-      drew = true
-    }
+function styleTable(rgb) {
+  var key = rgb.join("|")
+  if (key !== styleCacheKey) {
+    styleCacheKey = key
+    styleCache = []
   }
-  return drew
+  return styleCache
 }
 
-// Draw one paint op. On the sharp layer an op draws at its alpha; on the
-// glow layer its glow value stands in for its alpha.
-function replay(ctx, size, op, rgb, glowLayer, fallback) {
-  if (!op || !op.length) return
-  var g = glowLayer ? glowOf(op) : 1
-  if (g <= 0) return
-  // Only a glow-only op has anything to fall back to.
-  var halo = !glowLayer && fallback && op[0] === OP_PATH && alpha(op[2]) <= 0 ? glowOf(op) * FALLBACK_HALO : 0
+function styleMiss(table, rgb, role, step) {
+  var c = rgb[role]
+  var s = c ? "rgba(" + c + "," + (step / ALPHA_STEPS).toFixed(3) + ")" : "rgba(0,0,0,0)"
+  table[role * (ALPHA_STEPS + 1) + step] = s
+  return s
+}
 
-  if (op[0] === OP_PATH) {
-    var cmds = op[4]
-    if (!cmds || !cmds.length) return
-    var pa = glowLayer ? g : (halo > 0 ? halo : alpha(op[2]))
-    if (pa < MIN_ALPHA) return
-    ctx.strokeStyle = rgba(op[1], pa, rgb)
-    var lw = width(op[3], size)
-    ctx.lineWidth = lw
-    var cap = lw >= ROUND_CAP_WIDTH ? "round" : "square"
-    if (ctx.lineCap !== cap) ctx.lineCap = cap
-    ctx.beginPath()
-    if (replayPath(ctx, size, cmds)) ctx.stroke()
-    return
-  }
-
-  if (op[0] === OP_RECT) {
-    var rx = coord(op[3], size)
-    var ry = coord(op[4], size)
-    var rw = coord(op[5], size)
-    var rh = coord(op[6], size)
-    if (rx === null || ry === null || rw === null || rh === null) return
-    var ra = glowLayer ? g : alpha(op[2])
-    if (ra < MIN_ALPHA) return
-    ctx.fillStyle = rgba(op[1], ra, rgb)
-    ctx.fillRect(rx, ry, rw, rh)
-    return
-  }
-
-  if (op[0] === OP_GRAD) {
-    var gx = coord(op[4], size)
-    var gy = coord(op[5], size)
-    var gw = coord(op[6], size)
-    var gh = coord(op[7], size)
-    var y0 = coord(op[8], size)
-    var y1 = coord(op[9], size)
-    if (gx === null || gy === null || gw === null || gh === null || y0 === null || y1 === null) return
-    var a0 = alpha(op[2])
-    var a1 = alpha(op[3])
-    // Glow stands in for alpha, as it does for a path or a rect. Scale a fade
-    // so its brighter stop is the glow value. A glow-only gradient has no
-    // stop alpha to scale, and still has to light the bloom.
-    if (glowLayer) {
-      var peak = a0 > a1 ? a0 : a1
-      if (peak <= 0) {
-        a0 = g
-        a1 = g
-      } else {
-        var scale = g / peak
-        a0 *= scale
-        a1 *= scale
-      }
+function fillGradient(ctx, size, op, rgb, g, glowLayer) {
+  var gx = coord(op[4], size)
+  var gy = coord(op[5], size)
+  var gw = coord(op[6], size)
+  var gh = coord(op[7], size)
+  var y0 = coord(op[8], size)
+  var y1 = coord(op[9], size)
+  if (gx === null || gy === null || gw === null || gh === null || y0 === null || y1 === null) return false
+  var a0 = alpha(op[2])
+  var a1 = alpha(op[3])
+  // Glow stands in for alpha, as it does for a path or a rect. Scale a fade
+  // so its brighter stop is the glow value. A glow-only gradient has no
+  // stop alpha to scale, and still has to light the bloom.
+  if (glowLayer) {
+    var peak = a0 > a1 ? a0 : a1
+    if (peak <= 0) {
+      a0 = g
+      a1 = g
+    } else {
+      var scale = g / peak
+      a0 *= scale
+      a1 *= scale
     }
-    var grad = ctx.createLinearGradient(0, y0, 0, y1)
-    grad.addColorStop(0, rgba(op[1], a0, rgb))
-    grad.addColorStop(1, rgba(op[1], a1, rgb))
-    ctx.fillStyle = grad
-    ctx.fillRect(gx, gy, gw, gh)
   }
+  var grad = ctx.createLinearGradient(0, y0, 0, y1)
+  grad.addColorStop(0, rgba(op[1], a0, rgb))
+  grad.addColorStop(1, rgba(op[1], a1, rgb))
+  ctx.fillStyle = grad
+  ctx.fillRect(gx, gy, gw, gh)
+  return true
 }
 
 function blendMode(op, additive) {
@@ -226,47 +189,178 @@ function applyScale(ctx, scale) {
   if (isFinite(s) && s > 0 && s !== 1) ctx.scale(s, s)
 }
 
-// `ops` is whatever the plugin returned. It is treated as hostile input.
-// palette: { accent, foreground, errorColor, roles?: [6 colours], additive?, glowFallback? }
-// `scale` maps card coordinates onto a canvas drawn smaller than the card.
-function paint(ctx, size, ops, palette, scale) {
+// Both layers' replay. On the sharp layer an op draws at its alpha; on the
+// glow layer only ops with a glow value draw, and the glow stands in for
+// their alpha. Returns the ops considered (sharp) or drawn (glow).
+function replayOps(ctx, size, ops, palette, scale, glowLayer) {
   ctx.reset()
   ctx.lineCap = "round"
   ctx.lineJoin = "round"
   if (!ops || !ops.length || !palette) return 0
   applyScale(ctx, scale)
   var rgb = resolveRoles(palette)
+  var table = styleTable(rgb)
   var additive = !!palette.additive
-  var fallback = !!palette.glowFallback
-  var n = Math.min(ops.length, MAX_OPS)
+  var fallback = !glowLayer && !!palette.glowFallback
+  if (glowLayer) ctx.globalCompositeOperation = additive ? "lighter" : "source-over"
+  var lo = -4 * size
+  var hi = 5 * size
+  var rowSteps = ALPHA_STEPS + 1
+  // What the context was last told. `fill` is "" after a gradient, which no
+  // style string matches.
+  var stroke = ""
+  var fill = ""
+  var lineWidth = -1
+  var cap = "round"
+  var n = ops.length < MAX_OPS ? ops.length : MAX_OPS
+  var drawn = 0
+
   for (var i = 0; i < n; i++) {
     var op = ops[i]
-    if (op && op[0] === OP_BLEND) ctx.globalCompositeOperation = blendMode(op, additive)
-    else replay(ctx, size, op, rgb, false, fallback)
+    if (!op) continue
+    var kind = op[0]
+
+    if (kind === OP_BLEND) {
+      if (!glowLayer) ctx.globalCompositeOperation = blendMode(op, additive)
+      continue
+    }
+    if (!op.length) continue
+
+    var g = 1
+    if (glowLayer) {
+      if (drawn >= MAX_GLOW_OPS) break
+      g = glowOf(op)
+      if (g <= 0) continue
+      drawn++
+    }
+
+    // The op's alpha on this layer.
+    var a = glowLayer ? g : op[2]
+    if (typeof a !== "number" || !(a >= 0 && a <= 1)) a = alpha(a)
+
+    var role = op[1]
+    if (role !== 0 && role !== 1 && role !== 2 && role !== 3 && role !== 4 && role !== 5) role = roleIndex(role)
+
+    if (kind === OP_PATH) {
+      var cmds = op[4]
+      if (!cmds || !cmds.length) continue
+      // Only a glow-only op has anything to fall back to.
+      if (fallback && a <= 0) a = glowOf(op) * FALLBACK_HALO
+      if (a < MIN_ALPHA) continue
+      var step = (a * ALPHA_STEPS + 0.5) | 0
+      var style = table[role * rowSteps + step]
+      if (style === undefined) style = styleMiss(table, rgb, role, step)
+      if (style !== stroke) {
+        ctx.strokeStyle = style
+        stroke = style
+      }
+      var lw = op[3]
+      if (typeof lw !== "number" || !(lw >= 0.1 && lw <= 2)) lw = width(lw, size)
+      if (lw !== lineWidth) {
+        ctx.lineWidth = lw
+        lineWidth = lw
+      }
+      var pathCap = lw >= ROUND_CAP_WIDTH ? "round" : "square"
+      if (pathCap !== cap) {
+        ctx.lineCap = pathCap
+        cap = pathCap
+      }
+
+      ctx.beginPath()
+      var count = cmds.length < MAX_CMDS ? cmds.length : MAX_CMDS
+      var drew = false
+      for (var j = 0; j < count; j++) {
+        var c = cmds[j]
+        if (!c) continue
+        var x = c[1]
+        var y = c[2]
+        if (typeof x !== "number" || !(x >= lo && x <= hi)) {
+          x = coord(x, size)
+          if (x === null) continue
+        }
+        if (typeof y !== "number" || !(y >= lo && y <= hi)) {
+          y = coord(y, size)
+          if (y === null) continue
+        }
+        var verb = c[0]
+        if (verb === 1) {
+          ctx.lineTo(x, y)
+          drew = true
+        } else if (verb === 0) {
+          ctx.moveTo(x, y)
+          drew = true
+        } else if (verb === 3) {
+          var r = coord(c[3], size)
+          var a0 = Number(c[4])
+          var a1 = Number(c[5])
+          if (r === null || r < 0 || !isFinite(a0) || !isFinite(a1)) continue
+          // A sweep beyond a full turn costs the rasteriser nothing extra to
+          // clamp and is never something this card legitimately asks for.
+          if (Math.abs(a1 - a0) > Math.PI * 2) a1 = a0 + Math.PI * 2
+          ctx.arc(x, y, r, a0, a1)
+          drew = true
+        } else if (verb === 2) {
+          var qx = coord(c[3], size)
+          var qy = coord(c[4], size)
+          if (qx === null || qy === null) continue
+          ctx.quadraticCurveTo(x, y, qx, qy)
+          drew = true
+        }
+      }
+      if (drew) ctx.stroke()
+      continue
+    }
+
+    if (kind === OP_RECT) {
+      if (a < MIN_ALPHA) continue
+      var rx = op[3]
+      var ry = op[4]
+      var rw = op[5]
+      var rh = op[6]
+      if (typeof rx !== "number" || !(rx >= lo && rx <= hi)) {
+        rx = coord(rx, size)
+        if (rx === null) continue
+      }
+      if (typeof ry !== "number" || !(ry >= lo && ry <= hi)) {
+        ry = coord(ry, size)
+        if (ry === null) continue
+      }
+      if (typeof rw !== "number" || !(rw >= lo && rw <= hi)) {
+        rw = coord(rw, size)
+        if (rw === null) continue
+      }
+      if (typeof rh !== "number" || !(rh >= lo && rh <= hi)) {
+        rh = coord(rh, size)
+        if (rh === null) continue
+      }
+      var rectStep = (a * ALPHA_STEPS + 0.5) | 0
+      var rectStyle = table[role * rowSteps + rectStep]
+      if (rectStyle === undefined) rectStyle = styleMiss(table, rgb, role, rectStep)
+      if (rectStyle !== fill) {
+        ctx.fillStyle = rectStyle
+        fill = rectStyle
+      }
+      ctx.fillRect(rx, ry, rw, rh)
+      continue
+    }
+
+    if (kind === OP_GRAD && fillGradient(ctx, size, op, rgb, g, glowLayer)) fill = ""
   }
+
   ctx.globalCompositeOperation = "source-over"
-  return n
+  return glowLayer ? drawn : n
+}
+
+// `ops` is whatever the plugin returned. It is treated as hostile input.
+// palette: { accent, foreground, errorColor, roles?: [6 colours], additive?, glowFallback? }
+// `scale` maps card coordinates onto a canvas drawn smaller than the card.
+function paint(ctx, size, ops, palette, scale) {
+  return replayOps(ctx, size, ops, palette, scale, false)
 }
 
 // The bloom source: only ops that carry a glow value, drawn at that alpha
 // and accumulated additively where the surface allows it. `scale` maps card
 // coordinates onto a smaller glow canvas; the blur hides the resolution.
 function paintGlow(ctx, size, ops, palette, scale) {
-  ctx.reset()
-  ctx.lineCap = "round"
-  ctx.lineJoin = "round"
-  if (!ops || !ops.length || !palette) return 0
-  applyScale(ctx, scale)
-  var rgb = resolveRoles(palette)
-  ctx.globalCompositeOperation = palette.additive ? "lighter" : "source-over"
-  var n = Math.min(ops.length, MAX_OPS)
-  var drawn = 0
-  for (var i = 0; i < n && drawn < MAX_GLOW_OPS; i++) {
-    var op = ops[i]
-    if (!op || op[0] === OP_BLEND || glowOf(op) <= 0) continue
-    replay(ctx, size, op, rgb, true)
-    drawn++
-  }
-  ctx.globalCompositeOperation = "source-over"
-  return drawn
+  return replayOps(ctx, size, ops, palette, scale, true)
 }

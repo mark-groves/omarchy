@@ -202,7 +202,7 @@ Item {
         accent: Commons.Color.lock.borderActive
         foreground: Commons.Color.lock.text
         errorColor: Commons.Color.lock.textError
-        surface: Commons.Color.lock.background
+        backdrop: Commons.Color.lock.background
       }
 
       Text {

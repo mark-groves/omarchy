@@ -2,6 +2,7 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+  property color background: "#2e3440"
   property var palette: ({ cyan: "#88c0d0", magenta: "#b48ead", green: "#a3be8c" })
   readonly property QtObject polkit: QtObject {
     property color accent: "#88c0d0"

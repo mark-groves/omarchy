@@ -40,9 +40,10 @@ QtObject {
   // it can degrade on an older host.
   readonly property int opLevel: 3
 
-  // The quality level the face card last settled on (FaceChromeCanvas). It
-  // is a property of this machine and this plugin, so every surface starts
-  // from it and a new plugin starts again at full quality.
+  // The quality level the next face card starts at (FaceChromeCanvas). It
+  // is a property of this machine and this plugin: each showing reads it as
+  // it begins, keeps it to the end, and leaves here the level its own frames
+  // call for. A new plugin starts again at full quality.
   property int qualityLevel: 0
 
   property var api: null
@@ -127,7 +128,8 @@ QtObject {
       var factory = new Function(
         src + "\nreturn { frame: typeof frame === 'function' ? frame : null,"
         + " holdMs: typeof holdMs === 'function' ? holdMs : null,"
-        + " scanMs: typeof scanMs === 'function' ? scanMs : null };")
+        + " scanMs: typeof scanMs === 'function' ? scanMs : null,"
+        + " resultMs: typeof resultMs === 'function' ? resultMs : null };")
       built = factory()
     } catch (e) {
       root.reject("did not evaluate: " + e)
@@ -158,7 +160,12 @@ QtObject {
   function frame(size, state, clock, elapsed) {
     if (!root.api) return []
     try {
-      var ops = root.api.frame(size, { state: state, clock: clock, elapsed: elapsed, host: root.opLevel })
+      var spec = { state: state, clock: clock, elapsed: elapsed, host: root.opLevel }
+      var beat = root.resultMs(state)
+      // resultMs() drops a plugin that throws; stop here so the real cause stays in `failure`.
+      if (!root.api) return []
+      if (beat > 0) spec.resultMs = beat
+      var ops = root.api.frame(size, spec)
       return ops && ops.length !== undefined ? ops : []
     } catch (e) {
       root.reject("threw while painting: " + e)
@@ -183,9 +190,27 @@ QtObject {
     return Math.min(ms, 3000)
   }
 
-  // How long the host holds a result before tearing the card down. Clamped:
-  // the plugin declares its own timing, but it does not get to pin a
-  // credential dialog open.
+  // Optional: a short beat for a result. A plugin that exports resultMs()
+  // plays its result in that many ms when the spec carries it, so the host
+  // asks for it on every result frame and holds the result that long. Clamped
+  // like holdMs; 0 means the plugin's full-length result.
+  function resultMs(state) {
+    if (!root.api || !root.api.resultMs) return 0
+    var ms = 0
+    try {
+      ms = Number(root.api.resultMs(state))
+    } catch (e) {
+      root.reject("threw while reporting result timing: " + e)
+      return 0
+    }
+    if (!isFinite(ms) || ms <= 0) return 0
+    return Math.min(ms, 2000)
+  }
+
+  // How long the host holds a result before tearing the card down: the
+  // plugin's short beat when it has one, else its full result. Clamped: the
+  // plugin declares its own timing, but it does not get to pin a credential
+  // dialog open.
   function holdMs(state) {
     if (!root.api) return 0
     var ms = 0
@@ -196,7 +221,9 @@ QtObject {
       return 0
     }
     if (!isFinite(ms) || ms <= 0) return 0
-    return Math.min(ms, 2000)
+    var held = Math.min(ms, 2000)
+    var beat = root.resultMs(state)
+    return beat > 0 ? Math.min(beat, held) : held
   }
 
   property FileView pluginFile: FileView {

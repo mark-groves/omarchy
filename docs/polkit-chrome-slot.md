@@ -35,6 +35,8 @@ A face chrome's entry point is a JavaScript module that exports `frame(size, spe
 
 The card is `FaceChrome.cardSide` (220) logical px on the lock screen and the polkit card.
 
+`FaceChromeCanvas` asks for a frame only when its last one has landed: `frame()` and the replay run on the shell's GUI thread, the raster on Qt's canvas thread, with at most one frame in flight. `spec.clock` and `spec.elapsed` follow the wall clock from the first presented frame of a state, and pause while the card is not presenting, so a slow host skips frames rather than slowing the animation; `clock - elapsed` stays constant through a state. The sharp layer rasterises at the panel's pixel ratio. Each showing measures the raster and the JS of its frames apart, and a card over budget starts its next showing a quality level down: a smaller sharp layer scaled up on the GPU, and a bloom repainted less often. `FaceChrome.qualityLevel` remembers the level for every surface until the plugin changes.
+
 `spec.host` is the op level the host paints. Level 1 is stroke paths, rects and vertical gradients in roles 0 (accent), 1 (text) and 2 (error). Level 2 adds:
 
 - **Glow**: an optional trailing value on any paint op (`[0, role, alpha, width, cmds, glow]`, `[1, …, h, glow]`, `[2, …, yTo, glow]`). The op is also drawn at that alpha on a half-resolution glow layer, which two GPU `MultiEffect` blurs (a tight halo and a wide bloom) lay under the sharp strokes. `alpha` 0 with `glow` > 0 lights only the bloom. On the software scene graph there is no bloom, and glow-only ops are drawn as faint halos instead.

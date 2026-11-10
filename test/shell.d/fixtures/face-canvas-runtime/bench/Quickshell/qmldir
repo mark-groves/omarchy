@@ -1,0 +1,4 @@
+module Quickshell
+# A module that declares no type falls through to the system Quickshell,
+# whose plugin lives inside the quickshell binary and cannot load here.
+Placeholder 1.0 Placeholder.qml
