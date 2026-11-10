@@ -221,8 +221,9 @@ Item {
       surface: root.surfaceName,
       state: state,
       t: Date.now(),
-      rect: root.rectJson(card ? card.cardRect : Qt.rect(0, 0, 0, 0)),
-      window: root.windowName
+      rect: root.rectJson(card ? card.cardRect() : Qt.rect(0, 0, 0, 0)),
+      window: root.windowName,
+      part: "card"
     }
     var log = root.probeLog.slice(-15)
     log.push({ state: state, t: line.t })
@@ -498,8 +499,8 @@ Item {
       retry: root.lane.retry,
       outcome: root.lane.outcome,
       keyboard: root.wantsKeyboard ? "exclusive" : "none",
-      rect: root.rectJson(card ? card.cardRect : Qt.rect(0, 0, 0, 0)),
-      faceRect: root.rectJson(card ? card.faceRect : Qt.rect(0, 0, 0, 0)),
+      rect: root.rectJson(card ? card.cardRect() : Qt.rect(0, 0, 0, 0)),
+      faceRect: root.rectJson(card ? card.faceRect() : Qt.rect(0, 0, 0, 0)),
       t: Date.now(),
       events: root.probeLog
     })

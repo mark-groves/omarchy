@@ -61,7 +61,7 @@ ShellRoot {
     if (!card || !card.current || !controller || controller.lane.phase === "closed") return
     var key = tag + ":" + controller.lane.faceState
     var seen = rects[key] || []
-    var r = rectKey(card.cardRect) + "|" + rectKey(card.faceRect)
+    var r = rectKey(card.cardRect()) + "|" + rectKey(card.faceRect())
     if (seen.indexOf(r) === -1) seen.push(r)
     var next = {}
     for (var k in rects) next[k] = rects[k]

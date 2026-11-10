@@ -64,8 +64,20 @@ Item {
     : Math.min(Style.space(312), Math.max(Style.space(260), width - Style.gapsOut * 2))
 
   // Where the card and the face area sit, in this window's coordinates.
-  readonly property rect cardRect: Qt.rect(card.x, card.y, card.width, card.height)
-  readonly property rect faceRect: Qt.rect(card.x + faceArea.x, card.y + faceArea.y, faceArea.width, faceArea.height)
+  function cardRect() { return root.windowRect(card) }
+  function faceRect() { return root.windowRect(faceArea) }
+
+  // The laid-out place, ignoring the entrance's scale: the sum of x and y up
+  // the parent chain, as the face canvas reports its own rect.
+  function windowRect(item) {
+    var x = 0
+    var y = 0
+    for (var it = item; it; it = it.parent) {
+      x += it.x
+      y += it.y
+    }
+    return Qt.rect(x, y, item.width, item.height)
+  }
 
   readonly property bool fieldFocused: passwordInput.activeFocus
   readonly property bool fieldEmpty: passwordInput.text.length === 0
