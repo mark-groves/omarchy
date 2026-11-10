@@ -13,6 +13,8 @@ Item {
   property bool fingerprintConfigured: false
   property bool fingerprintUnavailable: false
   property bool faceConfigured: false
+  // Names this view in the face card's probe lines: "lock" or "lock-preview".
+  property string faceSurface: "lock"
   // "scanning" | "recognized" | "notRecognized", driven by the lock service.
   property string faceState: "scanning"
   property int facePlaybackEpoch: 0
@@ -362,6 +364,7 @@ Item {
         foreground: Commons.Color.lock.text
         errorColor: Commons.Color.lock.textError
         backdrop: Commons.Color.lock.background
+        surface: root.faceSurface
       }
 
       FaceCaption {

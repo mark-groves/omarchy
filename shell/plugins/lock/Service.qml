@@ -959,6 +959,7 @@ Item {
 
     LockView {
       anchors.fill: parent
+      faceSurface: "lock-preview"
       backgroundPath: root.backgroundPath
       videoPosterPath: root.videoPosterPath
       backgroundVersion: root.backgroundVersion
