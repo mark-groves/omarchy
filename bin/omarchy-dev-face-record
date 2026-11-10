@@ -551,6 +551,9 @@ def to_device(monitor, x, y, w, h):
 
 
 def probe_rect(events, window, surface):
+  """The face art's rect from the probe lines: a surface that also logs its
+  card's rect (part "card") gives the art's own rect only as a fallback."""
+  card = (None, None)
   for event in events:
     if event["kind"] != "probe-event":
       continue
@@ -560,9 +563,14 @@ def probe_rect(events, window, surface):
     if window and data.get("window") != window:
       continue
     rect = data.get("rect")
-    if isinstance(rect, dict) and all(isinstance(rect.get(key), (int, float)) for key in "xywh"):
-      return rect, data.get("window")
-  return None, None
+    if not (isinstance(rect, dict) and all(isinstance(rect.get(key), (int, float)) for key in "xywh")) or rect["w"] <= 0:
+      continue
+    if data.get("part") == "card":
+      if card[0] is None:
+        card = (rect, data.get("window"))
+      continue
+    return rect, data.get("window")
+  return card
 
 
 def auto_region(recording, area, start_abs, end_abs, workdir):
@@ -651,6 +659,11 @@ def parse_phase(spec, origin):
 def probe_phases(events, surface, active_end):
   mine = [event for event in events if event["kind"] == "probe-event"
           and (not surface or event["data"].get("surface") == surface)]
+  # A surface whose card logs its own states as well (part "card") has its
+  # face art's states logged by the canvas; phases follow the art.
+  art = [event for event in mine if event["data"].get("part") != "card"]
+  if art:
+    mine = art
   phases = []
   for i, event in enumerate(mine):
     end = mine[i + 1]["t"] if i + 1 < len(mine) else active_end
@@ -669,12 +682,17 @@ def phase_stats(phase, frames, intervals, gaps, refresh, active):
     start, end = max(start, active["start"]), min(end, active["end"] + 1e-3)
   if end <= start:
     start, end = phase["start"], phase["end"]
+  # A phase is rated from its first presented change: the wait before it is
+  # the time to the first frame, which the prompt check judges.
+  first = next((frame.t for frame in frames if start <= frame.t < end and frame.mean is not None and frame.changed), None)
+  if first is not None and first > start:
+    start = first
   inside = [frame for frame in frames if start <= frame.t < end and frame.mean is not None]
   duration = end - start
   changed = sum(1 for frame in inside if frame.changed)
   anything = sum(1 for frame in inside if frame.any)
-  overlapping = [(a, b) for a, b in intervals if a < end and b > start]
-  holds = [(round((b - a) * refresh), a, b) for a, b in overlapping]
+  overlapping = [(max(a, start), min(b, end)) for a, b in intervals if a < end and b > start]
+  holds = [(round((b - a) * refresh), a, b) for a, b in overlapping if b > a]
   longest = max(holds, default=(0, None, None))
   first_change = next((frame.t for frame in inside if frame.changed), None)
   phase.update({

@@ -344,7 +344,7 @@ class Check:
       self.driver = "omarchy-shell face-card demo (scan, then recognized after 2.4 s)"
       self.verdict = self.trigger + 2.4
     elif self.plan == "replay":
-      spec = f"scanning:{round(scan * 1000)},{result}:0"
+      spec = f"scanning:0,{result}:{round(scan * 1000)}"
       self.trigger = self.mark("trigger")
       ok, output = self.ipc("face-card", "replay", spec)
       self.driver = f'omarchy-shell face-card replay "{spec}"'
@@ -385,16 +385,37 @@ class Check:
     if self.wait_layer(self.window, 3):
       self.mark("card up")
     if self.plan == "preview":
-      hold = 3.5
+      sleep(self.trigger + 3.5 - time.time())
     elif self.scenario == "idle":
-      hold = 2.5
+      sleep(self.trigger + 2.5 - time.time())
     else:
-      self.verdict = self.mark("verdict", self.trigger + scan)
-      hold = scan + BEAT_MAX_S + 1.2
-    sleep(self.trigger + hold - time.time())
+      # The run leads in idle, waits out the art's boot and its beat, then
+      # goes back to idle: wait for that rather than guess it.
+      self.wait_preview_done("lock", lambda status: status.get("previewFace") == "", scan + 8)
+      sleep(0.6)
     self.end_at = self.mark("hide")
     self.ipc("lock", "hidePreview")
     sleep(0.5)
+
+  def wait_preview_done(self, target, done, timeout):
+    """Poll a preview's status until done() says the run is over; it must first be seen running."""
+    seen = {"running": False}
+
+    def finished():
+      ok, output = self.ipc(target, "status")
+      if not ok:
+        return False
+      try:
+        status = json.loads(output)
+      except ValueError:
+        return False
+      if not done(status):
+        seen["running"] = True
+        return False
+      return seen["running"]
+
+    if not self.wait_until(finished, timeout):
+      self.notes.append(f"the {target} preview was still running after {timeout:.0f} s")
 
   def drive_polkit_preview(self):
     scan = self.scan_seconds()
@@ -407,9 +428,9 @@ class Check:
       raise Abort(f"{self.driver} failed: {output}")
     if self.wait_layer(self.window, 3):
       self.mark("card up")
-    if self.scenario in ("match", "miss"):
-      self.verdict = self.mark("verdict", self.trigger + scan)
-    sleep(self.trigger + scan + BEAT_MAX_S + 1.2 - time.time())
+    self.wait_preview_done("polkit", lambda status: not status.get("previewing") or status.get("phase") == "closed",
+                           scan + 8)
+    sleep(0.6)
     self.end_at = self.mark("hide")
     self.ipc("polkit", "hidePreview")
     sleep(0.5)
@@ -589,22 +610,28 @@ class Check:
       parts.append("no animating phase long enough to rate")
     checks.append(("smooth", status, "; ".join(parts)))
 
-    # Still: one rect for every probe event of the surface.
-    rects = []
+    # Still: one rect per part (the face art, and the card around it where
+    # the surface logs that too) for every probe event of the surface.
+    rects = {}
     for event in mine:
       rect = event["data"].get("rect") or {}
+      if not rect.get("w"):
+        continue
+      part = event["data"].get("part") or "face"
       key = tuple(rect.get(name) for name in ("x", "y", "w", "h"))
-      if key not in [seen for seen, _ in rects]:
-        rects.append((key, event["data"].get("state")))
+      seen = rects.setdefault(part, [])
+      if key not in [k for k, _ in seen]:
+        seen.append((key, event["data"].get("state")))
     moved = [probe for probe in probes if probe.get("moved")]
     if not mine and not probes:
       checks.append(("still", "SKIP", "the shell logged no face-probe events"))
-    elif len(rects) > 1 or moved:
-      listed = " -> ".join(f"{state} {key[0]},{key[1]} {key[2]}x{key[3]}" for key, state in rects)
+    elif any(len(seen) > 1 for seen in rects.values()) or moved:
+      listed = "; ".join(part + " " + " -> ".join(f"{state} {key[0]},{key[1]} {key[2]}x{key[3]}" for key, state in seen)
+                         for part, seen in rects.items() if len(seen) > 1)
       checks.append(("still", "FAIL", listed + ("; the probe reports moved" if moved else "")))
     else:
-      where = "{},{} {}x{}".format(*rects[0][0]) if rects else "no rect"
-      checks.append(("still", "PASS", f"one rect over {len(mine)} events ({where})"))
+      where = ", ".join(f"{part} " + "{},{} {}x{}".format(*seen[0][0]) for part, seen in rects.items()) or "no rect"
+      checks.append(("still", "PASS", f"one rect per part over {len(mine)} events ({where})"))
 
     # Prompt: the scan shows straight after the trigger.
     first_change = next((t for t, presented in motion if presented and t >= trigger - 0.005), None)
@@ -621,6 +648,19 @@ class Check:
       checks.append(("prompt", "N/A", "no scan in this scenario"))
     elif not mine:
       checks.append(("prompt", "SKIP", f"{seen}; no probe events to read the state from"))
+    elif not self.real:
+      # A preview presses Enter inside the shell: the scan's start is its own
+      # first scanning event, and the card must show on the next frames.
+      scan = next((event["t"] for event in mine if event["t"] >= trigger - 0.02
+                   and event["data"].get("state") == "scanning"), None)
+      if scan is None:
+        checks.append(("prompt", "FAIL", "no scanning event after the trigger"))
+      else:
+        shown = next((t for t, presented in motion if presented and t >= scan - 0.005), None)
+        wait = (shown - scan) * 1000 if shown is not None else None
+        ok = wait is not None and wait <= PROMPT_FRAME_MS
+        text = f"first card frame +{wait:.0f} ms after the scan started" if wait is not None else "the card never moved"
+        checks.append(("prompt", "PASS" if ok else "FAIL", f"{text} (limit {PROMPT_FRAME_MS} ms)"))
     else:
       after = [event for event in mine if event["t"] >= trigger - 0.02]
       if not after:
@@ -636,8 +676,11 @@ class Check:
     gone = None
     for probe in probes:
       hidden = probe.get("hiddenAt")
-      if isinstance(hidden, (int, float)) and hidden > 1e12:
-        gone = hidden / 1000 - origin
+      if not isinstance(hidden, (int, float)) or hidden <= 1e12 or not probe.get("swaps"):
+        continue
+      at = hidden / 1000 - origin
+      if verdict is not None and at > verdict and gone is None:
+        gone = at
     if gone is None and active and active.get("disappears"):
       gone = active["end"]
     if self.scenario in ("idle", "typed", "cancel") or self.plan == "preview" and self.surface == "lock":
