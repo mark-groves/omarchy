@@ -40,6 +40,16 @@ Panel {
     return actions
   }
 
+  // A stopped model with an error to explain, which links to its logs.
+  function localFailed(model) {
+    return ["active", "activating", "deactivating", "removing"].indexOf(model.unit) < 0 && String(model.error || "") !== ""
+  }
+
+  function showLocalLogs(model) {
+    Util.execArgv(["omarchy-launch-floating-terminal-with-presentation", "omarchy-agent-local logs " + Util.shellQuote(String(model.recipe))])
+    root.close()
+  }
+
   function runLocalAction(model, action) {
     if (action === "launch") {
       Util.execArgv(["omarchy-agent", "--local-model", model.recipe])
@@ -170,6 +180,7 @@ Panel {
         if (shownProviders[p].localModel) {
           var actions = localActions(shownProviders[p].localModel)
           rows.push(actions.length > 0 ? actions.map(function(action) { return { kind: action === "toggle" ? "modelToggle" : "modelLaunch", index: p } }) : [{ kind: "modelHeader", index: p }])
+          if (localFailed(shownProviders[p].localModel)) rows.push([{ kind: "modelLogs", index: p }])
           continue
         }
         // Every agent's line is a stop, so Ctrl+Up/Down can move it: its
@@ -265,7 +276,7 @@ Panel {
   function providerIndexOfKey() {
     var target = keyTarget
     if (!target) return -1
-    if (["provider", "providerSignin", "providerLaunch", "modelToggle", "modelLaunch", "modelHeader", "localDownload"].indexOf(target.kind) >= 0) return target.index
+    if (["provider", "providerSignin", "providerLaunch", "modelToggle", "modelLaunch", "modelHeader", "modelLogs", "localDownload"].indexOf(target.kind) >= 0) return target.index
     if (["account", "autoswitch", "signin"].indexOf(target.kind) < 0) return -1
     var entry = accountEntries[target.index]
     return entry ? shownProviders.indexOf(entry.provider) : -1
@@ -638,6 +649,7 @@ Panel {
     else if (target.kind === "providerLaunch") launchHarness(shownProviders[target.index])
     else if (target.kind === "starter") startPrompt(starterPrompts[target.index].prompt, modifiers)
     else if (target.kind === "providerSignin") signInAgain(shownProviders[target.index], null)
+    else if (target.kind === "modelLogs") showLocalLogs(shownProviders[target.index].localModel)
     else if (target.kind === "signin") signInAgain(pickedEntry.provider, pickedEntry.account)
     else if (target.kind === "autoswitch") setSwitchMode(pickedEntry.provider, autoSwitchFor(pickedEntry.provider) ? "manual" : "auto")
     else if (pickedEntry && !pickedEntry.account.active) useAccount(pickedEntry.provider, pickedEntry.account)
@@ -2281,6 +2293,14 @@ Panel {
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
       wrapMode: Text.Wrap
+    }
+
+    TextLink {
+      visible: !!section.model && !section.running && !section.loadingShown && !section.stoppingShown && !section.removing && String(section.model.error || "") !== ""
+      picked: root.hasKey("modelLogs", section.providerIndex)
+      text: Commons.I18n.t("agents.localShowLogs")
+      tooltip: Commons.I18n.t("agents.localShowLogsTip")
+      onClicked: root.showLocalLogs(section.model)
     }
 
     // A sign-in to redo for a single-account provider; with several, each
