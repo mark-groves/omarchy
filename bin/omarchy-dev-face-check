@@ -128,6 +128,12 @@ def interrupt(signum, frame):
   raise KeyboardInterrupt
 
 
+def cleaning_up(signum, frame):
+  # A handler, not SIG_IGN: an ignored signal stays ignored in every command
+  # the clean-up runs, while a handler resets to the default across exec.
+  os.write(2, b"still cleaning up: the recorder stops and the session's shell comes back first\n")
+
+
 class Check:
   def __init__(self, surface, scenario, options, out):
     self.surface = surface
@@ -1002,7 +1008,7 @@ def main():
     # A second Ctrl+C or kill must not cut the clean-up short and leave the
     # recorder or a swapped shell behind.
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-      signal.signal(sig, signal.SIG_IGN)
+      signal.signal(sig, cleaning_up)
     for step in reversed(check.cleanup):
       try:
         step()
