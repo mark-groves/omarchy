@@ -162,6 +162,8 @@ QtObject {
     try {
       var spec = { state: state, clock: clock, elapsed: elapsed, host: root.opLevel }
       var beat = root.resultMs(state)
+      // resultMs() drops a plugin that throws; stop here so the real cause stays in `failure`.
+      if (!root.api) return []
       if (beat > 0) spec.resultMs = beat
       var ops = root.api.frame(size, spec)
       return ops && ops.length !== undefined ? ops : []
