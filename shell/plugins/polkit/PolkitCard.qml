@@ -398,8 +398,12 @@ Item {
           font.pixelSize: Math.round(faceArea.width * 0.34)
           opacity: root.faceState === "idle" || !FaceChrome.ready ? 0.62 : 0
           // Leaves under the incoming art in half the time it takes to return.
+          // The duration follows the value it fades to: one bound to
+          // faceState still held the old state's when the Behavior started,
+          // which swapped the two.
           Behavior on opacity {
-            OpacityAnimator { duration: Style.duration(root.faceState === "idle" ? 180 : 90); easing.type: Easing.OutCubic }
+            id: idleMarkFade
+            OpacityAnimator { duration: Style.duration(idleMarkFade.targetValue > 0 ? 180 : 90); easing.type: Easing.OutCubic }
           }
         }
 
