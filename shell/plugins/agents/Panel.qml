@@ -19,6 +19,7 @@ Panel {
   readonly property Item hero: panel.loadedContent ? panel.loadedContent.hero : null
   readonly property Item column: panel.loadedContent ? panel.loadedContent.column : null
   readonly property Item providerSections: panel.loadedContent ? panel.loadedContent.providerSections : null
+  readonly property bool shiftHeld: panel.loadedContent ? panel.loadedContent.shiftHeld : false
 
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
@@ -39,6 +40,16 @@ Panel {
     return actions
   }
 
+  // A stopped model with an error to explain, which links to its logs.
+  function localFailed(model) {
+    return ["active", "activating", "deactivating", "removing"].indexOf(model.unit) < 0 && String(model.error || "") !== ""
+  }
+
+  function showLocalLogs(model) {
+    Util.execArgv(["omarchy-launch-floating-terminal-with-presentation", "omarchy-agent-local logs " + Util.shellQuote(String(model.recipe))])
+    root.close()
+  }
+
   function runLocalAction(model, action) {
     if (action === "launch") {
       Util.execArgv(["omarchy-agent", "--local-model", model.recipe])
@@ -56,7 +67,18 @@ Panel {
   // The setup runs on in the background and reports to status.json, where it
   // becomes the model's own line, which draws the download as it goes.
   function downloadLocal(recipe) {
+    // A Spark cabled to this one: its setup asks for the other machine's password once, so it
+    // runs in a terminal.
+    if (recipe.link) {
+      Util.execArgv(["omarchy-launch-floating-terminal-with-presentation", "omarchy-agent-local link setup"])
+      root.close()
+      return
+    }
     Util.execArgv(["omarchy-agent-local", "use", "--detach", String(recipe.id)])
+  }
+
+  function linkTitle(link) {
+    return link.host ? Commons.I18n.t("agents.linkOffer").arg(link.host) : Commons.I18n.t("agents.linkOfferUnnamed")
   }
 
   function localStartBlocked(model) {
@@ -169,6 +191,7 @@ Panel {
         if (shownProviders[p].localModel) {
           var actions = localActions(shownProviders[p].localModel)
           rows.push(actions.length > 0 ? actions.map(function(action) { return { kind: action === "toggle" ? "modelToggle" : "modelLaunch", index: p } }) : [{ kind: "modelHeader", index: p }])
+          if (localFailed(shownProviders[p].localModel)) rows.push([{ kind: "modelLogs", index: p }])
           continue
         }
         // Every agent's line is a stop, so Ctrl+Up/Down can move it: its
@@ -264,7 +287,7 @@ Panel {
   function providerIndexOfKey() {
     var target = keyTarget
     if (!target) return -1
-    if (["provider", "providerSignin", "providerLaunch", "modelToggle", "modelLaunch", "modelHeader", "localDownload"].indexOf(target.kind) >= 0) return target.index
+    if (["provider", "providerSignin", "providerLaunch", "modelToggle", "modelLaunch", "modelHeader", "modelLogs", "localDownload"].indexOf(target.kind) >= 0) return target.index
     if (["account", "autoswitch", "signin"].indexOf(target.kind) < 0) return -1
     var entry = accountEntries[target.index]
     return entry ? shownProviders.indexOf(entry.provider) : -1
@@ -437,6 +460,7 @@ Panel {
   }
 
   function recipeFacts(recipe) {
+    if (recipe.link) return Commons.I18n.t("agents.linkSetUp")
     var facts = []
     if (recipe.architecture === "moe") facts.push(Commons.I18n.t("agents.localMoe"))
     else if (recipe.architecture === "dense") facts.push(Commons.I18n.t("agents.localDense"))
@@ -567,16 +591,32 @@ Panel {
     Util.execArgv(addPrivate ? ["omarchy-launch-browser", "--private", addUrl] : ["omarchy-launch-browser", addUrl])
   }
 
-  // A few ways into making Omarchy your own, handed to the default agent.
+  // A few ways into making Omarchy your own, handed to the local model when one
+  // is running, and to the default agent otherwise or when Shift is held.
   readonly property var starterPrompts: [
     { glyph: "󰏘", label: Commons.I18n.t("agents.theme"), prompt: "Make me a new Omarchy theme. Ask me what look or inspiration I have in mind, then build it following the Omarchy skill's theming guide and switch to it." },
     { glyph: "󰐱", label: Commons.I18n.t("agents.plugin"), prompt: "Make me a new Omarchy shell plugin. Ask me what I'd like it to do, then build it following the Omarchy skill's plugin guide and enable it." },
     { glyph: "󰣆", label: Commons.I18n.t("agents.app"), prompt: "Make me a new app for my Omarchy desktop. Ask me what it should do, then build it following the omarchy-app skill and install it so it shows up in the app launcher." }
   ]
 
-  function startPrompt(prompt) {
+  // The local model a starter opens on, picked as omarchy-agent --prefer-local
+  // picks it: the last one started when it's running, any other running one
+  // otherwise.
+  readonly property var starterLocalModel: {
+    var local = usage.localModel || {}
+    var models = local.models || {}
+    var up = Object.keys(models).filter(function(id) {
+      var m = models[id]
+      return m && m.unit === "active" && m.sub_state === "running"
+    })
+    if (up.length === 0) return null
+    return models[up.indexOf(local.last) >= 0 ? local.last : up[0]]
+  }
+
+  function startPrompt(prompt, modifiers) {
     root.close()
-    Util.execArgv(["omarchy-agent-prompt", prompt])
+    var useDefault = !!(modifiers & Qt.ShiftModifier)
+    Util.execArgv(["omarchy-agent"].concat(useDefault ? [] : ["--prefer-local"], ["--prompt", prompt]))
   }
 
   function renameAccount(p, account, label) {
@@ -610,7 +650,7 @@ Panel {
     if (p) setSwitchMode(p, autoSwitchFor(p) ? "manual" : "auto")
   }
 
-  function activateSelection() {
+  function activateSelection(modifiers) {
     var target = keyTarget
     if (!target) refreshNow()
     else if (target.kind === "add") addStage !== "" ? cancelAdd() : addAccount()
@@ -619,8 +659,9 @@ Panel {
     else if (target.kind === "modelToggle" || target.kind === "modelLaunch") runLocalAction(shownProviders[target.index].localModel, target.kind === "modelToggle" ? "toggle" : "launch")
     else if (target.kind === "localDownload") downloadLocal(shownProviders[target.index].localOffer)
     else if (target.kind === "providerLaunch") launchHarness(shownProviders[target.index])
-    else if (target.kind === "starter") startPrompt(starterPrompts[target.index].prompt)
+    else if (target.kind === "starter") startPrompt(starterPrompts[target.index].prompt, modifiers)
     else if (target.kind === "providerSignin") signInAgain(shownProviders[target.index], null)
+    else if (target.kind === "modelLogs") showLocalLogs(shownProviders[target.index].localModel)
     else if (target.kind === "signin") signInAgain(pickedEntry.provider, pickedEntry.account)
     else if (target.kind === "autoswitch") setSwitchMode(pickedEntry.provider, autoSwitchFor(pickedEntry.provider) ? "manual" : "auto")
     else if (pickedEntry && !pickedEntry.account.active) useAccount(pickedEntry.provider, pickedEntry.account)
@@ -1491,6 +1532,7 @@ Panel {
         }
         message: !root.deleteTarget ? ""
           : root.deleteTarget.localModel ? Commons.I18n.t("agents.localRemoveConfirm").arg(root.deleteTarget.localModel.name || root.deleteTarget.localModel.recipe)
+          : root.deleteTarget.localOffer && root.deleteTarget.localOffer.link ? Commons.I18n.t("agents.linkHideConfirm").arg(root.deleteTarget.providerName)
           : root.deleteTarget.localOffer ? Commons.I18n.t("agents.localHideOfferConfirm").arg(root.deleteTarget.providerName)
           : Commons.I18n.t("agents.hideProviderConfirm").arg(root.deleteTarget.providerName)
         foreground: root.foreground
@@ -1513,7 +1555,7 @@ Panel {
       }
       onDeleteRequested: root.deleteSelected()
       blocked: root.renaming || root.deleteTarget !== null
-      onActivateRequested: root.activateSelection()
+      onActivateRequested: function(modifiers) { root.activateSelection(modifiers) }
       onCloseRequested: {
         if (root.dragIndex >= 0) root.settleProviderDrag(true)
         else if (root.addStage !== "") root.cancelAdd()
@@ -1643,7 +1685,7 @@ Panel {
                   width: (tileRow.width - tileRow.spacing * 2) / 3
                   glyph: modelData.glyph
                   title: modelData.label
-                  onClicked: root.startPrompt(modelData.prompt)
+                  onClicked: function(modifiers) { root.startPrompt(modelData.prompt, modifiers) }
                 }
               }
             }
@@ -2091,7 +2133,7 @@ Panel {
         width: section.model || section.offer ? Math.max(0, Math.min(implicitWidth, sectionHead.width - sectionMark.width - sectionPlan.implicitWidth - (localToggle.visible ? localToggle.width : 0) - (sectionLaunch.visible ? sectionLaunch.width : 0) - Style.space(40))) : implicitWidth
         elide: Text.ElideRight
         text: section.model ? (section.model.name || section.model.recipe)
-          : section.offer ? (section.offer.name || section.offer.id)
+          : section.offer ? (section.offer.link ? root.linkTitle(section.offer.link) : (section.offer.name || section.offer.id))
           : section.provider ? section.provider.providerName : ""
         HoverHandler { id: localNameHover }
         PanelToolTip {
@@ -2171,8 +2213,8 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
         readonly property bool download: !!section.offer
         visible: download || (section.model ? section.running : root.harnessFor(section.provider) !== "")
-        iconText: download ? "󰇚" : "󰞷"
-        tooltipText: download ? Commons.I18n.t("agents.localDownload")
+        iconText: download ? (section.offer.link ? "󰌘" : "󰇚") : "󰞷"
+        tooltipText: download ? (section.offer.link ? Commons.I18n.t("agents.linkSetUp") : Commons.I18n.t("agents.localDownload"))
           : section.model ? Commons.I18n.t("agents.localLaunch") : Commons.I18n.t("agents.launchHarness").arg(section.provider ? section.provider.providerName : "")
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -2264,6 +2306,14 @@ Panel {
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
       wrapMode: Text.Wrap
+    }
+
+    TextLink {
+      visible: !!section.model && !section.running && !section.loadingShown && !section.stoppingShown && !section.removing && String(section.model.error || "") !== ""
+      picked: root.hasKey("modelLogs", section.providerIndex)
+      text: Commons.I18n.t("agents.localShowLogs")
+      tooltip: Commons.I18n.t("agents.localShowLogsTip")
+      onClicked: root.showLocalLogs(section.model)
     }
 
     // A sign-in to redo for a single-account provider; with several, each
@@ -2570,7 +2620,7 @@ Panel {
   // accent on hover.
   component StarterTile: Rectangle {
     id: tile
-    signal clicked()
+    signal clicked(int modifiers)
     signal hovered()
     property string glyph: ""
     property string title: ""
@@ -2611,12 +2661,15 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onEntered: tile.hovered()
-      onClicked: tile.clicked()
+      onClicked: function(mouse) { tile.clicked(mouse.modifiers) }
     }
 
     PanelToolTip {
       visible: tileMouse.containsMouse
-      text: Commons.I18n.t("agents.startOnNew").arg(tile.title.toLowerCase())
+      // Shift-click takes the default agent, so holding Shift says so.
+      text: root.starterLocalModel && !root.shiftHeld
+        ? Commons.I18n.t("agents.startLocalOnNew").arg(tile.title.toLowerCase()).arg(root.starterLocalModel.name || root.starterLocalModel.recipe)
+        : Commons.I18n.t("agents.startOnNew").arg(tile.title.toLowerCase())
     }
   }
 
