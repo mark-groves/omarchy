@@ -51,8 +51,6 @@ Panel {
     } else if (model.unit === "active" && (canShare || model.shared === true)) {
       actions.push("share")
     }
-      actions.push("share")
-    }
     if (model.unit !== "deactivating") actions.push("toggle")
     if (model.unit === "active") actions.push("launch")
     return actions
@@ -64,9 +62,10 @@ Panel {
     return model.host ? model.host + "/" + model.recipe : model.recipe
   }
 
-  // A stopped model with an error to explain, which links to its logs.
+  // A stopped model with an error to explain, which links to its logs. Only
+  // this machine's own: a tailnet model's logs live on its host.
   function localFailed(model) {
-    return ["active", "activating", "deactivating", "removing"].indexOf(model.unit) < 0 && String(model.error || "") !== ""
+    return !model.host && ["active", "activating", "deactivating", "removing"].indexOf(model.unit) < 0 && String(model.error || "") !== ""
   }
 
   function showLocalLogs(model) {
