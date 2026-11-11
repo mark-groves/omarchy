@@ -64,7 +64,6 @@
   "agents.localRemovingMeter": "Odstraňovanie",
   "agents.localShowLogsTip": "Otvoriť logy tohto modelu v termináli",
   "agents.localSpeedFact": "%1 TPS",
-  "agents.localSpeedPrefillFact": "%1 (%2) TPS",
   "agents.localStart": "Spustiť",
   "agents.localStop": "Zastaviť",
   "agents.localStoppingMeter": "Zastavovanie",
