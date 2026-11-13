@@ -14,3 +14,4 @@ singleton Util 1.0 Util.qml
 ShellIpc 1.0 ShellIpc.qml
 ParentDirReload 1.0 ParentDirReload.qml
 Translations 1.0 Translations.qml
+WatchedFile 1.0 WatchedFile.qml
