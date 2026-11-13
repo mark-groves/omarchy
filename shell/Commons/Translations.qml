@@ -84,9 +84,4 @@ QtObject {
   property WatchedFile languageFile: WatchedFile {
     path: root.language !== "en" ? root.catalogPath(root.language) : ""
   }
-
-  // en.json, the base language, and the selected language share this directory.
-  property ParentDirReload englishDir: ParentDirReload { file: englishFile }
-  property ParentDirReload baseDir: ParentDirReload { file: baseFile }
-  property ParentDirReload languageDir: ParentDirReload { file: languageFile }
 }

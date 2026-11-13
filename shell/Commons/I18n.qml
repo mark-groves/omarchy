@@ -98,9 +98,4 @@ QtObject {
   property WatchedFile registryFile: WatchedFile {
     path: root.omarchyPath + "/default/i18n/locales.json"
   }
-
-  property ParentDirReload languageDir: ParentDirReload { file: languageFile }
-  property ParentDirReload englishDir: ParentDirReload { file: englishCatalogFile }
-  property ParentDirReload catalogDir: ParentDirReload { file: languageCatalogFile }
-  property ParentDirReload registryDir: ParentDirReload { file: registryFile }
 }
