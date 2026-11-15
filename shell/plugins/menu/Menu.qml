@@ -327,12 +327,6 @@ Item {
       volatile: true,
       actionFor: function(value) { return "omarchy-font-set " + Util.shellQuote(value) }
     },
-    "icon-sets": {
-      script: "current=$(omarchy-icons-current 2>/dev/null); omarchy-icons-list 2>/dev/null | while read -r s; do [[ -z $s ]] && continue; printf '%s\\t%s\\t%s\\n' \"$s\" \"$s\" \"$current\"; done",
-      icon: "󰠱",
-      volatile: true,
-      actionFor: function(value) { return "omarchy-icons-set " + Util.shellQuote(value) }
-    },
     // Kernel names are package names, the same in every language.
     "kernels": {
       script: "current=$(omarchy-kernel get 2>/dev/null); omarchy-kernel list 2>/dev/null | while read -r k; do [[ -z $k ]] && continue; printf '%s\\t%s\\t%s\\n' \"$k\" \"$k\" \"$current\"; done",
