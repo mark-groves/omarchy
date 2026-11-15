@@ -89,6 +89,9 @@
   "appearance.font": {
     "label": "Font"
   },
+  "appearance.icons": {
+    "label": "Icons"
+  },
   "appearance.top-bar": {
     "label": "Menu Bar"
   },
@@ -740,6 +743,9 @@
   "install.style.background": {
     "label": "Background"
   },
+  "install.style.icons": {
+    "label": "Icons"
+  },
   "install.style.font": {
     "label": "Font"
   },
@@ -1022,6 +1028,9 @@
   "remove.theme": {
     "label": "Theme"
   },
+  "remove.icons": {
+    "label": "Icons"
+  },
   "remove.gaming": {
     "label": "Gaming",
     "title": "Remove"
@@ -1247,6 +1256,9 @@
   },
   "update.themes": {
     "label": "Extra Themes"
+  },
+  "update.icons": {
+    "label": "Extra Icons"
   },
   "update.process": {
     "label": "Process",
