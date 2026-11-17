@@ -529,11 +529,17 @@ for selection in "${!expected_agents[@]}"; do
     fail "default agent opens $selection after selecting it"
 
   launcher="$test_home/.local/share/applications/omarchy-agent-$expected.desktop"
-  grep -qx "Exec=omarchy-agent --agent $expected --app-id=org.omarchy.$expected" "$launcher" 2>/dev/null ||
-    fail "installing $expected adds a launcher that starts it"
-  icon=$(sed -n 's/^Icon=//p' "$launcher")
-  [[ -f $ROOT/icons/papercraft/$icon.svg.tpl && -f $ROOT/icons/arcade/$icon.svg.tpl && -f $ROOT/applications/icons/$icon.png ]] ||
-    fail "the $expected launcher's icon is in the icon sets"
+  # Hermes is a desktop app with its own launcher. A second one that starts
+  # the terminal harness would only shadow it, so none is shipped.
+  if [[ $expected == "hermes" ]]; then
+    [[ ! -e $launcher ]] || fail "Hermes keeps its own app launcher"
+  else
+    grep -qx "Exec=omarchy-agent --agent $expected --app-id=org.omarchy.$expected" "$launcher" 2>/dev/null ||
+      fail "installing $expected adds a launcher that starts it"
+    icon=$(sed -n 's/^Icon=//p' "$launcher")
+    [[ -f $ROOT/icons/papercraft/$icon.svg.tpl && -f $ROOT/icons/arcade/$icon.svg.tpl && -f $ROOT/applications/icons/$icon.png ]] ||
+      fail "the $expected launcher's icon is in the icon sets"
+  fi
 done
 pass "default agent selects and opens every supported provider and alias"
 pass "each installed harness gets a launcher with its icon in the icon sets"
