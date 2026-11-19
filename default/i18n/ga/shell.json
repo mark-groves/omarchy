@@ -30,6 +30,7 @@
     "other": "%1 athshocrú in aisce · an chéad cheann eile ag dul in éag i gceann %2",
     "two": "Dhá athshocrú in aisce · an chéad cheann eile ag dul in éag i gceann %2"
   },
+  "agents.game": "Cluiche",
   "agents.helpFireworksSignIn": "Socraigh %1, rith %2, nó sínigh isteach i Fireworks i pi nó opencode.",
   "agents.helpNotInPath": "%1 gan fáil in PATH",
   "agents.helpRunToAuthenticate": "Rith %1 le fíordheimhniú.",
@@ -38,6 +39,10 @@
   "agents.helpSignInExpired": "Tá síniú isteach sábháilte %1 imithe in éag. Tosaigh %1 chun é a athnuachan.",
   "agents.helpStartOrRunToSignIn": "Tosaigh %1, nó rith %2, chun síniú isteach.",
   "agents.hideProviderConfirm": "Folaigh %1 ón bpainéal? Coimeádfar dintiúir agus síniú isteach.",
+  "agents.kindImage": "íomhá",
+  "agents.kindMusic": "ceol",
+  "agents.kindText": "téacs",
+  "agents.kindVideo": "físeán",
   "agents.lastUpdatedAgo": "Nuashonraithe go deireanach %1 ó shin",
   "agents.lastUpdatedJustNow": "Nuashonraithe go deireanach níos lú ná nóiméad ó shin",
   "agents.lastUpdatedUnknown": "Am an nuashonraithe dheireanaigh gan fáil",
@@ -62,6 +67,7 @@
   "agents.localLaunch": "Seol gníomhaire",
   "agents.localLoadingMeter": "Ag lódáil",
   "agents.localMemoryFact": "%1 GiB Cuimhne",
+  "agents.localNeedsRam": "Teastaíonn %1 GB RAM",
   "agents.localNotEnoughMemory": "Cuimhne neamhleor",
   "agents.localRecommended": "molta",
   "agents.localRemoveConfirm": "Stad %1 agus scrios a mheáchain íoslódáilte?",
@@ -72,6 +78,7 @@
   "agents.localStart": "Tosaigh",
   "agents.localStop": "Stad",
   "agents.localStoppingMeter": "Ag stad",
+  "agents.localUsingRam": "Ag úsáid %1 GB RAM",
   "agents.loginBrowser": "Logáil isteach trí do bhrabhsálaí",
   "agents.makeSomethingCool": "CRUTHAIGH RUD IONTAH",
   "agents.merged": {
@@ -110,6 +117,7 @@
     "two": "Roinnte le dhá úsáideoir · cuir stop leis an roinnt"
   },
   "agents.networkStopSharing": "Comhroinnte ar do tailnet · stop de chomhroinnt",
+  "agents.openFantasi": "Oscail Fantasi",
   "agents.outOfCredits": "Creidiúintí ídithe",
   "agents.pasteCode": "Má thaispeánann an leathanach cód in ionad críochnaithe, greamaigh anseo é.",
   "agents.pasteCodeLink": "Leathanach ag taispeáint cóid ina ionad sin?",
