@@ -705,7 +705,7 @@
   "setup.security.face": {
     "label": "Face"
   },
-  "setup.config.git": {
+  "setup.git": {
     "label": "Git"
   },
   "setup.config.hyprland": {
