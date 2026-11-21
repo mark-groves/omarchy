@@ -31,6 +31,7 @@ steps=(
   omarchy-update-cursor
   omarchy-update-orphan-pkgs
   omarchy-update-analyze-logs
+  omarchy-done
   omarchy-shell
   omarchy-update-available
   omarchy-update-restart
@@ -92,6 +93,7 @@ expected_steps() {
     omarchy-migrate \
     omarchy-update-orphan-pkgs \
     omarchy-update-analyze-logs \
+    omarchy-done \
     omarchy-shell \
     omarchy-update-restart \
     omarchy-hook \
