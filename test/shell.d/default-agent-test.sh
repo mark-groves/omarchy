@@ -235,7 +235,7 @@ for tool in "$ori_package" basecamp; do
   grep -Eq "^$tool = \\{ version = \"latest\", lazy = true, minimum_release_age = \"0s\" \\}$" "$lazy_config" ||
     fail "user setup declares $tool as a native lazy tool"
 done
-for tool in codex claude copilot opencode pi "\"$kimi_package\""; do
+for tool in codex claude copilot opencode "\"$kimi_package\""; do
   grep -Eq "^$tool = \\{ version = \"latest\", lazy = true, auto_update = \"4h\", " "$lazy_config" ||
     fail "user setup declares $tool as a self-updating native lazy tool"
 done
@@ -455,7 +455,6 @@ declare -A expected_agents=(
 )
 
 declare -A expected_packages=(
-  [pi]="pi"
   [omp]="$omp_package"
   [opencode]="opencode"
   [ori]="$ori_package"
@@ -497,6 +496,9 @@ for selection in "${!expected_agents[@]}"; do
     mapfile -t hermes_install_calls <"$hermes_install_log"
     [[ ${hermes_install_calls[0]} == "--check" && ${hermes_install_calls[1]} == "--now" ]] ||
       fail "default agent reuses Hermes through its own installer"
+  elif [[ $expected == "pi" ]]; then
+    OMARCHY_TEST_AGENT_INSTALLED=true omarchy-default-agent "$selection"
+    [[ ! -s $mise_log ]] || fail "Pi comes from its package, not through mise"
   else
     OMARCHY_TEST_AGENT_INSTALLED=true omarchy-default-agent "$selection"
     mapfile -d '' -t mise_args <"$mise_log"
@@ -1016,6 +1018,8 @@ prefer_local_launch() {
   mapfile -d '' -t launch_args <"$launch_log"
 }
 
+omarchy-models-harness codex 2>/dev/null && fail "only a harness that can take a local model is accepted"
+omarchy-models-harness opencode
 prefer_local_launch '{"last":"big","models":{"big":{"unit":"active","sub_state":"running"}}}'
 [[ ${launch_args[*]} == *"OPENCODE_CONFIG=/overlays/opencode-big.config"*"opencode --auto --standalone" ]] ||
   fail "--prefer-local opens the running local model: ${launch_args[*]}"
@@ -1073,18 +1077,12 @@ mapfile -d '' -t launch_args <"$launch_log"
 rm "$mock_bin/omarchy-models-warmup"
 pass "a stopped local model is started in the agent's terminal before the agent opens"
 
-# A default that can't take the overlay, with no pi or OpenCode to stand in,
-# still opens rather than failing as --local would.
-printf '%s\n' "codex" >"$agent_file"
-: >"$notification_history"
-printf '#!/bin/bash\nexit 1\n' >"$mock_bin/omarchy-cmd-present"
-chmod +x "$mock_bin/omarchy-cmd-present"
+# With no harness chosen the local model opens in pi, whatever the default agent.
+rm "${agent_file%/*}/models-harness"
 prefer_local_launch '{"last":"big","models":{"big":{"unit":"active","sub_state":"running"}}}'
-[[ ${launch_args[*]} == *"codex --approve-for-me" && ${launch_args[*]} != *overlays* ]] ||
-  fail "--prefer-local falls back to a default that can't take the overlay: ${launch_args[*]}"
-[[ ! -s $notification_history ]] || fail "--prefer-local falling back raises no notification"
-printf '%s\n' "opencode" >"$agent_file"
-rm "$mock_bin/omarchy-models" "$mock_bin/omarchy-cmd-present"
+[[ ${launch_args[*]} == *"pi --extension /overlays/pi-big.config"* ]] ||
+  fail "the local model opens in pi by default: ${launch_args[*]}"
+rm "$mock_bin/omarchy-models"
 pass "--prefer-local opens the running local model, and the usual agent otherwise"
 
 : >"$launch_log"
