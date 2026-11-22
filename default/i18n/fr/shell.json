@@ -23,7 +23,6 @@
   "agents.editInstructions": "Modifier AGENTS.md, les instructions suivies par chaque agent",
   "agents.enterApiKey": "Collez votre clé API",
   "agents.firstBecomesDefault": "Le premier est votre agent par défaut",
-  "agents.forgetAccount": "Supprimer %1",
   "agents.forgetAccountConfirm": "Supprimer %1 ? Sa connexion sera supprimée de cette machine, donc pour l'ajouter à nouveau, il faudra vous reconnecter.",
   "agents.freeResets": {
     "many": "%1 de réinitialisations gratuites",

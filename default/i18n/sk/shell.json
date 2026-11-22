@@ -23,7 +23,6 @@
   "agents.editInstructions": "Upraviť AGENTS.md, pokyny pre všetkých agentov",
   "agents.enterApiKey": "Vložte kľúč API",
   "agents.firstBecomesDefault": "Prvý je váš predvolený",
-  "agents.forgetAccount": "Odstrániť %1",
   "agents.forgetAccountConfirm": "Odstrániť %1? Prihlásenie sa z tohto zariadenia vymaže, takže pri opätovnom pridaní sa budete musieť znova prihlásiť.",
   "agents.freeResets": {
     "few": "%1 voľné resety",

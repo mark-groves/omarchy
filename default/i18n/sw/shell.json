@@ -23,7 +23,6 @@
   "agents.editInstructions": "Hariri AGENTS.md, maelekezo yanayofuatwa na kila wakala",
   "agents.enterApiKey": "Bandika ufunguo wako wa API",
   "agents.firstBecomesDefault": "Wa kwanza ndiye wa chaguo-msingi wako",
-  "agents.forgetAccount": "Ondoa %1",
   "agents.forgetAccountConfirm": "Ondoa %1? Kuingia kwake kutafutwa kwenye mashine hii, hivyo kuiongeza tena kutahitaji kuingia upya.",
   "agents.freeResets": {
     "one": "%1 mara ya kuweka upya bure",

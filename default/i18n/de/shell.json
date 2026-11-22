@@ -23,7 +23,6 @@
   "agents.editInstructions": "Bearbeite AGENTS.md, die Anweisungen, die jeder Agent befolgt",
   "agents.enterApiKey": "Füge deinen API-Schlüssel ein",
   "agents.firstBecomesDefault": "Der erste ist dein Standard",
-  "agents.forgetAccount": "%1 entfernen",
   "agents.forgetAccountConfirm": "%1 entfernen? Die gespeicherte Anmeldung wird von diesem Computer gelöscht, sodass du dich beim erneuten Hinzufügen wieder anmelden musst.",
   "agents.freeResets": {
     "one": "%1 kostenloser Reset",

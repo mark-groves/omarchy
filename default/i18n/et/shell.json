@@ -23,7 +23,6 @@
   "agents.editInstructions": "Muuda AGENTS.md, juhiseid, mida iga agent järgib",
   "agents.enterApiKey": "Kleebi oma API võti",
   "agents.firstBecomesDefault": "Esimesest saab sinu vaikeagent",
-  "agents.forgetAccount": "Eemalda %1",
   "agents.forgetAccountConfirm": "Eemalda %1? Selle sisselogimine kustutatakse sellest masinast, nii et tagasi lisamiseks tuleb uuesti sisse logida.",
   "agents.freeResets": {
     "one": "%1 tasuta lähtestamine",

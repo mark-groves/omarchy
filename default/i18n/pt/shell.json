@@ -23,7 +23,6 @@
   "agents.editInstructions": "Edita AGENTS.md, as instruções que todos os agentes seguem",
   "agents.enterApiKey": "Cola a tua chave API",
   "agents.firstBecomesDefault": "O primeiro é o teu predefinido",
-  "agents.forgetAccount": "Remover %1",
   "agents.forgetAccountConfirm": "Remover %1? O início de sessão será apagado desta máquina, por isso terás de iniciar sessão outra vez para o voltar a adicionar.",
   "agents.freeResets": {
     "many": "%1 reposições grátis",

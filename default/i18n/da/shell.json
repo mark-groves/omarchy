@@ -23,7 +23,6 @@
   "agents.editInstructions": "Rediger AGENTS.md, instruktionerne alle agenter følger",
   "agents.enterApiKey": "Indsæt din API-nøgle",
   "agents.firstBecomesDefault": "Den første er din standardagent",
-  "agents.forgetAccount": "Fjern %1",
   "agents.forgetAccountConfirm": "Fjern %1? Dens login slettes fra denne maskine, så du skal logge ind igen for at tilføje den på ny.",
   "agents.freeResets": {
     "one": "%1 gratis nulstilling",

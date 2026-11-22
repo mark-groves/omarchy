@@ -23,7 +23,6 @@
   "agents.editInstructions": "Редактирай AGENTS.md, инструкциите, които всеки агент следва",
   "agents.enterApiKey": "Постави API ключа си",
   "agents.firstBecomesDefault": "Първият е по подразбиране",
-  "agents.forgetAccount": "Премахни %1",
   "agents.forgetAccountConfirm": "Премахни %1? Входът му се изтрива от тази машина, така че за да го добавиш отново, трябва да влезеш пак.",
   "agents.freeResets": {
     "one": "%1 безплатно нулиране",
