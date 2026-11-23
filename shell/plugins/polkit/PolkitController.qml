@@ -40,6 +40,11 @@ Item {
   property bool starting: false
 
   property string currentMessage: ""
+  // What a command asked its next prompt to say, as it knows what it's for
+  // and pkexec names only the program: one prompt, for that program, within
+  // a minute. Taken by the prompt it fits, which keeps it as currentLabel.
+  property var expected: null
+  property string currentLabel: ""
   property string currentPrompt: ""
   property string currentSupplementary: ""
   property bool responseRequired: false
@@ -131,8 +136,15 @@ Item {
     console.log(line)
   }
 
+  // A command's label never stands in for what pkexec runs: the program
+  // stays at the end, which the line keeps in view however it's cut.
   function authorizationLabel(message) {
+    if (currentLabel !== "") return currentLabel + " · " + PolkitModel.promptProgram(message)
     return message ? PolkitModel.authorizationLabel(message, I18n.t) : I18n.t("polkit.authenticationNeeded")
+  }
+
+  function noteExpected(program, label) {
+    expected = { program: program, label: label, until: Date.now() + 60000 }
   }
 
   function noteSlotFailure(url) {
@@ -261,6 +273,7 @@ Item {
 
   function resetSnapshot() {
     currentMessage = ""
+    currentLabel = ""
     currentPrompt = ""
     currentSupplementary = ""
     responseRequired = false
@@ -273,6 +286,13 @@ Item {
     var flow = root.flow
     if (!flow) return
     currentMessage = String(flow.message || "")
+    if (currentLabel === "") {
+      var label = PolkitModel.expectedLabel(currentMessage, expected, Date.now())
+      if (label !== "") {
+        currentLabel = label
+        expected = null
+      }
+    }
     currentPrompt = String(flow.inputPrompt || "")
     currentSupplementary = String(flow.supplementaryMessage || "")
     responseRequired = !!flow.isResponseRequired
@@ -318,6 +338,8 @@ Item {
     // (Quickshell starts a queued one as the last completes) keeps its window
     // mapped: dialogVisible never reads false in between.
     root.starting = true
+    // A request arriving while the last one's dialog closes is its own.
+    root.currentLabel = ""
     root.resetLane()
     root.trackedFlow = flow
     root.resolvedUnderLock = false
