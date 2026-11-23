@@ -246,7 +246,7 @@ assertEqual(short('r', 42, { unit: 'installing' }), null, 'one already being set
 
 // Up and Down land on a line's last stop, so a model that isn't running
 // yet ends on Play, which Enter starts, rather than its mark.
-const lineStop = (launches, actions) => new Function('providers', 'launches', 'localLineActions', fn('lineStop') + '\nreturn lineStop')([{}], () => launches, () => actions)(0)
+const lineStop = (launches, actions) => new Function('shownProviders', 'launches', 'localLineActions', fn('lineStop') + '\nreturn lineStop')([{}], () => launches, () => actions)(0)
 assertEqual(lineStop(true, ['share', 'toggle']), 'providerLaunch', 'a running model lands on its terminal button')
 assertEqual(lineStop(false, ['update', 'toggle']), 'localToggle', 'a stopped model lands on its play button')
 assertEqual(lineStop(false, []), 'provider', 'a line with nothing to press lands on its mark')

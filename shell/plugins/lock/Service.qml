@@ -1123,8 +1123,9 @@ Item {
         stop()
         root.fingerprintSleptWhilePaused = true
         // A panel blanked before the sleep stays dark through the resume, and
-        // opening the lid is no input that would light it.
-        if (!wakeProcess.running) wakeProcess.running = true
+        // opening the lid is no input that would light it. A wake already
+        // running stays queued, the same as a key or a click.
+        root.requestWake()
         root.resumeFingerprint()
         root.armBlankTimer(idleBlankTimer.resumeMs)
       } else if (slept || !root.fingerprintPaused || --ticksLeft <= 0) {
