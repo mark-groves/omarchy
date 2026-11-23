@@ -3050,6 +3050,7 @@ Panel {
     property bool editingName: false
     property string renamedTo: ""
     readonly property string accountLabel: renamedTo !== "" ? renamedTo : account ? String(account.label || account.id || "") : ""
+    readonly property string accountName: provider ? String((provider.account && provider.account.email) || provider.accountName || "") : ""
     onAccountChanged: renamedTo = ""
     onEditingNameChanged: root.renaming = editingName
 
@@ -3200,8 +3201,8 @@ Panel {
         }
 
         PanelToolTip {
-          visible: accountNameMouse.containsMouse && !!section.account && String(section.account.email || "") !== ""
-          text: section.account ? String(section.account.email || "") : ""
+          visible: accountNameMouse.containsMouse && !!section.account && section.accountName !== ""
+          text: section.accountName
         }
       }
 
@@ -3245,6 +3246,13 @@ Panel {
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+
+        HoverHandler { id: planHover }
+
+        PanelToolTip {
+          visible: planHover.hovered && sectionPlan.visible && section.accountName !== ""
+          text: section.accountName
+        }
       }
 
       UsageNote {
