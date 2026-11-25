@@ -45,6 +45,19 @@ Item {
   // a minute. Taken by the prompt it fits, which keeps it as currentLabel.
   property var expected: null
   property string currentLabel: ""
+  // The coding agent a prompt comes from ({ mark, name, light }). Its mark
+  // takes the padlock's place. Looked up per prompt; the padlock waits so it
+  // doesn't flash before the mark.
+  property var currentAgent: null
+  property bool requesterPending: false
+  property int requesterSerial: 0
+  readonly property url agentMarkSource: {
+    if (!currentAgent) return ""
+    var suffix = currentAgent.light && Util.luminance(Commons.Color.polkit.background) >= 0.5 ? "-light.svg" : ".svg"
+    return Qt.resolvedUrl("../agents/assets/" + currentAgent.mark + suffix)
+  }
+  // The program a labelled prompt runs, on its own line under the label.
+  readonly property string labelProgram: currentLabel !== "" && driveDevice === "" ? PolkitModel.promptProgram(currentMessage) : ""
   property string currentPrompt: ""
   property string currentSupplementary: ""
   property bool responseRequired: false
@@ -148,8 +161,33 @@ Item {
   // stays at the end, which the line keeps in view however it's cut.
   function authorizationLabel(message) {
     if (driveDevice !== "") return currentLabel
-    if (currentLabel !== "") return currentLabel + " · " + PolkitModel.promptProgram(message)
-    return message ? PolkitModel.authorizationLabel(message, I18n.t) : I18n.t("polkit.authenticationNeeded")
+    // A command's label never stands in for what pkexec runs: the program
+    // gets a line of its own under it.
+    if (currentLabel !== "") return currentLabel
+    return message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : I18n.t("polkit.authenticationNeeded")
+  }
+
+  function clearRequester() {
+    currentAgent = null
+    requesterPending = false
+    requesterTimeout.stop()
+    // A lookup still running is for a prompt that's gone, not for what comes next.
+    requesterSerial++
+  }
+
+  function findRequester() {
+    clearRequester()
+    requesterPending = PolkitModel.promptProgram(currentMessage) !== ""
+    if (!requesterPending) return
+    requesterTimeout.restart()
+    lookUpRequester()
+  }
+
+  function lookUpRequester() {
+    if (requesterProc.running) return
+    requesterProc.forSerial = requesterSerial
+    requesterProc.command = ["python3", Quickshell.env("OMARCHY_PATH") + "/shell/plugins/polkit/requester.py", PolkitModel.promptProgram(currentMessage)]
+    requesterProc.running = true
   }
 
   function noteExpected(program, label) {
@@ -283,6 +321,7 @@ Item {
   function resetSnapshot() {
     currentMessage = ""
     currentLabel = ""
+    clearRequester()
     currentPrompt = ""
     currentSupplementary = ""
     responseRequired = false
@@ -295,13 +334,6 @@ Item {
     var flow = root.flow
     if (!flow) return
     currentMessage = String(flow.message || "")
-    if (currentLabel === "") {
-      var label = PolkitModel.expectedLabel(currentMessage, expected, Date.now())
-      if (label !== "") {
-        currentLabel = label
-        expected = null
-      }
-    }
     currentPrompt = String(flow.inputPrompt || "")
     currentSupplementary = String(flow.supplementaryMessage || "")
     responseRequired = !!flow.isResponseRequired
@@ -361,6 +393,12 @@ Item {
     root.resolvedUnderLock = false
     root.probeLog = []
     root.syncFromFlow()
+    // Taken here, not in syncFromFlow: Quickshell sets the flow, and with it
+    // isActive, before it says the request started. A request arriving while
+    // the last dialog closes doesn't keep the last label.
+    root.currentLabel = PolkitModel.expectedLabel(root.currentMessage, root.expected, Date.now())
+    if (root.currentLabel !== "") root.expected = null
+    root.findRequester()
     root.refreshLidState()
     lidWait.restart()
     // A new request is a new prompt, even when the field kept focus from
@@ -783,6 +821,31 @@ Item {
     onLoaded: root.loadPamConfig(text())
     onLoadFailed: root.pamRaw = ""
     onFileChanged: reload()
+  }
+
+  Process {
+    id: requesterProc
+    property int forSerial: 0
+    stdout: StdioCollector { id: requesterOut; waitForEnd: true }
+    onExited: {
+      if (forSerial === root.requesterSerial) {
+        requesterTimeout.stop()
+        if (root.dialogVisible) root.currentAgent = PolkitModel.parseRequester(requesterOut.text)
+        root.requesterPending = false
+      } else if (root.requesterPending) {
+        Qt.callLater(root.lookUpRequester)
+      }
+    }
+  }
+
+  Timer {
+    id: requesterTimeout
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      root.requesterSerial++
+      root.requesterPending = false
+    }
   }
 
   // The password goes over stdin, never argv, and closing stdin ends it.
