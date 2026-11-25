@@ -398,6 +398,8 @@ Item {
   // The flow has ended. Success and cancel signals all land before this
   // runs, so a result still to play is never cut short.
   function noteFlowEnded() {
+    // A drive that already took the card survives polkitd finishing.
+    if (root.driveDevice !== "") return
     var serial = root.requestSerial
     Qt.callLater(function() {
       if (serial !== root.requestSerial) return
@@ -484,12 +486,21 @@ Item {
       root.driveDevice = ""
       root.driveLabel = ""
       if (root.realCard) root.realCard.clearField()
-      root.dispatch({ type: "cancelled" })
+      root.resetLane()
+      root.nextDrive()
       return
     }
     if (root.starting) root.lidSettled()
     var flow = root.trackedFlow
     if (root.realCard) root.realCard.clearField()
+    // A drive already waiting takes the card in this turn. Otherwise the face
+    // lane plays its exit, and the keyboard was released when the outcome landed.
+    if (root.driveQueue.length > 0) {
+      root.resetLane()
+      if (flow && !flow.isCompleted) flow.cancelAuthenticationRequest()
+      root.nextDrive()
+      return
+    }
     root.dispatch({ type: "cancelled" })
     if (flow && !flow.isCompleted) flow.cancelAuthenticationRequest()
   }
@@ -523,7 +534,9 @@ Item {
   }
 
   function nextDrive() {
-    if (root.driveDevice !== "" || root.agentActive || root.starting || root.previewing || root.lane.phase !== "closed" || root.driveQueue.length === 0) return
+    // A polkit flow can still be tearing down after its card has gone. The
+    // closed lane is what frees the card, so the next drive does not wait on it.
+    if (root.driveDevice !== "" || root.starting || root.previewing || root.lane.phase !== "closed" || root.driveQueue.length === 0) return
     var next = root.driveQueue[0]
     root.driveQueue = root.driveQueue.slice(1)
     root.beginDrive(next.device, next.label)
@@ -552,7 +565,10 @@ Item {
     if (exitCode !== 0) console.warn("omarchy drive unlock failed: " + error.trim())
     root.driveDevice = ""
     root.driveLabel = ""
-    root.dispatch({ type: "cancelled" })
+    // The card goes now. The face lane's exit is for a polkit result, and a
+    // drive has none.
+    root.resetLane()
+    root.nextDrive()
   }
 
   // ---- The preview -------------------------------------------------------------
@@ -698,10 +714,24 @@ Item {
       if (root.flow && root.flow.isSuccessful) root.dispatch({ type: "succeeded" })
     }
 
-    function onAuthenticationSucceeded() { root.dispatch({ type: "succeeded" }) }
+    function onAuthenticationSucceeded() {
+      if (root.driveDevice !== "") return
+      if (root.driveQueue.length > 0) {
+        root.resetLane()
+        root.nextDrive()
+        return
+      }
+      root.dispatch({ type: "succeeded" })
+    }
 
     function onAuthenticationRequestCancelled() {
+      if (root.driveDevice !== "") return
       if (root.sessionLocked) root.resolvedUnderLock = true
+      if (root.driveQueue.length > 0) {
+        root.resetLane()
+        root.nextDrive()
+        return
+      }
       root.dispatch({ type: "cancelled" })
     }
 
