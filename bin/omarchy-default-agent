@@ -90,7 +90,14 @@ elif [[ $agent == "pi" || $agent == "local" ]]; then
   agent_install() { true; }
 elif [[ $agent == "cursor-agent" ]]; then
   agent_present() { omarchy-install-cursor-agent --check; }
-  agent_install() { omarchy-install-cursor-agent; }
+  # --check first: a cursor-agent already on PATH is the install, and the
+  # tarball fetch only runs when that misses.
+  agent_install() {
+    if omarchy-install-cursor-agent --check; then
+      return 0
+    fi
+    omarchy-install-cursor-agent
+  }
 else
   agent_present() { omarchy-install-ai-cli --check "$agent"; }
   agent_install() { omarchy-install-ai-cli "$agent"; }
