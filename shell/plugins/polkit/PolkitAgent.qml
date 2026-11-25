@@ -97,6 +97,11 @@ Item {
       polkitController.noteExpected(program, label)
       return "ok"
     }
+
+    function unlockDrive(device: string, label: string): string {
+      polkitController.queueDrive(device, label)
+      return "ok"
+    }
   }
 
   // Strings only. preview refuses while a real request owns the card, and a
