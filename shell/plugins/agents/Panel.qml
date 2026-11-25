@@ -1040,7 +1040,7 @@ Panel {
   function openOpenCodeLogin() {
     root.close()
     Util.execArgv(["omarchy-launch-floating-terminal-with-presentation",
-                   'opencode auth login && { [[ -n $(omarchy-default-agent) ]] || omarchy-default-agent --select opencode; }'])
+                   'omarchy-install-ai-cli opencode && opencode auth login && { [[ -n $(omarchy-default-agent) ]] || omarchy-default-agent --select opencode; }'])
   }
 
   function submitPaste(code) {
