@@ -293,6 +293,12 @@ function parseRequester(text) {
   return { mark: mark, name: name, light: parts[2] === "1" }
 }
 
+// Collapse line breaks and runs of whitespace so a multi-line command or
+// message always fits on a single line in the pill above the password card.
+function singleLine(text) {
+  return String(text || "").replace(/\s+/g, " ").trim()
+}
+
 // A pkexec prompt names the agent it comes from, when that's known. The parts
 // go in through functions, so a $ in a command line stays as it is.
 function authorizationLabel(message, tr, agentName) {
@@ -300,15 +306,17 @@ function authorizationLabel(message, tr, agentName) {
   var text = String(message || "")
   var match = text.match(pkexecPrompt)
   if (match) {
-    var name = String(agentName || "").trim()
+    var program = singleLine(match[1])
+    var name = singleLine(agentName)
     if (name !== "")
-      return t("polkit.authorizeAgentRunning", "Authorize %1 to run '%2'").replace("%1", function() { return name }).replace("%2", function() { return match[1] })
-    return t("polkit.authorizeRunning", "Authorize running '%1'").replace("%1", function() { return match[1] })
+      return t("polkit.authorizeAgentRunning", "Authorize %1 to run '%2'").replace("%1", function() { return name }).replace("%2", function() { return program })
+    return t("polkit.authorizeRunning", "Authorize running '%1'").replace("%1", function() { return program })
   }
+  var clean = singleLine(text)
   // udisks formatting a drive, named as udisks names it.
-  match = text.match(/^Authentication is required to format (.+)$/i)
+  match = clean.match(/^Authentication is required to format (.+)$/i)
   if (match) return t("polkit.authorizeFormatting", "Authorize formatting of %1").replace("%1", function() { return match[1] })
-  return text
+  return clean
 }
 
 // FaceChrome.sourceUrl is shared with lock and is set whenever a face plugin
@@ -721,6 +729,7 @@ if (typeof module !== "undefined") {
     hintFor: hintFor,
     cardIsSquare: cardIsSquare,
     fingerprintConfiguredFromPamConfig: fingerprintConfiguredFromPamConfig,
+    singleLine: singleLine,
     authorizationLabel: authorizationLabel,
     promptProgram: promptProgram,
     expectedLabel: expectedLabel,

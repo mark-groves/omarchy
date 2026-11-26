@@ -57,7 +57,8 @@ Item {
     return Qt.resolvedUrl("../agents/assets/" + currentAgent.mark + suffix)
   }
   // The program a labelled prompt runs, on its own line under the label.
-  readonly property string labelProgram: currentLabel !== "" && driveDevice === "" ? PolkitModel.promptProgram(currentMessage) : ""
+  // Newlines collapse so a multi-line command still fits the pill.
+  readonly property string labelProgram: PolkitModel.singleLine(currentLabel) !== "" && driveDevice === "" ? PolkitModel.singleLine(PolkitModel.promptProgram(currentMessage)) : ""
   property string currentPrompt: ""
   property string currentSupplementary: ""
   property bool responseRequired: false
@@ -159,12 +160,14 @@ Item {
 
   // A command's label never stands in for what pkexec runs: the program
   // stays at the end, which the line keeps in view however it's cut.
+  // A label or message with only line breaks still falls through to the
+  // default prompt, and a drive unlock keeps the name it was given.
   function authorizationLabel(message) {
     if (driveDevice !== "") return currentLabel
-    // A command's label never stands in for what pkexec runs: the program
-    // gets a line of its own under it.
-    if (currentLabel !== "") return currentLabel
-    return message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : I18n.t("polkit.authenticationNeeded")
+    var label = PolkitModel.singleLine(currentLabel)
+    if (label !== "") return label
+    var text = message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : ""
+    return text !== "" ? text : I18n.t("polkit.authenticationNeeded")
   }
 
   function clearRequester() {
