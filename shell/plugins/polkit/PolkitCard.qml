@@ -530,16 +530,31 @@ Item {
           OpacityAnimator { duration: Style.duration(140); easing.type: Easing.OutCubic }
         }
 
-        Text {
-          textFormat: Text.PlainText
-          text: PolkitModel.glyphFor(root.faceLayout ? "password" : root.cardKind)
-          color: root.errorFlash ? Commons.Color.polkit.textError : root.accent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.iconLarge
+        Item {
           width: Style.space(26)
           height: root.fieldHeight
-          horizontalAlignment: Text.AlignHCenter
-          verticalAlignment: Text.AlignVCenter
+
+          Image {
+            id: agentMark
+            anchors.centerIn: parent
+            width: Style.space(22)
+            height: Style.space(22)
+            source: root.current && root.controller.agentMarkSource ? root.controller.agentMarkSource : ""
+            visible: source.toString() !== ""
+            fillMode: Image.PreserveAspectFit
+          }
+
+          Text {
+            anchors.fill: parent
+            textFormat: Text.PlainText
+            text: PolkitModel.glyphFor(root.faceLayout ? "password" : root.cardKind)
+            color: root.errorFlash ? Commons.Color.polkit.textError : root.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.iconLarge
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            visible: !agentMark.visible && !(root.current && root.controller.requesterPending)
+          }
         }
 
         Item {
@@ -623,27 +638,51 @@ Item {
     }
 
     Rectangle {
-      width: Math.min(justificationText.implicitWidth + Style.space(24), root.width - Style.gapsOut * 2)
-      height: Style.space(28)
+      id: justificationPill
+      property string program: root.current ? root.controller.labelProgram : ""
+      visible: root.current && (!root.controller.requesterPending || root.controller.currentLabel !== "")
+      width: Math.min(Math.max(justificationText.implicitWidth, programText.implicitWidth) + Style.space(24), root.width - Style.gapsOut * 2)
+      height: program !== "" ? justificationText.implicitHeight + programText.implicitHeight + Style.space(16) : Style.space(28)
       anchors.horizontalCenter: card.horizontalCenter
       anchors.bottom: card.top
       anchors.bottomMargin: Style.space(10)
       radius: root.cornerRadius
       color: root.background
 
-      Text {
-        id: justificationText
-        textFormat: Text.PlainText
+      Column {
         anchors.fill: parent
         anchors.leftMargin: Style.space(12)
         anchors.rightMargin: Style.space(12)
-        text: root.current ? root.controller.authorizationLabel(root.controller.currentMessage) : ""
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideMiddle
+        anchors.topMargin: justificationPill.program !== "" ? Style.space(6) : 0
+        anchors.bottomMargin: justificationPill.program !== "" ? Style.space(6) : 0
+        spacing: Style.space(2)
+
+        Text {
+          id: justificationText
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.current ? root.controller.authorizationLabel(root.controller.currentMessage) : ""
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: justificationPill.program !== "" ? Style.font.body : Style.font.bodySmall
+          horizontalAlignment: Text.AlignHCenter
+          verticalAlignment: Text.AlignVCenter
+          elide: justificationPill.program !== "" ? Text.ElideRight : Text.ElideMiddle
+        }
+
+        Text {
+          id: programText
+          width: parent.width
+          visible: justificationPill.program !== ""
+          textFormat: Text.PlainText
+          text: justificationPill.program
+          color: root.foreground
+          opacity: 0.62
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          horizontalAlignment: Text.AlignHCenter
+          elide: Text.ElideMiddle
+        }
       }
     }
   }

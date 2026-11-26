@@ -40,6 +40,24 @@ Item {
   property bool starting: false
 
   property string currentMessage: ""
+  // What a command asked its next prompt to say, as it knows what it's for
+  // and pkexec names only the program: one prompt, for that program, within
+  // a minute. Taken by the prompt it fits, which keeps it as currentLabel.
+  property var expected: null
+  property string currentLabel: ""
+  // The coding agent a prompt comes from ({ mark, name, light }). Its mark
+  // takes the padlock's place. Looked up per prompt; the padlock waits so it
+  // doesn't flash before the mark.
+  property var currentAgent: null
+  property bool requesterPending: false
+  property int requesterSerial: 0
+  readonly property url agentMarkSource: {
+    if (!currentAgent) return ""
+    var suffix = currentAgent.light && Util.luminance(Commons.Color.polkit.background) >= 0.5 ? "-light.svg" : ".svg"
+    return Qt.resolvedUrl("../agents/assets/" + currentAgent.mark + suffix)
+  }
+  // The program a labelled prompt runs, on its own line under the label.
+  readonly property string labelProgram: currentLabel !== "" && driveDevice === "" ? PolkitModel.promptProgram(currentMessage) : ""
   property string currentPrompt: ""
   property string currentSupplementary: ""
   property bool responseRequired: false
@@ -81,14 +99,20 @@ Item {
   property string lastChromeLog: ""
   property string pamRaw: ""
   property bool laptopClosed: false
+  // The encrypted drive being asked for (omarchy-drive-unlock), not polkit:
+  // the card unlocks it with the password itself, so a wrong one is asked again.
+  property string driveDevice: ""
+  property string driveLabel: ""
+  // Drives waiting their turn, as { device, label }: one card at a time.
+  property var driveQueue: []
 
-  readonly property bool dialogVisible: root.starting || root.lane.phase !== "closed"
+  readonly property bool dialogVisible: root.starting || root.lane.phase !== "closed" || root.driveDevice !== ""
   readonly property bool cardVisible: PolkitModel.polkitCardVisible(dialogVisible, sessionLocked, resolvedUnderLock)
   readonly property bool realShown: root.cardVisible && !root.previewing
   readonly property bool previewShown: root.cardVisible && root.previewing
   // Exclusive only while a real request can still take an answer. Once PAM
   // has approved, or the card is leaving, what is left is display only.
-  readonly property bool wantsKeyboard: root.realShown && root.flowLive && PolkitModel.faceLaneWantsKeyboard(root.lane)
+  readonly property bool wantsKeyboard: root.realShown && (root.flowLive || root.driveDevice !== "") && PolkitModel.faceLaneWantsKeyboard(root.lane)
   readonly property bool realBusy: root.agentActive || root.starting || (!root.previewing && root.lane.phase !== "closed")
 
   readonly property var pamSteps: PolkitModel.pamStepsFromConfig(pamRaw)
@@ -100,7 +124,9 @@ Item {
     failedUrls: root.failedSlotUrls,
     failedRevision: root.failedSlotRevision
   })
-  readonly property var presentation: PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
+  readonly property var presentation: root.driveDevice !== ""
+    ? ({ kind: "password" })
+    : PolkitModel.cardPresentationFor(pamSteps, waitingOnPam, laptopClosed, slotSource)
   readonly property string slotUrl: presentation && presentation.slot ? presentation.slot.url : ""
 
   readonly property string surfaceName: root.previewing ? "polkit-preview" : "polkit"
@@ -131,8 +157,41 @@ Item {
     console.log(line)
   }
 
+  // A command's label never stands in for what pkexec runs: the program
+  // stays at the end, which the line keeps in view however it's cut.
   function authorizationLabel(message) {
-    return message ? PolkitModel.authorizationLabel(message, I18n.t) : I18n.t("polkit.authenticationNeeded")
+    if (driveDevice !== "") return currentLabel
+    // A command's label never stands in for what pkexec runs: the program
+    // gets a line of its own under it.
+    if (currentLabel !== "") return currentLabel
+    return message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : I18n.t("polkit.authenticationNeeded")
+  }
+
+  function clearRequester() {
+    currentAgent = null
+    requesterPending = false
+    requesterTimeout.stop()
+    // A lookup still running is for a prompt that's gone, not for what comes next.
+    requesterSerial++
+  }
+
+  function findRequester() {
+    clearRequester()
+    requesterPending = PolkitModel.promptProgram(currentMessage) !== ""
+    if (!requesterPending) return
+    requesterTimeout.restart()
+    lookUpRequester()
+  }
+
+  function lookUpRequester() {
+    if (requesterProc.running) return
+    requesterProc.forSerial = requesterSerial
+    requesterProc.command = ["python3", Quickshell.env("OMARCHY_PATH") + "/shell/plugins/polkit/requester.py", PolkitModel.promptProgram(currentMessage)]
+    requesterProc.running = true
+  }
+
+  function noteExpected(program, label) {
+    expected = { program: program, label: label, until: Date.now() + 60000 }
   }
 
   function noteSlotFailure(url) {
@@ -261,6 +320,8 @@ Item {
 
   function resetSnapshot() {
     currentMessage = ""
+    currentLabel = ""
+    clearRequester()
     currentPrompt = ""
     currentSupplementary = ""
     responseRequired = false
@@ -307,22 +368,37 @@ Item {
       root.previewing = false
       root.previewDots = 0
     }
+    Qt.callLater(root.nextDrive)
   }
 
   // ---- A real request --------------------------------------------------------
 
   function beginRealFlow(flow) {
     if (root.previewing) root.stopPreview()
+    // Polkit's own request takes the card; a drive being asked for waits first in line.
+    if (root.driveDevice !== "") {
+      root.driveQueue = [{ device: root.driveDevice, label: root.driveLabel }].concat(root.driveQueue)
+      root.driveDevice = ""
+      root.driveLabel = ""
+    }
     root.requestSerial += 1
     // Starting before the reset, so a card still up from the request before
     // (Quickshell starts a queued one as the last completes) keeps its window
     // mapped: dialogVisible never reads false in between.
     root.starting = true
+    // A request arriving while the last one's dialog closes is its own.
+    root.currentLabel = ""
     root.resetLane()
     root.trackedFlow = flow
     root.resolvedUnderLock = false
     root.probeLog = []
     root.syncFromFlow()
+    // Taken here, not in syncFromFlow: Quickshell sets the flow, and with it
+    // isActive, before it says the request started. A request arriving while
+    // the last dialog closes doesn't keep the last label.
+    root.currentLabel = PolkitModel.expectedLabel(root.currentMessage, root.expected, Date.now())
+    if (root.currentLabel !== "") root.expected = null
+    root.findRequester()
     root.refreshLidState()
     lidWait.restart()
     // A new request is a new prompt, even when the field kept focus from
@@ -360,6 +436,8 @@ Item {
   // The flow has ended. Success and cancel signals all land before this
   // runs, so a result still to play is never cut short.
   function noteFlowEnded() {
+    // A drive that already took the card survives polkitd finishing.
+    if (root.driveDevice !== "") return
     var serial = root.requestSerial
     Qt.callLater(function() {
       if (serial !== root.requestSerial) return
@@ -389,6 +467,20 @@ Item {
   // and an Automatic stack never sends one.
   function submitResponse(isAutoRepeat) {
     if (root.previewing || !root.realCard) return
+    if (root.driveDevice !== "") {
+      if (root.lane.phase !== "open" || root.lane.pending !== "" || root.lane.outcome !== "") return
+      if (root.realCard.fieldEmpty) return
+      var driveAnswer = root.realCard.takeAnswer()
+      root.dispatch({ type: "submitTyped" })
+      root.errorFlash = false
+      driveUnlock.secret = driveAnswer
+      driveUnlock.device = root.driveDevice
+      driveUnlock.command = ["udisksctl", "unlock", "--no-user-interaction", "--block-device", root.driveDevice, "--key-file", "/dev/stdin"]
+      driveUnlock.stdinEnabled = true
+      driveUnlock.running = true
+      root.realCard.focusCatcher()
+      return
+    }
     var flow = root.trackedFlow
     if (!flow || !flow.isResponseRequired) return
     // An empty Enter during the lid check is the launching terminal's key,
@@ -428,9 +520,25 @@ Item {
 
   function cancelRequest() {
     if (root.previewing) return
+    if (root.driveDevice !== "") {
+      root.driveDevice = ""
+      root.driveLabel = ""
+      if (root.realCard) root.realCard.clearField()
+      root.resetLane()
+      root.nextDrive()
+      return
+    }
     if (root.starting) root.lidSettled()
     var flow = root.trackedFlow
     if (root.realCard) root.realCard.clearField()
+    // A drive already waiting takes the card in this turn. Otherwise the face
+    // lane plays its exit, and the keyboard was released when the outcome landed.
+    if (root.driveQueue.length > 0) {
+      root.resetLane()
+      if (flow && !flow.isCompleted) flow.cancelAuthenticationRequest()
+      root.nextDrive()
+      return
+    }
     root.dispatch({ type: "cancelled" })
     if (flow && !flow.isCompleted) flow.cancelAuthenticationRequest()
   }
@@ -454,6 +562,51 @@ Item {
 
   function cardExitFinished() {
     root.dispatch({ type: "closed" })
+  }
+
+  function queueDrive(device, label) {
+    if (!device) return
+    if (device === root.driveDevice || root.driveQueue.some(function(d) { return d.device === device })) return
+    root.driveQueue = root.driveQueue.concat([{ device: device, label: label }])
+    root.nextDrive()
+  }
+
+  function nextDrive() {
+    // A polkit flow can still be tearing down after its card has gone. The
+    // closed lane is what frees the card, so the next drive does not wait on it.
+    if (root.driveDevice !== "" || root.starting || root.previewing || root.lane.phase !== "closed" || root.driveQueue.length === 0) return
+    var next = root.driveQueue[0]
+    root.driveQueue = root.driveQueue.slice(1)
+    root.beginDrive(next.device, next.label)
+  }
+
+  function beginDrive(device, label) {
+    root.driveDevice = device
+    root.driveLabel = label
+    root.currentLabel = I18n.t("polkit.unlockDrive").replace("%1", label)
+    root.currentMessage = ""
+    root.responseRequired = true
+    root.responseVisible = false
+    root.dispatch({ type: "open", trigger: "none", prompt: true })
+    Qt.callLater(root.refocus)
+  }
+
+  function driveChecked(device, exitCode, error) {
+    if (exitCode === 0) root.driveQueue = root.driveQueue.filter(function(d) { return d.device !== device })
+    // An answer for a drive no longer asked for (cancelled, or set aside for polkit).
+    if (device !== root.driveDevice) return
+    if (exitCode !== 0 && /Incorrect passphrase|No passphrase/.test(error)) {
+      root.dispatch({ type: "failed" })
+      root.dispatch({ type: "prompt" })
+      return
+    }
+    if (exitCode !== 0) console.warn("omarchy drive unlock failed: " + error.trim())
+    root.driveDevice = ""
+    root.driveLabel = ""
+    // The card goes now. The face lane's exit is for a polkit result, and a
+    // drive has none.
+    root.resetLane()
+    root.nextDrive()
   }
 
   // ---- The preview -------------------------------------------------------------
@@ -599,10 +752,24 @@ Item {
       if (root.flow && root.flow.isSuccessful) root.dispatch({ type: "succeeded" })
     }
 
-    function onAuthenticationSucceeded() { root.dispatch({ type: "succeeded" }) }
+    function onAuthenticationSucceeded() {
+      if (root.driveDevice !== "") return
+      if (root.driveQueue.length > 0) {
+        root.resetLane()
+        root.nextDrive()
+        return
+      }
+      root.dispatch({ type: "succeeded" })
+    }
 
     function onAuthenticationRequestCancelled() {
+      if (root.driveDevice !== "") return
       if (root.sessionLocked) root.resolvedUnderLock = true
+      if (root.driveQueue.length > 0) {
+        root.resetLane()
+        root.nextDrive()
+        return
+      }
       root.dispatch({ type: "cancelled" })
     }
 
@@ -654,6 +821,45 @@ Item {
     onLoaded: root.loadPamConfig(text())
     onLoadFailed: root.pamRaw = ""
     onFileChanged: reload()
+  }
+
+  Process {
+    id: requesterProc
+    property int forSerial: 0
+    stdout: StdioCollector { id: requesterOut; waitForEnd: true }
+    onExited: {
+      if (forSerial === root.requesterSerial) {
+        requesterTimeout.stop()
+        if (root.dialogVisible) root.currentAgent = PolkitModel.parseRequester(requesterOut.text)
+        root.requesterPending = false
+      } else if (root.requesterPending) {
+        Qt.callLater(root.lookUpRequester)
+      }
+    }
+  }
+
+  Timer {
+    id: requesterTimeout
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      root.requesterSerial++
+      root.requesterPending = false
+    }
+  }
+
+  // The password goes over stdin, never argv, and closing stdin ends it.
+  Process {
+    id: driveUnlock
+    property string secret: ""
+    property string device: ""
+    stderr: StdioCollector { id: driveUnlockError; waitForEnd: true }
+    onStarted: {
+      write(secret)
+      secret = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) { root.driveChecked(device, exitCode, String(driveUnlockError.text || "")) }
   }
 
   Process {

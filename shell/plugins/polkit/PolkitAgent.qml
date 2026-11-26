@@ -89,6 +89,21 @@ Item {
     }
   }
 
+  // A command names the next password prompt for a program. pkexec alone
+  // would name only the program.
+  ShellIpc {
+    target: "omarchy.polkit"
+    function expect(program: string, label: string): string {
+      polkitController.noteExpected(program, label)
+      return "ok"
+    }
+
+    function unlockDrive(device: string, label: string): string {
+      polkitController.queueDrive(device, label)
+      return "ok"
+    }
+  }
+
   // Strings only. preview refuses while a real request owns the card, and a
   // real request ends any preview.
   ShellIpc {
