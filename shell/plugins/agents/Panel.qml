@@ -1186,7 +1186,7 @@ Panel {
   readonly property bool starterAgentReady: localModelRunning || localModelStopped || providers.some(function(p) {
     return harnessFor(p) !== "" && !signedOut(p)
   })
-  readonly property bool starterShown: addStage === "" && !blankSlate && starterAgentReady
+  readonly property bool starterShown: indexShown && starterAgentReady
 
   function startPrompt(kind) {
     root.close()
@@ -1949,7 +1949,7 @@ Panel {
   // half-loaded first pass must not keep a total that left agents out.
   property string shownPhrase: ""
   property string shownKind: ""
-  readonly property string heroPhrase: addStage !== "" || blankSlate
+  readonly property string heroPhrase: !indexShown
     ? addHeading
     : (shownPhrase !== "" ? shownPhrase : Commons.I18n.t("agents.letsMakeSomethingCool"))
 
@@ -2025,8 +2025,16 @@ Panel {
   }
   // Local history counts as set up, so a machine with no subscription still
   // gets its summary rather than the picker.
-  // So does a running local model, which the starters can hand their task to.
-  readonly property bool blankSlate: usage.enabledProviders.length === 0 && !anySignedIn && !localModelRunning
+  // So does any local or paired coding model on the index (running, stopped,
+  // loading, stopping, failed, or removing), while a model still being set up
+  // or started from the picker stays on the blank-slate picker.
+  readonly property bool hasIndexLocalModel: localModelLines.some(function(line) {
+    return usage.localModelAdded(line)
+      && line.localModel.target !== settingUpLocal
+      && !localSettingUp(localModelState(line.localModel))
+  })
+  readonly property bool blankSlate: usage.enabledProviders.length === 0 && !anySignedIn && !hasIndexLocalModel
+  readonly property bool indexShown: addStage === "" && !blankSlate
   // Choosing a provider: asked for with the +, or simply what the panel is
   // while nothing is set up. It's derived rather than switched into, so
   // records that load a moment after the panel opens take its place.
@@ -2170,7 +2178,7 @@ Panel {
 
   Timer {
     interval: 2800
-    running: root.opened && root.summaryPhrases.length > 1 && root.addStage === "" && !root.blankSlate
+    running: root.opened && root.summaryPhrases.length > 1 && root.indexShown
     repeat: true
     onTriggered: phraseSwap.restart()
   }
@@ -2271,7 +2279,7 @@ Panel {
       }
       implicitHeight: column.implicitHeight
       anchors.fill: parent
-      reorderable: root.addStage === "" && !root.renaming
+      reorderable: root.indexShown && !root.renaming
       onReorderRequested: function(dy) { root.reorderProvider(dy) }
 
       onMoveRequested: function(dx, dy) {
@@ -2296,7 +2304,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refreshNow()
-        else if (root.addStage === "" && t >= "1" && t <= "9" && Number(t) <= root.providers.length) { root.pointerActive = false; root.pointAtProvider(Number(t) - 1) }
+        else if (root.indexShown && t >= "1" && t <= "9" && Number(t) <= root.providers.length) { root.pointerActive = false; root.pointAtProvider(Number(t) - 1) }
       }
 
       Flickable {
@@ -2401,13 +2409,13 @@ Panel {
 
           AddView {
             id: addView
-            visible: root.addStage !== "" || root.blankSlate
+            visible: !root.indexShown
             width: column.width
           }
 
           Repeater {
             id: providerSections
-            model: root.addStage === "" ? root.shownProviders : []
+            model: root.indexShown ? root.shownProviders : []
 
             ProviderSection {
               required property var modelData
