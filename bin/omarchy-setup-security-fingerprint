@@ -1,18 +1,24 @@
 #!/bin/bash
 
 # omarchy:summary=Set up fingerprint authentication for sudo, polkit, and lock screen
+# omarchy:args=[--terminal]
 # omarchy:requires-sudo=true
 
 set -e
 
+# On the desktop the setup is the full-screen fingerprint panel, which does
+# all of this in the background behind one authorization prompt. --terminal,
+# or a session whose shell doesn't answer (SSH, a console), runs it right here.
+# The menu and the first-run invitation start this with no terminal, so with
+# the panel unavailable (its plugin disabled, say) it opens one for itself.
+if [[ ${1:-} != "--terminal" ]]; then
+  if [[ $(omarchy-shell shell summon omarchy.fingerprint 2>/dev/null) == "ok" ]]; then
+    exit 0
+  elif [[ ! -t 0 ]]; then
+    exec omarchy-launch-floating-terminal-with-presentation "omarchy-setup-security-fingerprint --terminal"
+  fi
+fi
 
-setup_pam_config() {
-  echo "Configuring sudo for fingerprint authentication..."
-  omarchy-pam-pair-add /etc/pam.d/sudo pam_fprintd.so
-
-  echo "Configuring polkit for fingerprint authentication..."
-  omarchy-apply-polkit-pam add fingerprint
-}
 
 # A property of fprintd's default reader, such as its name or scan-type ("press"
 # for a sensor that takes separate touches, "swipe" for one that reads a moving
@@ -205,7 +211,7 @@ if (( enroll_status == 0 )); then
     # sensor outside the elanmoc table gets this far and then fails to enroll.
     # Editing the stacks up front would leave those machines pointing at
     # pam_fprintd with nothing to match.
-    setup_pam_config
+    omarchy-apply-fingerprint-pam
     "$OMARCHY_PATH/bin/omarchy-apply-lock"
     if [[ ! -f /etc/pam.d/omarchy-lock-fingerprint ]]; then
       echo "Fingerprint enrollment succeeded, but lock-screen configuration could not be confirmed. Run omarchy-apply-lock and try again." >&2

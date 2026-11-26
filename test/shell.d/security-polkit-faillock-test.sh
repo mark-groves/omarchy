@@ -4,16 +4,15 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-# Upstream's setup commands used to tee /etc/pam.d/polkit-1 themselves. This
-# fork compiles that file through omarchy-apply-polkit-pam so face,
-# fingerprint, and FIDO2 share one stack. A hand-rolled stack that lists
-# pam_unix directly instead of `include system-auth` silently drops
-# pam_faillock. Assert the setup commands stay on the helper, and that the
-# helper still defers to system-auth.
+# Fingerprint's PAM step and the FIDO2 setup compile /etc/pam.d/polkit-1
+# through omarchy-apply-polkit-pam so face, fingerprint, and FIDO2 share one
+# stack. A hand-rolled stack that lists pam_unix directly instead of
+# `include system-auth` silently drops pam_faillock. Assert they stay on the
+# helper, and that the helper still defers to system-auth.
 
 helper="$ROOT/bin/omarchy-apply-polkit-pam"
 
-for setup in omarchy-setup-security-fingerprint omarchy-setup-security-fido2; do
+for setup in omarchy-apply-fingerprint-pam omarchy-setup-security-fido2; do
   script="$ROOT/bin/$setup"
   method=fingerprint
   if [[ $setup == *fido2 ]]; then
