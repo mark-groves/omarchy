@@ -1139,11 +1139,19 @@ ShellRoot {
     }
   }
 
+  // One handler, so the order is ours: services before panels and bar
+  // widgets. Services are built synchronously, and a synchronous load waits
+  // for every asynchronous one queued before it. Behind the panels and
+  // widgets, the lock, polkit, notifications and idle all waited for the
+  // whole bar to compile before they could answer.
   Connections {
     target: shell.pluginRegistry
     function onPluginsChanged() {
       shell.syncPluginApis()
-      if (!shell.pluginReloading) shell._syncServices()
+      if (shell.pluginReloading) return
+      shell._syncServices()
+      shell.syncPanelEntries()
+      shell.syncPluginWidgets()
     }
   }
 
@@ -1450,11 +1458,6 @@ ShellRoot {
     return out
   }
 
-  Connections {
-    target: shell.pluginRegistry
-    function onPluginsChanged() { if (!shell.pluginReloading) shell.syncPanelEntries() }
-  }
-
   Instantiator {
     model: panelEntryModel
     active: true
@@ -1507,11 +1510,6 @@ ShellRoot {
   // Each enabled plugin with kind "bar-widget" gets a Component created from
   // its manifest entry point and registered under its manifest id. Built-in
   // widgets use the same first-party manifest contract as third-party widgets.
-  Connections {
-    target: shell.pluginRegistry
-    function onPluginsChanged() { if (!shell.pluginReloading) shell.syncPluginWidgets() }
-  }
-
   property var pluginWidgetComponents: ({})
 
   function syncPluginWidgets() {
