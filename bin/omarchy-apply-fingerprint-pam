@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# omarchy:summary=Put fingerprint authentication first in the sudo and polkit PAM stacks
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+set -e
+
+# The fingerprint setup runs this once a print is enrolled and verified: from a
+# terminal as the user, where the helpers ask for sudo, and from the fingerprint
+# panel's helper, which pkexec has already made root. Sudo and polkit go through
+# the shared helpers, so face, fingerprint, and FIDO2 stay one stack. The
+# clamshell gate lives in those helpers.
+echo "Configuring sudo for fingerprint authentication..."
+omarchy-pam-pair-add /etc/pam.d/sudo pam_fprintd.so
+
+echo "Configuring polkit for fingerprint authentication..."
+omarchy-apply-polkit-pam add fingerprint

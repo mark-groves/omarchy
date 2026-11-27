@@ -56,8 +56,10 @@ Item {
     var suffix = currentAgent.light && Util.luminance(Commons.Color.polkit.background) >= 0.5 ? "-light.svg" : ".svg"
     return Qt.resolvedUrl("../agents/assets/" + currentAgent.mark + suffix)
   }
-  // The program a labelled prompt runs, on its own line under the label.
-  readonly property string labelProgram: currentLabel !== "" && driveDevice === "" ? PolkitModel.promptProgram(currentMessage) : ""
+  // The command a pkexec prompt runs, on the second line under the heading.
+  // Newlines collapse so a multi-line command still fits the pill. A drive
+  // unlock has no program line.
+  readonly property string labelProgram: driveDevice === "" ? PolkitModel.singleLine(PolkitModel.promptProgram(currentMessage)) : ""
   property string currentPrompt: ""
   property string currentSupplementary: ""
   property bool responseRequired: false
@@ -157,14 +159,17 @@ Item {
     console.log(line)
   }
 
-  // A command's label never stands in for what pkexec runs: the program
-  // stays at the end, which the line keeps in view however it's cut.
+  // A pkexec prompt shows what it runs on a dimmer second line under either
+  // the caller's reason or the default authorization heading. The program
+  // stays in view however the heading is cut.
+  // A label or message with only line breaks still falls through to the
+  // default prompt, and a drive unlock keeps the name it was given.
   function authorizationLabel(message) {
     if (driveDevice !== "") return currentLabel
-    // A command's label never stands in for what pkexec runs: the program
-    // gets a line of its own under it.
-    if (currentLabel !== "") return currentLabel
-    return message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : I18n.t("polkit.authenticationNeeded")
+    var label = PolkitModel.singleLine(currentLabel)
+    if (label !== "") return label
+    var text = message ? PolkitModel.authorizationLabel(message, I18n.t, currentAgent ? currentAgent.name : "") : ""
+    return text !== "" ? text : I18n.t("polkit.authenticationNeeded")
   }
 
   function clearRequester() {

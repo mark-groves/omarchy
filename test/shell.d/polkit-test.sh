@@ -13,17 +13,17 @@ assert(!polkit.promptLooksFingerprint('Password:'), 'polkit ignores password pro
 
 assertEqual(
   polkit.authorizationLabel("Authentication is needed to run `/usr/bin/true' as the super user"),
-  "Authorize running '/usr/bin/true'",
-  'polkit shortens the standard pkexec message'
+  'Authorize running command',
+  'polkit uses a heading for standard pkexec prompts while the command goes on line two'
 )
 assertEqual(
   polkit.authorizationLabel("Authentication is needed to run `/usr/bin/true' as the super user", undefined, 'Claude'),
-  "Authorize Claude to run '/usr/bin/true'",
-  'polkit names the agent a pkexec prompt comes from'
+  'Authorize Claude to run command',
+  'polkit names the agent in the heading for pkexec prompts'
 )
 assertEqual(
   polkit.authorizationLabel("Authentication is needed to run `/usr/bin/true' as the super user", undefined, ''),
-  "Authorize running '/usr/bin/true'",
+  'Authorize running command',
   'polkit falls back when no agent name is given'
 )
 assertEqual(
@@ -35,6 +35,27 @@ assertEqual(
   polkit.authorizationLabel('Authentication is required to change system settings'),
   'Authentication is required to change system settings',
   'polkit preserves custom authorization messages'
+)
+const multilineSh = "Authentication is needed to run `/usr/bin/sh -c\nfor f in /sys/device ... [ -w \"$f\" ] && echo 1 > \"$f\"\ndone\n' as the super user"
+assertEqual(
+  polkit.authorizationLabel(multilineSh),
+  'Authorize running command',
+  'polkit keeps a single-line heading for multi-line pkexec commands'
+)
+assertEqual(
+  polkit.authorizationLabel(multilineSh, undefined, 'Antigravity'),
+  'Authorize Antigravity to run command',
+  'polkit names the agent in the heading for multi-line pkexec commands'
+)
+assertEqual(
+  polkit.authorizationLabel("Authentication is required\nto update\tfirmware\n"),
+  'Authentication is required to update firmware',
+  'polkit collapses embedded newlines in custom authorization messages'
+)
+assertEqual(
+  polkit.promptProgram(multilineSh),
+  "/usr/bin/sh -c\nfor f in /sys/device ... [ -w \"$f\" ] && echo 1 > \"$f\"\ndone\n",
+  'promptProgram preserves raw newlines so requester matching stays exact'
 )
 
 // A command that knows what its pkexec is for labels the prompt for that
@@ -93,6 +114,7 @@ const controllerSource = fs.readFileSync(path.join(root, 'shell/plugins/polkit/P
 assert(!/id:\s*closeTimer/.test(controllerSource), 'the password card does not keep a close timer')
 assert(!polkit.faceLaneWantsKeyboard({ outcome: 'cancelled', phase: 'closing' }), 'a polkit result releases the keyboard as soon as it has an outcome')
 
+const labelProgramExpr = controllerSource.match(/readonly property string labelProgram:\s*([^\n]+)/)[1]
 const extractFn = (name) => {
   const m = controllerSource.match(new RegExp(`^( *)function ${name}\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\1\\}`, 'm'))
   if (!m) throw new Error('missing function ' + name)
@@ -119,6 +141,8 @@ const makeScope = () => {
       isCompleted: false,
       cancelAuthenticationRequest: () => { cancelled += 1 }
     },
+    currentAgent: null,
+    PolkitModel: polkit,
     I18n: { t: key => key === 'polkit.unlockDrive' ? 'Unlock %1' : key },
     Qt: { callLater: fn => { scope.later.push(fn) } },
     later: [],
@@ -134,6 +158,7 @@ const makeScope = () => {
   scope.resetLane = () => { scope.lane.phase = 'closed' }
   vm.createContext(scope)
   vm.runInContext([
+    extractFn('authorizationLabel'),
     extractFn('nextDrive'),
     extractFn('beginDrive'),
     extractFn('driveChecked'),
@@ -142,6 +167,7 @@ const makeScope = () => {
     extractFn('onAuthenticationSucceeded'),
     extractFn('onAuthenticationRequestCancelled')
   ].join('\n'), scope)
+  scope.getLabelProgram = () => vm.runInContext(`(${labelProgramExpr})`, scope)
   return scope
 }
 
@@ -171,6 +197,29 @@ const makeScope = () => {
   s.driveChecked('/dev/sdb1', 0, '')
   assertEqual(s.driveDevice, '', 'a successful drive unlock clears the card in the same turn')
   assertEqual(s.lane.phase, 'closed', 'a successful drive unlock does not wait out an exit')
+}
+{
+  // Multi-line labels and commands collapse to a single line in the pill,
+  // and whitespace-only messages fall back to the default prompt.
+  const s = makeScope()
+  s.currentLabel = 'Apply\nGPU   workaround'
+  s.currentMessage = multilineSh
+  assertEqual(s.authorizationLabel(multilineSh), 'Apply GPU workaround', 'agent authorizationLabel flattens multi-line custom labels')
+  assertEqual(
+    s.getLabelProgram(),
+    '/usr/bin/sh -c for f in /sys/device ... [ -w "$f" ] && echo 1 > "$f" done',
+    'agent labelProgram flattens multi-line commands for display'
+  )
+  s.currentLabel = ''
+  assertEqual(
+    s.getLabelProgram(),
+    '/usr/bin/sh -c for f in /sys/device ... [ -w "$f" ] && echo 1 > "$f" done',
+    'unlabelled pkexec prompt still shows its command on the second line'
+  )
+  s.currentMessage = 'Authentication is required to format Crucial X10 Pro (/dev/sda)'
+  assertEqual(s.getLabelProgram(), '', 'non-pkexec prompts leave the second line empty')
+  s.currentLabel = '   \n  '
+  assertEqual(s.authorizationLabel('  \n\t '), 'polkit.authenticationNeeded', 'whitespace-only label and message fall back to default authentication prompt')
 }
 JS
 
@@ -257,3 +306,12 @@ fake_process 200 1 foot "$uid"
 fake_process 201 200 pkexec "$uid" /usr/bin/true
 [[ -z $(requester /usr/bin/true) ]] || fail "polkit names no agent when two waiting pkexecs disagree"
 pass "polkit names no agent when two waiting pkexecs disagree"
+
+rm -rf "${proc_dir:?}"/*
+multiline_script=$'for f in /sys/devices/system/cpu/cpu*/cpufreq/boost; do\n  [ -w "$f" ] && echo 1 > "$f"\ndone'
+fake_process 100 1 agy "$uid"
+fake_process 101 100 pkexec "$uid" /usr/bin/sh -c "$multiline_script"
+multiline_raw="/usr/bin/sh -c $multiline_script"
+multiline_shown="${multiline_raw:0:38} ... ${multiline_raw: -37}"
+[[ $(requester "$multiline_shown") == $'agy\tAntigravity\t1' ]] || fail "polkit still recognizes the agent behind a multi-line pkexec command"
+pass "polkit still recognizes the agent behind a multi-line pkexec command"

@@ -17,6 +17,7 @@ if (( wait_status == timeout_expired )); then
   timeout 2 pidwait -x claude-desktop || true
 fi
 
+echo "Removing Claude Desktop..."
 omarchy-pkg-drop claude-desktop
 
 # Not ~/.claude, ~/.claude.json, or ~/.cache/claude-cli-nodejs: those belong

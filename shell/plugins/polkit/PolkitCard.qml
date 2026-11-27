@@ -640,27 +640,40 @@ Item {
     Rectangle {
       id: justificationPill
       property string program: root.current ? root.controller.labelProgram : ""
-      visible: root.current && (!root.controller.requesterPending || root.controller.currentLabel !== "")
-      width: Math.min(Math.max(justificationText.implicitWidth, programText.implicitWidth) + Style.space(24), root.width - Style.gapsOut * 2)
-      height: program !== "" ? justificationText.implicitHeight + programText.implicitHeight + Style.space(16) : Style.space(28)
+      // A whitespace-only label is not a label yet: wait for the agent mark.
+      visible: root.current && (!root.controller.requesterPending || PolkitModel.singleLine(root.controller.currentLabel) !== "")
+      // Measured apart from the lines, whose width follows this one.
+      width: {
+        var labelWidth = Math.max(labelMetrics.advanceWidth, labelMetrics.boundingRect.width)
+        var programWidth = program !== "" ? Math.max(programMetrics.advanceWidth, programMetrics.boundingRect.width) : 0
+        var naturalWidth = Math.ceil(Math.max(labelWidth, programWidth)) + Style.space(24)
+        return root.width > 0 ? Math.min(naturalWidth, Math.max(0, root.width - Style.gapsOut * 2)) : naturalWidth
+      }
+      height: Math.max(Style.space(28), justificationLines.implicitHeight + Style.space(program !== "" ? 16 : 10))
       anchors.horizontalCenter: card.horizontalCenter
       anchors.bottom: card.top
       anchors.bottomMargin: Style.space(10)
       radius: root.cornerRadius
       color: root.background
+      clip: true
+
+      TextMetrics { id: labelMetrics; font: justificationText.font; text: justificationText.text }
+      TextMetrics { id: programMetrics; font: programText.font; text: programText.text }
 
       Column {
-        anchors.fill: parent
+        id: justificationLines
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: Style.space(12)
         anchors.rightMargin: Style.space(12)
-        anchors.topMargin: justificationPill.program !== "" ? Style.space(6) : 0
-        anchors.bottomMargin: justificationPill.program !== "" ? Style.space(6) : 0
         spacing: Style.space(2)
 
         Text {
           id: justificationText
           width: parent.width
           textFormat: Text.PlainText
+          maximumLineCount: 1
           text: root.current ? root.controller.authorizationLabel(root.controller.currentMessage) : ""
           color: root.foreground
           font.family: root.fontFamily
@@ -673,8 +686,9 @@ Item {
         Text {
           id: programText
           width: parent.width
-          visible: justificationPill.program !== ""
           textFormat: Text.PlainText
+          maximumLineCount: 1
+          visible: justificationPill.program !== ""
           text: justificationPill.program
           color: root.foreground
           opacity: 0.62
