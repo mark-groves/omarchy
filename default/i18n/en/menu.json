@@ -636,6 +636,9 @@
   "setup.security.face": {
     "label": "Face"
   },
+  "setup.security.passwordless-login": {
+    "label": "Passwordless Login"
+  },
   "setup.git": {
     "label": "Git"
   },
